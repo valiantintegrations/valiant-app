@@ -1,11 +1,5 @@
 // ── Valiant Integrations App ──
-const JETBUILT_API = 'https://app.jetbuilt.com/api';
-const API_KEY = '256e1837483dedcf3e993dbef92b9846';
-const HEADERS = {
-  'Authorization': `Token token=${API_KEY}`,
-  'Accept': 'application/vnd.jetbuilt.v1',
-  'Content-Type': 'application/json'
-};
+// API calls handled via /api/jetbuilt proxy
 
 // ── State ──
 const state = {
@@ -173,7 +167,7 @@ function detectSystems(text) {
 // ── Jetbuilt API ──
 async function fetchJetbuilt(endpoint) {
   try {
-    const res = await fetch(`${JETBUILT_API}${endpoint}`, { headers: HEADERS });
+    const res = await fetch(`/api/jetbuilt?endpoint=${encodeURIComponent(endpoint)}`);
     if (!res.ok) throw new Error(`${res.status}`);
     return await res.json();
   } catch (e) {
