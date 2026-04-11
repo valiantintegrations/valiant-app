@@ -1912,8 +1912,8 @@ async function fetchClientNames() {
     await Promise.all(batch.map(async (id) => {
       try {
         const data = await fetchJetbuilt(`/clients/${id}`);
-        if (data && data.name) {
-          clientNameCache[id] = data.name;
+        if (data && (data.company_name || data.name)) {
+          clientNameCache[id] = data.company_name || data.name;
         }
       } catch (e) {}
     }));
