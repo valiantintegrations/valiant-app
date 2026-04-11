@@ -562,10 +562,10 @@ function renderSalesDashboard() {
     !['icebox','template','trash','lost','completed','review','install'].includes(p.status)
   );
   const leads = allSales.filter(p => ['lead','opportunity'].includes(p.status));
-  const estimates = allSales.filter(p => ['proposal','revisions'].includes(p.status));
+  const estimates = allSales.filter(p => ['estimate','proposal','revisions'].includes(p.status));
   const negotiation = allSales.filter(p => ['contract'].includes(p.status));
   const closed = state.projects.filter(p => p.status === 'completed');
-  const fizzledProjects = state.projects.filter(p => state.fizzled.includes(p.id) || ['icebox','trash','lost'].includes(p.status));
+  const fizzledProjects = state.projects.filter(p => state.fizzled.includes(p.id) || ['icebox','trash','lost','template'].includes(p.status));
 
   const salesCount = state.projects.filter(p => ['lead','opportunity','proposal','revisions','contract'].includes(p.status)).length;
   const designCount = state.projects.filter(p => ['contract','install','review'].includes(p.status)).length;
