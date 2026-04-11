@@ -391,7 +391,7 @@ const PAGE_TITLES = {
 
 function navigate(page, data) {
   state.currentPage = page;
-  if (data) state.currentProject = data;
+  if (data !== undefined) state.currentProject = data;
   document.querySelectorAll('.nav-item').forEach(el => {
     el.classList.toggle('active', el.dataset.page === page);
   });
@@ -415,7 +415,7 @@ function renderCurrentPage() {
     case 'shopwork': content.innerHTML = renderShopWork(); break;
     case 'vendors': content.innerHTML = renderVendors(); break;
     case 'intake': content.innerHTML = renderIntake(); break;
-    case 'project': content.innerHTML = renderProjectDashboard(state.currentProject); break;
+    case 'project': content.innerHTML = renderProjectDashboard(state.currentProject); attachEventListeners(); break;
     default: content.innerHTML = renderDashboard();
   }
   attachEventListeners();
@@ -1705,6 +1705,18 @@ function saveState() {
 function attachEventListeners() {
   document.addEventListener('click', e => {
     if (e.target === document.getElementById('project-modal')) closeModal();
+  });
+}
+
+// ── Tab Switcher ──
+function switchTab(tab) {
+  const tabNames = ['overview','scope','design','install','scheduling','financials','assets'];
+  document.querySelectorAll('#proj-tabs .tab').forEach((t, i) => {
+    t.classList.toggle('active', tabNames[i] === tab);
+  });
+  tabNames.forEach(name => {
+    const el = document.getElementById('tab-' + name);
+    if (el) el.style.display = name === tab ? 'block' : 'none';
   });
 }
 
