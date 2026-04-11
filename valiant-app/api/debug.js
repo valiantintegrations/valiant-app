@@ -6,6 +6,7 @@ export default async function handler(req, res) {
   const BASE = 'https://app.jetbuilt.com/api';
 
   try {
+    // Fetch first 3 pages to get a sample
     const response = await fetch(`${BASE}/projects?page=1`, {
       headers: {
         'Authorization': `Token token=${API_KEY}`,
@@ -13,22 +14,21 @@ export default async function handler(req, res) {
         'Content-Type': 'application/json'
       }
     });
-
     const data = await response.json();
-
-    // Show stage breakdown across all returned projects
-    const stageCount = {};
+    
+    // Show stage distribution
+    const stageCounts = {};
     if (Array.isArray(data)) {
       data.forEach(p => {
-        const s = p.stage || 'undefined';
-        stageCount[s] = (stageCount[s] || 0) + 1;
+        const s = p.stage || 'null';
+        stageCounts[s] = (stageCounts[s] || 0) + 1;
       });
     }
-
+    
     res.status(200).json({
-      total: Array.isArray(data) ? data.length : 0,
-      stage_breakdown: stageCount,
-      sample_stages: Array.isArray(data) ? data.slice(0,10).map(p => ({ name: p.name, stage: p.stage, custom_id: p.custom_id })) : []
+      total: response.headers.get('x-total-count'),
+      stage_distribution_page1: stageCounts,
+      sample_stages: Array.isArray(data) ? data.slice(0,10).map(p => ({ id: p.custom_id, name: p.name, stage: p.stage })) : data
     });
   } catch (err) {
     res.status(500).json({ error: err.message });
