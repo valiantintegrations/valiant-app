@@ -231,11 +231,11 @@ async function syncJetbuilt() {
 function enrichProject(p) {
   const desc = ((p.discussion_body || p.short_description || p.name || '')).toLowerCase();
   const systems = detectSystems(desc);
-  // Real Jetbuilt stage names (confirmed from API)
+  // Real // Map Jetbuilt stage names to internal stages
   const stageMap = {
     'lead': 'lead',
     'opportunity': 'opportunity',
-    'estimate': 'estimate',
+    'estimate': 'proposal',
     'proposal': 'proposal',
     'revisions': 'revisions',
     'contract': 'contract',
@@ -246,10 +246,11 @@ function enrichProject(p) {
     'lost': 'lost',
     'template': 'template',
     'trash': 'trash',
+    'prospect': 'lead',
     'in-build': 'contract',
     'in_build': 'contract',
     'complete': 'completed'
-  };
+  }
   const stage = p.stage ? (stageMap[p.stage.toLowerCase()] || p.stage.toLowerCase()) : 'lead';
   return {
     ...p,
@@ -563,7 +564,7 @@ function getGBBGroups(projects) {
 
 function renderSalesDashboard() {
   const allSales = state.projects.filter(p => !state.fizzled.includes(p.id) && !['icebox','template','trash','lost','completed','review','install'].includes(p.status));
-  const leads = allSales.filter(p => ['lead','opportunity'].includes(p.status));
+  const leads = allSales.filter(p => ['lead','opportunity','prospect','qualification'].includes(p.status));
   const estimates = allSales.filter(p => ['estimate','proposal','revisions'].includes(p.status));
   const negotiation = allSales.filter(p => ['contract'].includes(p.status));
   const closed = state.projects.filter(p => p.status === 'completed');
@@ -582,6 +583,10 @@ function renderSalesDashboard() {
   const leadsValue = leads.reduce((s,p) => s + (p.estimated_amount||0), 0);
   const allActiveValue = allSales.reduce((s,p) => s + (p.estimated_amount||0), 0);
   const pipelineValue = allActiveValue;
+  const closedThisMonth = getSalesPipelineValue(closed, 'month');
+  const closedThisQuarter = getSalesPipelineValue(closed, 'quarter');
+  const closedThisYear = getSalesPipelineValue(closed, 'year');
+  const winRate = (allSales.length + closed.length) > 0 ? Math.round(closed.length / (allSales.length + closed.length) * 100) : 0;
 
   function fmt(n) { return '$' + Math.round(n).toLocaleString(); }
 
