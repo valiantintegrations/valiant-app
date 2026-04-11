@@ -250,7 +250,7 @@ function enrichProject(p) {
     'in-build': 'contract',
     'in_build': 'contract',
     'complete': 'completed'
-  }
+  };
   const stage = p.stage ? (stageMap[p.stage.toLowerCase()] || p.stage.toLowerCase()) : 'lead';
   return {
     ...p,
@@ -516,29 +516,24 @@ ${tabProjects.length === 0 ? `
 // ── Sales Dashboard (Kanban CRM) ──
 function getSalesPipelineValue(projects, period) {
   const now = new Date();
-  const filtered = projects.filter(p => {
-    if (!p.updated_at && !p.close_date && !p.created_at) return period === 'all';
+  return projects.filter(p => {
     const d = new Date(p.close_date || p.updated_at || p.created_at);
     if (period === 'month') return d.getMonth() === now.getMonth() && d.getFullYear() === now.getFullYear();
     if (period === 'quarter') return Math.floor(d.getMonth()/3) === Math.floor(now.getMonth()/3) && d.getFullYear() === now.getFullYear();
     if (period === 'year') return d.getFullYear() === now.getFullYear();
     return true;
-  });
-  return filtered.reduce((sum, p) => sum + (p.estimated_amount || 0), 0);
+  }).reduce((s,p) => s + (p.estimated_amount||0), 0);
 }
 
 function getGBBGroups(projects) {
   const groups = {};
   const used = new Set();
-
-  // Auto-detect by name pattern
   projects.forEach(p => {
     const name = p.name || '';
     const lc = name.toLowerCase();
-    const isGood = lc.endsWith('- good') || lc.endsWith('-good') || lc.includes(' good)') || lc.endsWith(' good');
-    const isBetter = lc.endsWith('- better') || lc.endsWith('-better') || lc.includes(' better)') || lc.endsWith(' better');
-    const isBest = lc.endsWith('- best') || lc.endsWith('-best') || lc.includes(' best)') || lc.endsWith(' best');
-
+    const isGood = lc.endsWith('- good') || lc.endsWith('-good') || lc.endsWith(' good');
+    const isBetter = lc.endsWith('- better') || lc.endsWith('-better') || lc.endsWith(' better');
+    const isBest = lc.endsWith('- best') || lc.endsWith('-best') || lc.endsWith(' best');
     if (isGood || isBetter || isBest) {
       const baseName = name.replace(/[-\s]*(good|better|best)\s*$/i, '').trim();
       if (!groups[baseName]) groups[baseName] = { good: null, better: null, best: null, projects: [] };
@@ -549,8 +544,6 @@ function getGBBGroups(projects) {
       used.add(p.id);
     }
   });
-
-  // Manual links from state.gbbLinks
   Object.entries(state.gbbLinks).forEach(([groupId, ids]) => {
     const linked = projects.filter(p => ids.includes(p.id));
     if (linked.length > 0 && !groups['manual_'+groupId]) {
@@ -558,40 +551,35 @@ function getGBBGroups(projects) {
       linked.forEach(p => used.add(p.id));
     }
   });
-
   return { groups, used };
 }
 
 function renderSalesDashboard() {
-  const allSales = state.projects.filter(p => !state.fizzled.includes(p.id) && !['icebox','template','trash','lost','completed','review','install'].includes(p.status));
-  const leads = allSales.filter(p => ['lead','opportunity','prospect','qualification'].includes(p.status));
-  const estimates = allSales.filter(p => ['estimate','proposal','revisions'].includes(p.status));
+  const fmt = n => '$' + Math.round(n).toLocaleString();
+
+  const allSales = state.projects.filter(p =>
+    !state.fizzled.includes(p.id) &&
+    !['icebox','template','trash','lost','completed','review','install'].includes(p.status)
+  );
+  const leads = allSales.filter(p => ['lead','opportunity'].includes(p.status));
+  const estimates = allSales.filter(p => ['proposal','revisions'].includes(p.status));
   const negotiation = allSales.filter(p => ['contract'].includes(p.status));
   const closed = state.projects.filter(p => p.status === 'completed');
   const fizzledProjects = state.projects.filter(p => state.fizzled.includes(p.id) || ['icebox','trash','lost'].includes(p.status));
-  const salesCount = state.projects.filter(p => ['lead','estimate','contract'].includes(p.status)).length;
-  const designCount = state.projects.filter(p => ['contract','install'].includes(p.status)).length;
-  const installCount = state.projects.filter(p => ['contract','install','complete'].includes(p.status)).length;
 
-  // GBB deduplication for metrics
-  const { groups, used } = getGBBGroups(estimates.concat(negotiation));
-  const uniqueEstimates = estimates.filter(p => !used.has(p.id));
-  const gbbRepresentatives = Object.values(groups).map(g => g.good || g.projects[0]).filter(Boolean);
+  const salesCount = state.projects.filter(p => ['lead','opportunity','proposal','revisions','contract'].includes(p.status)).length;
+  const designCount = state.projects.filter(p => ['contract','install','review'].includes(p.status)).length;
+  const installCount = state.projects.filter(p => ['contract','install','review','completed'].includes(p.status)).length;
 
-  // Pipeline = ALL active deals: leads + estimates + negotiation (GBB deduplicated)
-  const allActiveProjects = [...leads, ...uniqueEstimates, ...gbbRepresentatives, ...negotiation.filter(p => !used.has(p.id))];
   const leadsValue = leads.reduce((s,p) => s + (p.estimated_amount||0), 0);
   const allActiveValue = allSales.reduce((s,p) => s + (p.estimated_amount||0), 0);
-  const pipelineValue = allActiveValue;
   const closedThisMonth = getSalesPipelineValue(closed, 'month');
   const closedThisQuarter = getSalesPipelineValue(closed, 'quarter');
   const closedThisYear = getSalesPipelineValue(closed, 'year');
-  const winRate = (allSales.length + closed.length) > 0 ? Math.round(closed.length / (allSales.length + closed.length) * 100) : 0;
-
-  function fmt(n) { return '$' + Math.round(n).toLocaleString(); }
+  const winRate = (allSales.length + closed.length) > 0
+    ? Math.round(closed.length / (allSales.length + closed.length) * 100) : 0;
 
   function kanbanCard(p) {
-    const gbbGroup = Object.values(getGBBGroups([p]).groups)[0];
     return `
     <div class="project-card" draggable="true"
       ondragstart="event.dataTransfer.setData('projectId','${p.id}')"
@@ -600,7 +588,6 @@ function renderSalesDashboard() {
       <div class="project-card-client">${p.city || p.id}</div>
       <div class="project-card-footer">
         <div class="project-card-value">${p.estimated_amount ? fmt(p.estimated_amount) : 'TBD'}</div>
-
       </div>
     </div>`;
   }
@@ -608,7 +595,7 @@ function renderSalesDashboard() {
   function kanbanCol(title, projects, stage, color) {
     const total = projects.reduce((s,p) => s+(p.estimated_amount||0), 0);
     return `
-    <div style="flex:1;min-width:220px;max-width:320px">
+    <div style="flex:1;min-width:200px">
       <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px">
         <div style="font-size:11px;font-weight:600;color:${color};text-transform:uppercase;letter-spacing:0.06em">${title}</div>
         <div style="display:flex;align-items:center;gap:6px">
@@ -630,9 +617,7 @@ function renderSalesDashboard() {
     <div style="display:flex;gap:4px;background:#0D1117;border:1px solid #1C2333;border-radius:8px;padding:3px">
       ${['sales','design','install'].map(tab => `
         <button onclick="dashboardTab='${tab}';renderCurrentPage()"
-          style="padding:6px 16px;font-size:12px;font-weight:500;border-radius:6px;border:none;cursor:pointer;font-family:'DM Sans',sans-serif;transition:all 0.12s;
-            background:${dashboardTab===tab?'#1565C0':'transparent'};
-            color:${dashboardTab===tab?'#fff':'#6E7681'}">
+          style="padding:6px 16px;font-size:12px;font-weight:500;border-radius:6px;border:none;cursor:pointer;font-family:'DM Sans',sans-serif;transition:all 0.12s;background:${dashboardTab===tab?'#1565C0':'transparent'};color:${dashboardTab===tab?'#fff':'#6E7681'}">
           ${tab.charAt(0).toUpperCase()+tab.slice(1)}
           <span style="opacity:0.7;margin-left:4px;font-size:11px">${tab==='sales'?salesCount:tab==='design'?designCount:installCount}</span>
         </button>
@@ -669,7 +654,7 @@ function renderSalesDashboard() {
   <div class="metric-card">
     <div class="metric-label">Leads value</div>
     <div class="metric-value" style="font-size:18px">${fmt(leadsValue)}</div>
-    <div class="metric-sub">${leads.length} active lead${leads.length !== 1 ? 's' : ''}</div>
+    <div class="metric-sub">${leads.length} active lead${leads.length!==1?'s':''}</div>
   </div>
   <div class="metric-card">
     <div class="metric-label">Pipeline value</div>
@@ -690,29 +675,34 @@ function renderSalesDashboard() {
 
 <div style="display:flex;gap:12px;overflow-x:auto;padding-bottom:16px">
   ${kanbanCol('Leads', leads, 'opportunity', '#6E7681')}
-  ${kanbanCol('Estimates', estimates, 'estimate', '#D29922')}
+  ${kanbanCol('Estimates', estimates, 'proposal', '#D29922')}
   ${kanbanCol('Negotiation', negotiation, 'contract', '#58A6FF')}
 </div>
 
 <div id="archived-modal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.7);z-index:100;align-items:center;justify-content:center">
   <div style="background:#161B22;border:1px solid #30363D;border-radius:12px;padding:24px;width:90%;max-width:600px;max-height:80vh;overflow-y:auto">
     <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px">
-      <div style="font-size:15px;font-weight:600;color:#E6EDF3">Archived Deals</div>
+      <div style="font-size:15px;font-weight:600;color:#E6EDF3">Archived / Fizzled Deals</div>
       <button onclick="document.getElementById('archived-modal').style.display='none'" style="background:none;border:none;color:#6E7681;cursor:pointer;font-size:18px">×</button>
     </div>
-    ${fizzledProjects.length === 0 ? '<div style="color:#6E7681;font-size:13px;text-align:center;padding:20px">No archived deals yet</div>' :
-      fizzledProjects.map(p => `
+    ${fizzledProjects.length === 0
+      ? '<div style="color:#6E7681;font-size:13px;text-align:center;padding:20px">No archived deals yet</div>'
+      : fizzledProjects.map(p => `
         <div style="display:flex;align-items:center;justify-content:space-between;padding:10px 0;border-bottom:1px solid #0D1117">
-          <div>
-            <div style="font-size:13px;font-weight:500;color:#6E7681">${p.name}</div>
-            <div style="font-size:11px;color:#30363D">${p.id} · ${p.estimated_amount ? fmt(p.estimated_amount) : 'TBD'}</div>
+          <div style="flex:1;min-width:0">
+            <div style="font-size:13px;font-weight:500;color:#6E7681;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${p.name}</div>
+            <div style="font-size:11px;margin-top:2px;color:#30363D">${p.id} · ${p.estimated_amount ? fmt(p.estimated_amount) : 'TBD'} · <span style="color:${p.status==='lost'?'#F85149':'#58A6FF'}">${p.status}</span></div>
           </div>
-          <button class="btn btn-sm" onclick="restoreProject('${p.id}')">Restore</button>
+          <div style="display:flex;gap:6px;flex-shrink:0;margin-left:10px">
+            <button class="btn btn-sm" onclick="restoreProject('${p.id}')">Restore</button>
+            <button class="btn btn-sm" onclick="navigate('project','${p.id}')">View</button>
+          </div>
         </div>
       `).join('')}
   </div>
 </div>
 `;}
+
 
 function moveProjectToStage(event, stage) {
   const projectId = event.dataTransfer.getData('projectId');
