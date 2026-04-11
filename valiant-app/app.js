@@ -8,6 +8,7 @@ const state = {
   shopwork: JSON.parse(localStorage.getItem('vi_shopwork') || '[]'),
   checklists: JSON.parse(localStorage.getItem('vi_checklists') || '{}'),
   assignments: JSON.parse(localStorage.getItem('vi_assignments') || '{}'),
+  reviewed: JSON.parse(localStorage.getItem('vi_reviewed') || '{}'),
   currentPage: 'dashboard',
   currentProject: null,
   calendarDate: new Date(),
@@ -718,6 +719,12 @@ function renderProjectDashboard(projectId) {
       <span class="status-pill ${project.timeline_type === 'hard' ? 'status-red' : 'status-blue'}">
         ${project.timeline_type === 'hard' ? '🔒 Hard Date' : '📅 Soft Date'}
       </span>
+      <select onchange="changeProjectStage('${project.id}', this.value)"
+        style="padding:5px 10px;background:#161B22;border:1px solid #30363D;border-radius:6px;color:#E6EDF3;font-size:12px;font-family:'DM Sans',sans-serif;cursor:pointer;margin-top:4px">
+        ${['lead','estimate','contract','install','review','complete'].map(s =>
+          `<option value="${s}" ${project.status === s ? 'selected' : ''}>${s.charAt(0).toUpperCase()+s.slice(1)}</option>`
+        ).join('')}
+      </select>
     </div>
   </div>
 </div>
@@ -743,6 +750,26 @@ function renderProjectDashboard(projectId) {
         <div><div style="font-size:10px;color:#6E7681;text-transform:uppercase;letter-spacing:0.06em;margin-bottom:2px">Install Mgr</div><div style="font-size:12px;color:#E6EDF3">${project.install_manager || 'Unassigned'}</div></div>
         <div><div style="font-size:10px;color:#6E7681;text-transform:uppercase;letter-spacing:0.06em;margin-bottom:2px">Sales</div><div style="font-size:12px;color:#E6EDF3">${project.salesperson || 'Unassigned'}</div></div>
         <div><div style="font-size:10px;color:#6E7681;text-transform:uppercase;letter-spacing:0.06em;margin-bottom:2px">Value</div><div style="font-size:12px;color:#58A6FF;font-weight:500">${project.estimated_amount ? '$' + project.estimated_amount.toLocaleString() : 'TBD'}</div></div>
+      </div>
+      <div style="margin-top:12px;border-top:1px solid #0D1117;padding-top:12px">
+        <div style="font-size:10px;color:#6E7681;text-transform:uppercase;letter-spacing:0.06em;margin-bottom:8px">System Tags</div>
+        <div style="display:flex;flex-wrap:wrap;gap:6px">
+          ${['pa_install','led_wall','lighting','control','streaming','camera','network','infrastructure'].map(sys => {
+            const labels = {pa_install:'PA System',led_wall:'LED Wall',lighting:'Lighting',control:'Control',streaming:'Streaming',camera:'Camera',network:'Network',infrastructure:'Infrastructure'};
+            const active = (project.systems||[]).includes(sys);
+            return `<button onclick="toggleProjectSystem('${project.id}','${sys}')"
+              style="padding:4px 10px;font-size:11px;border-radius:12px;border:1px solid ${active?'#1565C0':'#30363D'};background:${active?'#0D1626':'transparent'};color:${active?'#58A6FF':'#6E7681'};cursor:pointer;font-family:'DM Sans',sans-serif;transition:all 0.12s">
+              ${labels[sys]}
+            </button>`;
+          }).join('')}
+        </div>
+        ${project.status === 'contract' && !(state.reviewed||{})[project.id] ? `
+          <div style="margin-top:10px">
+            <button class="btn-primary" onclick="openContractReview('${project.id}')" style="font-size:12px">
+              Review Contract & Confirm Tags →
+            </button>
+          </div>
+        ` : ''}
       </div>
     </div>
     <div class="dashboard-card">
@@ -1365,6 +1392,188 @@ function attachEventListeners() {
   document.addEventListener('click', e => {
     if (e.target === document.getElementById('project-modal')) closeModal();
   });
+}
+
+// ── Stage Changer ──
+function changeProjectStage(projectId, newStage) {
+  const project = state.projects.find(p => p.id === projectId);
+  if (!project) return;
+  project.status = newStage;
+  saveState();
+  // Show contract review if moving to contract
+  if (newStage === 'contract' && !(state.reviewed||{})[projectId]) {
+    setTimeout(() => openContractReview(projectId), 300);
+  }
+  renderCurrentPage();
+}
+
+function toggleProjectSystem(projectId, sys) {
+  const project = state.projects.find(p => p.id === projectId);
+  if (!project) return;
+  if (!project.systems) project.systems = [];
+  const idx = project.systems.indexOf(sys);
+  if (idx === -1) project.systems.push(sys);
+  else project.systems.splice(idx, 1);
+  saveState();
+  renderCurrentPage();
+}
+
+// ── Contract Review ──
+function openContractReview(projectId) {
+  const project = state.projects.find(p => p.id === projectId);
+  if (!project) return;
+
+  // AI-style auto detection from scope text
+  const scope = (project.description || project.short_description || project.name || '').toLowerCase();
+  const detected = [];
+  if (scope.includes('pa') || scope.includes('audio') || scope.includes('speaker') || scope.includes('sound') || scope.includes('microphone') || scope.includes('mix') || scope.includes('amp') || scope.includes('dsp') || scope.includes('subwoofer')) detected.push('pa_install');
+  if (scope.includes('led') || scope.includes('video wall') || scope.includes('display wall') || scope.includes('panel')) detected.push('led_wall');
+  if (scope.includes('light') || scope.includes('fixture') || scope.includes('dmx') || scope.includes('stage light') || scope.includes('key light') || scope.includes('wash') || scope.includes('luminaire')) detected.push('lighting');
+  if (scope.includes('control') || scope.includes('qsys') || scope.includes('q-sys') || scope.includes('crestron') || scope.includes('extron') || scope.includes('touch panel') || scope.includes('automation')) detected.push('control');
+  if (scope.includes('stream') || scope.includes('broadcast') || scope.includes('encoding') || scope.includes('youtube') || scope.includes('facebook live')) detected.push('streaming');
+  if (scope.includes('camera') || scope.includes('ptz') || scope.includes('video produc') || scope.includes('recording')) detected.push('camera');
+  if (scope.includes('network') || scope.includes('switch') || scope.includes('router') || scope.includes('wifi') || scope.includes('dante') || scope.includes('avb')) detected.push('network');
+  if (scope.includes('conduit') || scope.includes('infrastructure') || scope.includes('cable') || scope.includes('wire') || scope.includes('rack')) detected.push('infrastructure');
+
+  // Merge with existing tags
+  const current = project.systems || [];
+  const merged = [...new Set([...current, ...detected])];
+
+  document.body.insertAdjacentHTML('beforeend', `
+    <div id="cr-modal" style="position:fixed;inset:0;background:rgba(0,0,0,0.8);z-index:200;display:flex;align-items:center;justify-content:center;padding:20px">
+      <div style="background:#161B22;border:1px solid #30363D;border-radius:12px;width:100%;max-width:560px;max-height:85vh;overflow-y:auto">
+        <div style="padding:20px 24px 16px;border-bottom:1px solid #1C2333">
+          <div style="font-size:17px;font-weight:600;color:#E6EDF3;margin-bottom:2px">Contract Review</div>
+          <div style="font-size:12px;color:#6E7681">${project.name} · ${project.id}</div>
+        </div>
+        <div style="padding:20px 24px">
+
+          <div style="background:#0D1A26;border:1px solid #1565C0;border-radius:8px;padding:12px 14px;margin-bottom:18px">
+            <div style="font-size:11px;font-weight:600;color:#58A6FF;text-transform:uppercase;letter-spacing:0.06em;margin-bottom:4px">AI detected ${detected.length} system type${detected.length !== 1 ? 's' : ''} from scope</div>
+            <div style="font-size:12px;color:#8B949E;line-height:1.6">${project.description ? project.description.slice(0,200) + (project.description.length > 200 ? '...' : '') : 'No scope text available'}</div>
+          </div>
+
+          <div style="margin-bottom:18px">
+            <div style="font-size:11px;font-weight:600;color:#6E7681;text-transform:uppercase;letter-spacing:0.06em;margin-bottom:10px">Confirm systems on this project</div>
+            <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px" id="cr-systems">
+              ${[
+                {key:'pa_install',label:'PA / Audio System',icon:'🔊'},
+                {key:'led_wall',label:'LED Wall / Display',icon:'📺'},
+                {key:'lighting',label:'Stage / House Lighting',icon:'💡'},
+                {key:'control',label:'Control System (Q-SYS etc)',icon:'🎛'},
+                {key:'streaming',label:'Streaming / Broadcast',icon:'📡'},
+                {key:'camera',label:'Camera System',icon:'📷'},
+                {key:'network',label:'Network / IT',icon:'🌐'},
+                {key:'infrastructure',label:'Infrastructure / Conduit',icon:'🔧'}
+              ].map(sys => {
+                const checked = merged.includes(sys.key);
+                return `<label style="display:flex;align-items:center;gap:8px;padding:9px 12px;border:1px solid ${checked?'#1565C0':'#30363D'};border-radius:8px;cursor:pointer;background:${checked?'#0D1626':'transparent'};transition:all 0.12s" onclick="toggleCRSystem(this,'${sys.key}')">
+                  <div style="width:16px;height:16px;border-radius:4px;border:1.5px solid ${checked?'#1565C0':'#30363D'};background:${checked?'#1565C0':'transparent'};display:flex;align-items:center;justify-content:center;flex-shrink:0;transition:all 0.12s" id="cr-box-${sys.key}">
+                    ${checked ? '<svg width="10" height="10" viewBox="0 0 10 10" fill="none"><polyline points="2,5 4,7 8,3" stroke="white" stroke-width="1.5" fill="none"/></svg>' : ''}
+                  </div>
+                  <span style="font-size:12px;color:${checked?'#C9D1D9':'#6E7681'}">${sys.icon} ${sys.label}</span>
+                </label>`;
+              }).join('')}
+            </div>
+          </div>
+
+          <div style="margin-bottom:18px">
+            <div style="font-size:11px;font-weight:600;color:#6E7681;text-transform:uppercase;letter-spacing:0.06em;margin-bottom:6px">Timeline</div>
+            <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
+              <div>
+                <div style="font-size:11px;color:#6E7681;margin-bottom:3px">Est. install date</div>
+                <input type="date" id="cr-install-date" value="${project.install_start||''}" style="width:100%;padding:7px 10px;background:#0D1117;border:1px solid #30363D;border-radius:6px;color:#E6EDF3;font-size:12px;font-family:'DM Sans',sans-serif">
+              </div>
+              <div>
+                <div style="font-size:11px;color:#6E7681;margin-bottom:3px">Timeline type</div>
+                <select id="cr-timeline" style="width:100%;padding:7px 10px;background:#0D1117;border:1px solid #30363D;border-radius:6px;color:#E6EDF3;font-size:12px;font-family:'DM Sans',sans-serif">
+                  <option value="soft" ${project.timeline_type !== 'hard' ? 'selected' : ''}>Soft — can be moved</option>
+                  <option value="hard" ${project.timeline_type === 'hard' ? 'selected' : ''}>Hard — cannot move</option>
+                </select>
+              </div>
+            </div>
+          </div>
+
+          <div style="margin-bottom:18px">
+            <div style="font-size:11px;font-weight:600;color:#6E7681;text-transform:uppercase;letter-spacing:0.06em;margin-bottom:6px">Shop work potential</div>
+            <input type="text" id="cr-shopwork" placeholder="e.g. rack can be pre-built, fixtures can be pre-addressed..." style="width:100%;padding:7px 10px;background:#0D1117;border:1px solid #30363D;border-radius:6px;color:#E6EDF3;font-size:12px;font-family:'DM Sans',sans-serif">
+          </div>
+
+          <div style="display:flex;gap:8px">
+            <button onclick="confirmContractReview('${projectId}')"
+              style="flex:1;padding:9px;font-size:13px;font-weight:500;border:none;border-radius:6px;background:#1565C0;color:#fff;cursor:pointer;font-family:'DM Sans',sans-serif">
+              Confirm & Kick Off Design →
+            </button>
+            <button onclick="document.getElementById('cr-modal').remove()"
+              style="padding:9px 16px;font-size:13px;border:1px solid #30363D;border-radius:6px;background:transparent;color:#8B949E;cursor:pointer;font-family:'DM Sans',sans-serif">
+              Close
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  `);
+
+  // Store detected systems temporarily
+  window._crSystems = [...merged];
+  window._crProjectId = projectId;
+}
+
+function toggleCRSystem(label, key) {
+  const idx = window._crSystems.indexOf(key);
+  if (idx === -1) {
+    window._crSystems.push(key);
+    label.style.borderColor = '#1565C0';
+    label.style.background = '#0D1626';
+    const box = document.getElementById('cr-box-' + key);
+    if (box) { box.style.borderColor = '#1565C0'; box.style.background = '#1565C0'; box.innerHTML = '<svg width="10" height="10" viewBox="0 0 10 10" fill="none"><polyline points="2,5 4,7 8,3" stroke="white" stroke-width="1.5" fill="none"/></svg>'; }
+    label.querySelector('span').style.color = '#C9D1D9';
+  } else {
+    window._crSystems.splice(idx, 1);
+    label.style.borderColor = '#30363D';
+    label.style.background = 'transparent';
+    const box = document.getElementById('cr-box-' + key);
+    if (box) { box.style.borderColor = '#30363D'; box.style.background = 'transparent'; box.innerHTML = ''; }
+    label.querySelector('span').style.color = '#6E7681';
+  }
+}
+
+function confirmContractReview(projectId) {
+  const project = state.projects.find(p => p.id === projectId);
+  if (!project) return;
+
+  // Apply confirmed systems
+  project.systems = [...window._crSystems];
+
+  // Apply dates
+  const installDate = document.getElementById('cr-install-date')?.value;
+  const timeline = document.getElementById('cr-timeline')?.value;
+  const shopwork = document.getElementById('cr-shopwork')?.value;
+
+  if (installDate) project.install_start = installDate;
+  if (timeline) project.timeline_type = timeline;
+
+  // Add shop work note
+  if (shopwork) {
+    state.shopwork.push({ text: shopwork, type: 'project', project: project.name, priority: 'med', created: new Date().toISOString() });
+  }
+
+  // Mark as reviewed
+  if (!state.reviewed) state.reviewed = {};
+  state.reviewed[projectId] = { date: new Date().toISOString(), systems: project.systems };
+  localStorage.setItem('vi_reviewed', JSON.stringify(state.reviewed));
+
+  // Auto-schedule design handoff meeting (placeholder)
+  console.log('Design kickoff triggered for', project.name, 'Systems:', project.systems);
+
+  saveState();
+  document.getElementById('cr-modal')?.remove();
+  renderCurrentPage();
+
+  // Show confirmation
+  setTimeout(() => {
+    alert(`✓ Contract reviewed for ${project.name}\n\nSystems confirmed: ${project.systems.map(s => s.replace('_install','').replace('_',' ')).join(', ')}\n\nDesign checklist populated. Design handoff meeting scheduling coming soon.`);
+  }, 100);
 }
 
 // ── Init ──
