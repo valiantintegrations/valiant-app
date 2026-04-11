@@ -599,8 +599,7 @@ function renderSalesDashboard() {
       <div class="project-card-client">${p.city || p.id}</div>
       <div class="project-card-footer">
         <div class="project-card-value">${p.estimated_amount ? fmt(p.estimated_amount) : 'TBD'}</div>
-        <button class="btn btn-sm" style="font-size:10px;padding:2px 6px;color:#F85149;border-color:#DA3633"
-          onclick="event.stopPropagation();fizzleProject('${p.id}')">Fizzle</button>
+
       </div>
     </div>`;
   }
@@ -698,7 +697,7 @@ function renderSalesDashboard() {
 <div id="archived-modal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.7);z-index:100;align-items:center;justify-content:center">
   <div style="background:#161B22;border:1px solid #30363D;border-radius:12px;padding:24px;width:90%;max-width:600px;max-height:80vh;overflow-y:auto">
     <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px">
-      <div style="font-size:15px;font-weight:600;color:#E6EDF3">Archived / Fizzled Deals</div>
+      <div style="font-size:15px;font-weight:600;color:#E6EDF3">Archived Deals</div>
       <button onclick="document.getElementById('archived-modal').style.display='none'" style="background:none;border:none;color:#6E7681;cursor:pointer;font-size:18px">×</button>
     </div>
     ${fizzledProjects.length === 0 ? '<div style="color:#6E7681;font-size:13px;text-align:center;padding:20px">No archived deals yet</div>' :
