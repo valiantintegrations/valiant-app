@@ -180,16 +180,42 @@ async function syncJetbuilt() {
   if (state.syncing) return;
   state.syncing = true;
   const btn = document.getElementById('sync-btn');
-  if (btn) { btn.classList.add('syncing'); btn.textContent = ' Syncing...'; }
+  if (btn) { btn.classList.add('syncing'); btn.innerHTML = '<svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M12 7A5 5 0 1 1 7 2" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/><path d="M7 2l2-2M7 2l2 2" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/></svg> Syncing...'; }
 
   try {
-    const data = await fetchJetbuilt('/projects?status=contract');
-    if (data && Array.isArray(data)) {
-      state.projects = data.map(p => enrichProject(p));
-    } else {
-      // Load demo projects with Jetbuilt IDs you specified
-      state.projects = getDemoProjects();
+    // Fetch all pages of projects
+    let allProjects = [];
+    let page = 1;
+    let hasMore = true;
+
+    while (hasMore) {
+      const data = await fetchJetbuilt(`/projects?page=${page}`);
+      if (data && Array.isArray(data) && data.length > 0) {
+        allProjects = allProjects.concat(data);
+        if (data.length < 25) { hasMore = false; }
+        else { page++; }
+      } else {
+        hasMore = false;
+      }
     }
+
+    if (allProjects.length > 0) {
+      // Filter to active phases only: contract, install, review
+      const activePhases = ['contract', 'install', 'review', 'in-build', 'in_build'];
+      const active = allProjects.filter(p => {
+        const status = (p.status || p.phase || p.stage || '').toLowerCase();
+        return activePhases.some(phase => status.includes(phase));
+      });
+      // If filter returns nothing, show all non-completed projects
+      const projects = active.length > 0 ? active : allProjects.filter(p => {
+        const status = (p.status || p.phase || p.stage || '').toLowerCase();
+        return !status.includes('complet') && !status.includes('oppty') && status !== '';
+      });
+      state.projects = (projects.length > 0 ? projects : allProjects).map(p => enrichProject(p));
+    } else {
+      console.log('No projects returned from API');
+    }
+
     document.getElementById('proj-count').textContent = state.projects.length;
     renderCurrentPage();
   } finally {
@@ -199,13 +225,41 @@ async function syncJetbuilt() {
 }
 
 function enrichProject(p) {
-  const desc = (p.description || p.name || '').toLowerCase();
-  const systems = detectSystems(desc + ' ' + (p.scope || ''));
+  const desc = ((p.discussion_body || p.short_description || p.name || '')).toLowerCase();
+  const systems = detectSystems(desc);
+  const stageMap = {
+    'completed': 'complete',
+    'icebox': 'lead',
+    'prospect': 'lead',
+    'opportunity': 'lead',
+    'proposal': 'proposal',
+    'estimate': 'estimate',
+    'contract': 'contract',
+    'install': 'install',
+    'review': 'install',
+    'in-build': 'contract',
+    'in_build': 'contract'
+  };
+  const stage = p.stage ? (stageMap[p.stage.toLowerCase()] || p.stage.toLowerCase()) : 'lead';
   return {
     ...p,
+    id: p.custom_id || ('P-' + p.id),
+    jetbuilt_id: p.id,
+    name: p.name || 'Unnamed Project',
+    client_name: p.client_name || p.city || '',
+    description: p.discussion_body || p.short_description || '',
+    estimated_amount: p.total ? parseFloat(p.total) : 0,
+    status: stage,
+    install_start: p.estimated_install_on || null,
+    address: [p.address, p.city, p.state].filter(Boolean).join(', '),
+    designer: p.engineer?.full_name || '',
+    install_manager: p.project_manager?.full_name || '',
+    salesperson: p.owner?.full_name || '',
     systems,
-    status: p.status || 'contract',
-    readiness: getProjectReadiness(p.id)
+    readiness: getProjectReadiness(p.custom_id || ('P-' + p.id)),
+    timeline_type: 'soft',
+    image_url: p.image_url || null,
+    active: p.active
   };
 }
 
@@ -323,10 +377,10 @@ function renderDashboard() {
   const red = state.projects.filter(p => p.readiness === 'red').length;
 
   const stageMap = {
-    lead: state.projects.filter(p => p.status === 'lead'),
-    estimate: state.projects.filter(p => p.status === 'estimate'),
-    contract: state.projects.filter(p => p.status === 'contract'),
-    install: state.projects.filter(p => p.status === 'install'),
+    lead: state.projects.filter(p => ['lead','icebox','prospect','opportunity'].includes(p.status)),
+    estimate: state.projects.filter(p => ['estimate','proposal'].includes(p.status)),
+    contract: state.projects.filter(p => ['contract','in-build','in_build'].includes(p.status)),
+    install: state.projects.filter(p => ['install','review'].includes(p.status)),
     complete: state.projects.filter(p => p.status === 'complete')
   };
 
@@ -414,49 +468,101 @@ function renderPipelineCol(label, key, projects) {
 }
 
 // ── Projects Page ──
+let projectSort = { field: 'name', dir: 'asc' };
+let projectSearch = '';
+let projectStageFilter = 'all';
+
+function getFilteredProjects() {
+  let projects = [...state.projects];
+  if (projectSearch) {
+    const q = projectSearch.toLowerCase();
+    projects = projects.filter(p =>
+      (p.name || '').toLowerCase().includes(q) ||
+      (p.id || '').toLowerCase().includes(q) ||
+      (p.client_name || '').toLowerCase().includes(q) ||
+      (p.address || '').toLowerCase().includes(q) ||
+      (p.city || '').toLowerCase().includes(q)
+    );
+  }
+  if (projectStageFilter !== 'all') {
+    projects = projects.filter(p => p.status === projectStageFilter);
+  }
+  projects.sort((a, b) => {
+    let av, bv;
+    switch (projectSort.field) {
+      case 'name': av = a.name || ''; bv = b.name || ''; break;
+      case 'client': av = a.client_name || a.city || ''; bv = b.client_name || b.city || ''; break;
+      case 'stage': av = a.status || ''; bv = b.status || ''; break;
+      case 'date': av = a.install_start ? new Date(a.install_start).getTime() : 0; bv = b.install_start ? new Date(b.install_start).getTime() : 0; break;
+      case 'value': av = a.estimated_amount || 0; bv = b.estimated_amount || 0; break;
+      default: av = a.name || ''; bv = b.name || '';
+    }
+    if (typeof av === 'string') { av = av.toLowerCase(); bv = bv.toLowerCase(); }
+    if (av < bv) return projectSort.dir === 'asc' ? -1 : 1;
+    if (av > bv) return projectSort.dir === 'asc' ? 1 : -1;
+    return 0;
+  });
+  return projects;
+}
+
+function setSortField(field) {
+  if (projectSort.field === field) { projectSort.dir = projectSort.dir === 'asc' ? 'desc' : 'asc'; }
+  else { projectSort.field = field; projectSort.dir = 'asc'; }
+  renderCurrentPage();
+}
+
+function sortArrow(field) {
+  if (projectSort.field !== field) return '<span style="color:#30363D;margin-left:3px">↕</span>';
+  return projectSort.dir === 'asc' ? '<span style="color:#58A6FF;margin-left:3px">↑</span>' : '<span style="color:#58A6FF;margin-left:3px">↓</span>';
+}
+
 function renderProjects() {
+  const filtered = getFilteredProjects();
+  const stages = ['all','lead','estimate','contract','install','complete'];
+  const stageLabels = { all:'All', lead:'Lead', estimate:'Estimate', contract:'Contract', install:'Install', complete:'Complete' };
+  const stageCounts = {};
+  stages.forEach(s => { stageCounts[s] = s === 'all' ? state.projects.length : state.projects.filter(p => p.status === s).length; });
+
   return `
-<div class="section-header">
-  <div class="section-title">All Projects</div>
-  <button class="btn btn-sm" onclick="syncJetbuilt()">Sync from Jetbuilt</button>
+<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px;gap:10px;flex-wrap:wrap">
+  <div style="display:flex;align-items:center;gap:8px;flex:1;min-width:200px">
+    <div style="position:relative;flex:1;max-width:320px">
+      <svg style="position:absolute;left:10px;top:50%;transform:translateY(-50%);color:#6E7681" width="14" height="14" viewBox="0 0 14 14" fill="none"><circle cx="6" cy="6" r="4.5" stroke="currentColor" stroke-width="1.3"/><path d="M10 10l2.5 2.5" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/></svg>
+      <input style="width:100%;padding:7px 10px 7px 32px;background:#161B22;border:1px solid #30363D;border-radius:6px;color:#E6EDF3;font-size:13px;font-family:'DM Sans',sans-serif" placeholder="Search projects, clients, IDs..." value="${projectSearch}" oninput="projectSearch=this.value;renderCurrentPage()">
+    </div>
+    <button class="btn btn-sm" onclick="syncJetbuilt()">Sync</button>
+  </div>
+  <div style="font-size:12px;color:#6E7681">${filtered.length} of ${state.projects.length} projects</div>
+</div>
+<div style="display:flex;gap:6px;margin-bottom:14px;flex-wrap:wrap">
+  ${stages.map(s => `<button onclick="projectStageFilter='${s}';renderCurrentPage()" style="padding:5px 12px;font-size:12px;border-radius:20px;border:1px solid ${projectStageFilter===s?'#1565C0':'#30363D'};background:${projectStageFilter===s?'#1565C0':'#161B22'};color:${projectStageFilter===s?'#fff':'#8B949E'};cursor:pointer;font-family:'DM Sans',sans-serif">${stageLabels[s]} <span style="opacity:0.7">${stageCounts[s]}</span></button>`).join('')}
 </div>
 <div class="card" style="padding:0;overflow:hidden">
   <table class="projects-table">
     <thead>
       <tr>
-        <th>Project</th>
-        <th>Client</th>
+        <th style="cursor:pointer;user-select:none" onclick="setSortField('name')">Project ${sortArrow('name')}</th>
+        <th style="cursor:pointer;user-select:none" onclick="setSortField('client')">Client ${sortArrow('client')}</th>
         <th>Systems</th>
-        <th>Install Date</th>
-        <th>Timeline</th>
-        <th>Status</th>
-        <th>Value</th>
+        <th style="cursor:pointer;user-select:none" onclick="setSortField('date')">Install Date ${sortArrow('date')}</th>
+        <th style="cursor:pointer;user-select:none" onclick="setSortField('stage')">Stage ${sortArrow('stage')}</th>
+        <th style="cursor:pointer;user-select:none" onclick="setSortField('value')">Value ${sortArrow('value')}</th>
       </tr>
     </thead>
     <tbody>
-      ${state.projects.map(p => `
+      ${filtered.map(p => `
         <tr onclick="navigate('project', '${p.id}')">
-          <td>
-            <div class="proj-name">${p.name}</div>
-            <div class="proj-id">${p.id}</div>
-          </td>
-          <td style="color:#8B949E">${p.client_name || '—'}</td>
-          <td>${(p.systems || []).map(s => `<span class="tag tag-${s === 'led_wall' ? 'led' : s === 'pa_install' ? 'audio' : s === 'lighting' ? 'lighting' : s === 'streaming' ? 'streaming' : 'control'}">${s.replace('_install','').replace('_',' ')}</span>`).join('')}</td>
-          <td style="color:#8B949E;font-size:12px">${p.install_start ? new Date(p.install_start).toLocaleDateString('en',{month:'short',day:'numeric',year:'numeric'}) : '—'}</td>
-          <td>${p.timeline_type === 'hard' ? '<span class="status-pill status-red">Hard</span>' : '<span class="status-pill status-blue">Soft</span>'}</td>
-          <td>
-            <span class="status-pill ${p.readiness === 'green' ? 'status-green' : p.readiness === 'red' ? 'status-red' : p.readiness === 'new' ? 'status-gray' : 'status-blue'}">
-              ${p.readiness === 'green' ? 'Ready' : p.readiness === 'red' ? 'Blocked' : p.readiness === 'new' ? 'New' : 'In Progress'}
-            </span>
-          </td>
-          <td style="color:#58A6FF;font-weight:500">${p.estimated_amount ? '$' + p.estimated_amount.toLocaleString() : '—'}</td>
+          <td><div class="proj-name">${p.name}</div><div class="proj-id">${p.id}</div></td>
+          <td style="color:#8B949E;font-size:12px">${p.client_name || p.city || '—'}</td>
+          <td>${(p.systems||[]).map(s=>`<span class="tag tag-${s==='led_wall'?'led':s==='pa_install'?'audio':s==='lighting'?'lighting':s==='streaming'?'streaming':'control'}">${s.replace('_install','').replace('_',' ')}</span>`).join('')||'<span style="color:#30363D;font-size:11px">—</span>'}</td>
+          <td style="color:#8B949E;font-size:12px">${p.install_start?new Date(p.install_start).toLocaleDateString('en',{month:'short',day:'numeric',year:'numeric'}):'—'}</td>
+          <td><span class="status-pill ${p.status==='complete'?'status-green':p.status==='contract'||p.status==='install'?'status-blue':p.status==='lead'?'status-gray':'status-amber'}">${p.status||'—'}</span></td>
+          <td style="color:#58A6FF;font-weight:500;font-size:12px">${p.estimated_amount?'$'+Math.round(p.estimated_amount).toLocaleString():'—'}</td>
         </tr>
-      `).join('') || '<tr><td colspan="7" style="text-align:center;padding:40px;color:#6E7681">Sync Jetbuilt to load projects</td></tr>'}
+      `).join('')||'<tr><td colspan="6" style="text-align:center;padding:40px;color:#6E7681">No projects match your search</td></tr>'}
     </tbody>
   </table>
-</div>`;
-}
-
+</div>`;}
 // ── Project Dashboard ──
 function renderProjectDashboard(projectId) {
   const project = state.projects.find(p => p.id === projectId);
@@ -1148,13 +1254,9 @@ function attachEventListeners() {
 
 // ── Init ──
 async function init() {
-  // Load demo projects immediately
-  state.projects = getDemoProjects();
-  document.getElementById('proj-count').textContent = state.projects.length;
   renderCurrentPage();
-
-  // Try to sync from Jetbuilt
-  setTimeout(syncJetbuilt, 800);
+  // Auto sync from Jetbuilt on load
+  setTimeout(syncJetbuilt, 500);
 }
 
 init();
