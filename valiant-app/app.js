@@ -2,6 +2,32 @@
 // API calls handled via /api/jetbuilt proxy
 
 // ── State ──
+// ── Current User Role (will be replaced by real login later) ──
+let currentUserRole = localStorage.getItem('vi_role') || 'admin'; // admin, sales, design, install
+let currentUserName = localStorage.getItem('vi_user') || 'Jacob';
+
+function setUserRole(role) {
+  currentUserRole = role;
+  localStorage.setItem('vi_role', role);
+  const sel = document.getElementById('role-select');
+  if (sel) sel.value = role;
+  renderCurrentPage();
+}
+
+function canSee(permission) {
+  const perms = {
+    financials:     ['admin','sales','design','project_manager'],
+    labor:          ['admin','sales','design','project_manager'],
+    equipment_total:['admin','sales','design','project_manager'],
+    client_contact: ['admin','sales','design','project_manager'],
+    margins:        ['admin','sales'],
+    assign_team:    ['admin','project_manager'],
+    change_stage:   ['admin','sales','project_manager'],
+    view_all_projects: ['admin','sales','project_manager']
+  };
+  return (perms[permission] || []).includes(currentUserRole);
+}
+
 const state = {
   projects: [],
   vendors: JSON.parse(localStorage.getItem('vi_vendors') || '[]'),
@@ -255,12 +281,24 @@ function enrichProject(p) {
     id: p.custom_id || ('P-' + p.id),
     jetbuilt_id: p.id,
     name: p.name || 'Unnamed Project',
-    client_name: p.client_name || p.city || '',
+    client_name: p.client_name || '',
+    client_id: p.client?.id || null,
     description: p.discussion_body || p.short_description || '',
+    short_desc: p.short_description || '',
     estimated_amount: p.total ? parseFloat(p.total) : 0,
+    equipment_total: p.equipment_total ? parseFloat(p.equipment_total) : 0,
+    labor_total: p.labor_total ? parseFloat(p.labor_total) : 0,
+    shipping_total: p.shipping_total ? parseFloat(p.shipping_total) : 0,
+    total_margin: p.total_margin || 0,
+    budget: p.budget ? parseFloat(p.budget) : 0,
     status: stage,
     install_start: p.estimated_install_on || null,
-    address: [p.address, p.city, p.state].filter(Boolean).join(', '),
+    close_date: p.close_date || null,
+    address: p.address || '',
+    city: p.city || '',
+    state: p.state || '',
+    zipcode: p.zipcode || '',
+    full_address: [p.address, p.city, p.state, p.zipcode].filter(Boolean).join(', '),
     designer: p.engineer?.full_name || '',
     install_manager: p.project_manager?.full_name || '',
     salesperson: p.owner?.full_name || '',
@@ -268,7 +306,11 @@ function enrichProject(p) {
     readiness: getProjectReadiness(p.custom_id || ('P-' + p.id)),
     timeline_type: 'soft',
     image_url: p.image_url || null,
-    active: p.active
+    active: p.active,
+    // Client contact (populated by fetchClientNames)
+    primary_contact_name: '',
+    primary_contact_email: '',
+    primary_contact_phone: ''
   };
 }
 
@@ -384,7 +426,7 @@ let dashboardTab = 'sales';
 let selectedUser = 'all';
 
 const TEAM = ['Jacob','Kris','Clint','Daniel','Deiton','Caden'];
-const ROLES = ['Designer','Installer','Purchaser','Commissioner','Sales','Project Manager'];
+const ROLES = ['Sales','Designer','Project Manager','Install Manager','Installer','Purchaser','Commissioner'];
 
 function getProjectsForTab(tab) {
   const stageMap = {
@@ -900,20 +942,44 @@ function renderProjects() {
   </table>
 </div>`;}
 // ── Project Dashboard ──
+async function loadAndRenderProject(projectId) {
+  const detail = await fetchProjectDetail(projectId);
+  if (detail) {
+    // Merge rich data into project
+    const project = state.projects.find(p => p.id === projectId);
+    if (project) {
+      project._detail = detail;
+      project.rooms = detail.rooms || [];
+      project.systems_jb = detail.systems || [];
+      project.phases = detail.phases || [];
+      project.labor_detail = detail.labor || [];
+      project.versions = detail.versions || [];
+      project.tags = detail.tags || [];
+      project.contract_number = detail.contract_number || '';
+      project.probability = detail.probability || '';
+      project.paid_to_date = detail.paid_to_date || '0';
+      project.discussion_title = detail.discussion_title || '';
+      if (!project.description && detail.discussion_body) project.description = detail.discussion_body;
+    }
+  }
+  renderCurrentPage();
+}
+
 function renderProjectDashboard(projectId) {
   const project = state.projects.find(p => p.id === projectId);
   if (!project) return '<div class="empty-state">Project not found</div>';
 
-  const cl = state.checklists[projectId] || {};
+  // Trigger background detail fetch if not loaded
+  if (!project._detail) {
+    setTimeout(() => loadAndRenderProject(projectId), 100);
+  }
 
+  const cl = state.checklists[projectId] || {};
   const designItems = (project.systems || []).flatMap(s => TEMPLATES.design[s]?.items || []);
   const installItems = (project.systems || []).flatMap(s => TEMPLATES.install[s]?.items || []);
-
   const designChecked = cl.design || {};
   const installChecked = cl.install || {};
   const staffChecked = cl.staff || {};
-  const equipChecked = cl.equipment || {};
-
   const designDone = designItems.filter((_, i) => designChecked[i]).length;
   const installDone = installItems.filter((_, i) => installChecked[i]).length;
 
@@ -923,17 +989,25 @@ function renderProjectDashboard(projectId) {
     return `<span class="tag tag-${map[s]||'audio'}">${names[s]||s}</span>`;
   }).join('');
 
+  // Jetbuilt systems tags
+  const jbSystemTags = (project.systems_jb || []).map(s =>
+    `<span class="tag tag-control">${s.name}</span>`
+  ).join('');
+
   return `
 <div style="margin-bottom:16px">
   <button class="btn btn-sm" onclick="navigate('projects')" style="margin-bottom:12px">← Back to Projects</button>
   <div class="project-dashboard-header">
-    <div>
-      <div class="project-name">${project.name}</div>
-      <div class="project-meta">${project.client_name || ''} · ${project.install_start ? new Date(project.install_start).toLocaleDateString('en',{month:'long',day:'numeric',year:'numeric'}) : 'Install date TBD'}</div>
-      <div class="project-id">${project.id}</div>
-      <div style="margin-top:8px">${systemTags}</div>
+    <div style="display:flex;align-items:flex-start;gap:14px">
+      ${project.image_url ? `<img src="${project.image_url}" style="width:48px;height:48px;border-radius:8px;object-fit:contain;background:#161B22;border:1px solid #1C2333;flex-shrink:0" onerror="this.style.display='none'">` : ''}
+      <div>
+        <div class="project-name">${project.name}</div>
+        <div class="project-meta">${project.client_name || ''} ${project.full_address ? '· ' + project.full_address : ''}</div>
+        <div class="project-id">${project.id}${project.contract_number ? ' · Contract #' + project.contract_number : ''}</div>
+        <div style="margin-top:6px;display:flex;flex-wrap:wrap;gap:4px">${systemTags}${jbSystemTags}</div>
+      </div>
     </div>
-    <div style="display:flex;flex-direction:column;align-items:flex-end;gap:8px">
+    <div style="display:flex;flex-direction:column;align-items:flex-end;gap:6px">
       <span class="status-pill ${project.readiness === 'green' ? 'status-green' : project.readiness === 'red' ? 'status-red' : 'status-blue'}" style="font-size:12px;padding:5px 12px">
         ${project.readiness === 'green' ? '✓ Ready to Install' : project.readiness === 'red' ? '⚠ Needs Attention' : project.readiness === 'new' ? '● New Project' : '◑ In Progress'}
       </span>
@@ -941,8 +1015,8 @@ function renderProjectDashboard(projectId) {
         ${project.timeline_type === 'hard' ? '🔒 Hard Date' : '📅 Soft Date'}
       </span>
       <select onchange="changeProjectStage('${project.id}', this.value)"
-        style="padding:5px 10px;background:#161B22;border:1px solid #30363D;border-radius:6px;color:#E6EDF3;font-size:12px;font-family:'DM Sans',sans-serif;cursor:pointer;margin-top:4px">
-        ${['lead','opportunity','estimate','proposal','revisions','contract','install','review','completed','icebox','lost','template','trash'].map(s =>
+        style="padding:5px 10px;background:#161B22;border:1px solid #30363D;border-radius:6px;color:#E6EDF3;font-size:12px;font-family:'DM Sans',sans-serif;cursor:pointer">
+        ${['lead','opportunity','proposal','revisions','contract','install','review','completed','icebox','lost','template','trash'].map(s =>
           `<option value="${s}" ${project.status === s ? 'selected' : ''}>${s.charAt(0).toUpperCase()+s.slice(1)}</option>`
         ).join('')}
       </select>
@@ -952,28 +1026,41 @@ function renderProjectDashboard(projectId) {
 
 <div class="tabs" id="proj-tabs">
   <div class="tab active" onclick="switchTab('overview')">Overview</div>
+  <div class="tab" onclick="switchTab('scope')">Scope of Work</div>
   <div class="tab" onclick="switchTab('design')">Design (${designDone}/${designItems.length})</div>
   <div class="tab" onclick="switchTab('install')">Install (${installDone}/${installItems.length})</div>
   <div class="tab" onclick="switchTab('scheduling')">Scheduling</div>
+  <div class="tab" onclick="switchTab('financials')" ${!canSee('financials') ? 'style="display:none"' : ''}>Financials</div>
   <div class="tab" onclick="switchTab('assets')">Assets</div>
 </div>
 
 <div id="tab-overview">
   <div class="dashboard-grid">
     <div class="dashboard-card">
-      <div class="dashboard-card-title">
-        Project Info
-        <span style="font-size:11px;color:#6E7681;font-weight:400">from Jetbuilt</span>
+      <div class="dashboard-card-title">Project Info</div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;font-size:12px">
+        <div><div style="color:#6E7681;font-size:10px;text-transform:uppercase;letter-spacing:0.05em;margin-bottom:2px">Stage</div><div style="color:#E6EDF3">${project.status || '—'}</div></div>
+        <div><div style="color:#6E7681;font-size:10px;text-transform:uppercase;letter-spacing:0.05em;margin-bottom:2px">Owner</div><div style="color:#E6EDF3">${project.salesperson || '—'}</div></div>
+        <div><div style="color:#6E7681;font-size:10px;text-transform:uppercase;letter-spacing:0.05em;margin-bottom:2px">Designer</div><div style="color:#E6EDF3">${project.designer || 'Unassigned'}</div></div>
+        <div><div style="color:#6E7681;font-size:10px;text-transform:uppercase;letter-spacing:0.05em;margin-bottom:2px">Install Mgr</div><div style="color:#E6EDF3">${project.install_manager || 'Unassigned'}</div></div>
+        ${project.install_start ? `<div><div style="color:#6E7681;font-size:10px;text-transform:uppercase;letter-spacing:0.05em;margin-bottom:2px">Install Date</div><div style="color:#E6EDF3">${new Date(project.install_start).toLocaleDateString('en',{month:'short',day:'numeric',year:'numeric'})}</div></div>` : ''}
+        ${project.close_date ? `<div><div style="color:#6E7681;font-size:10px;text-transform:uppercase;letter-spacing:0.05em;margin-bottom:2px">Close Date</div><div style="color:#E6EDF3">${new Date(project.close_date).toLocaleDateString('en',{month:'short',day:'numeric',year:'numeric'})}</div></div>` : ''}
+        ${project.install_duration ? `<div><div style="color:#6E7681;font-size:10px;text-transform:uppercase;letter-spacing:0.05em;margin-bottom:2px">Est. Duration</div><div style="color:#E6EDF3">${project.install_duration}</div></div>` : ''}
+        ${project.crew_size ? `<div><div style="color:#6E7681;font-size:10px;text-transform:uppercase;letter-spacing:0.05em;margin-bottom:2px">Crew Size</div><div style="color:#E6EDF3">${project.crew_size}</div></div>` : ''}
+        ${project.rooms && project.rooms.length > 0 ? `<div style="grid-column:1/-1"><div style="color:#6E7681;font-size:10px;text-transform:uppercase;letter-spacing:0.05em;margin-bottom:2px">Rooms</div><div style="color:#E6EDF3">${project.rooms.map(r=>r.name).join(', ')}</div></div>` : ''}
+        ${project.phases && project.phases.length > 0 ? `<div style="grid-column:1/-1"><div style="color:#6E7681;font-size:10px;text-transform:uppercase;letter-spacing:0.05em;margin-bottom:2px">Phases</div><div style="color:#E6EDF3">${project.phases.map(p=>p.name).join(', ')}</div></div>` : ''}
       </div>
-      <div style="font-size:12px;color:#8B949E;line-height:1.7">${project.description || 'No description available.'}</div>
-      <div style="margin-top:12px;display:grid;grid-template-columns:1fr 1fr;gap:8px">
-        <div><div style="font-size:10px;color:#6E7681;text-transform:uppercase;letter-spacing:0.06em;margin-bottom:2px">Designer</div><div style="font-size:12px;color:#E6EDF3">${project.designer || 'Unassigned'}</div></div>
-        <div><div style="font-size:10px;color:#6E7681;text-transform:uppercase;letter-spacing:0.06em;margin-bottom:2px">Install Mgr</div><div style="font-size:12px;color:#E6EDF3">${project.install_manager || 'Unassigned'}</div></div>
-        <div><div style="font-size:10px;color:#6E7681;text-transform:uppercase;letter-spacing:0.06em;margin-bottom:2px">Sales</div><div style="font-size:12px;color:#E6EDF3">${project.salesperson || 'Unassigned'}</div></div>
-        <div><div style="font-size:10px;color:#6E7681;text-transform:uppercase;letter-spacing:0.06em;margin-bottom:2px">Value</div><div style="font-size:12px;color:#58A6FF;font-weight:500">${project.estimated_amount ? '$' + project.estimated_amount.toLocaleString() : 'TBD'}</div></div>
-      </div>
+      ${canSee('client_contact') ? `
+      <div style="margin-top:12px;padding-top:12px;border-top:1px solid #0D1117">
+        <div style="color:#6E7681;font-size:10px;text-transform:uppercase;letter-spacing:0.05em;margin-bottom:6px">Client Contact</div>
+        ${project.client_name ? `<div style="font-size:13px;font-weight:500;color:#E6EDF3">${project.client_name}</div>` : ''}
+        ${project.primary_contact_name ? `<div style="font-size:12px;color:#8B949E;margin-top:1px">${project.primary_contact_name}</div>` : ''}
+        ${project.primary_contact_email ? `<a href="mailto:${project.primary_contact_email}" style="font-size:12px;color:#58A6FF;display:block;margin-top:2px">${project.primary_contact_email}</a>` : ''}
+        ${project.primary_contact_phone ? `<div style="font-size:12px;color:#8B949E;margin-top:2px">${project.primary_contact_phone}</div>` : ''}
+        <div style="font-size:12px;color:#6E7681;margin-top:4px">${project.full_address || ''}</div>
+      </div>` : ''}
       <div style="margin-top:12px;border-top:1px solid #0D1117;padding-top:12px">
-        <div style="font-size:10px;color:#6E7681;text-transform:uppercase;letter-spacing:0.06em;margin-bottom:8px">System Tags</div>
+        <div style="font-size:10px;color:#6E7681;text-transform:uppercase;letter-spacing:0.05em;margin-bottom:8px">System Tags</div>
         <div style="display:flex;flex-wrap:wrap;gap:6px">
           ${['pa_install','led_wall','lighting','control','streaming','camera','network','infrastructure'].map(sys => {
             const labels = {pa_install:'PA System',led_wall:'LED Wall',lighting:'Lighting',control:'Control',streaming:'Streaming',camera:'Camera',network:'Network',infrastructure:'Infrastructure'};
@@ -989,16 +1076,15 @@ function renderProjectDashboard(projectId) {
             <button class="btn-primary" onclick="openContractReview('${project.id}')" style="font-size:12px">
               Review Contract & Confirm Tags →
             </button>
-          </div>
-        ` : ''}
+          </div>` : ''}
       </div>
     </div>
     <div class="dashboard-card">
       <div class="dashboard-card-title">Readiness Checklist</div>
-      ${renderReadinessChecklist(project, staffChecked, equipChecked)}
+      ${renderReadinessChecklist(project, staffChecked, {})}
     </div>
   </div>
-  <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-bottom:20px">
+  <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-top:14px;margin-bottom:14px">
     <div class="dashboard-card">
       <div class="dashboard-card-title">Design Track</div>
       ${renderTrackStatus('design', project.id)}
@@ -1008,65 +1094,58 @@ function renderProjectDashboard(projectId) {
       ${renderTrackStatus('install', project.id)}
     </div>
   </div>
-  <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px">
-    <div class="dashboard-card">
-  </div>
   <div class="dashboard-grid">
     <div class="dashboard-card">
       <div class="dashboard-card-title">Design Progress <span style="font-weight:400;color:#6E7681">${designDone}/${designItems.length}</span></div>
-      <div class="timeline-bar">
-        ${designItems.map((_,i) => `<div class="timeline-segment ${designChecked[i] ? 'done' : ''}"></div>`).join('')}
-      </div>
-      <div style="font-size:12px;color:#6E7681">${designItems.length === 0 ? 'No design templates detected' : `${Math.round(designDone/designItems.length*100)}% complete`}</div>
+      <div class="timeline-bar">${designItems.map((_,i) => `<div class="timeline-segment ${designChecked[i] ? 'done' : ''}"></div>`).join('')}</div>
+      <div style="font-size:12px;color:#6E7681">${designItems.length === 0 ? 'No design templates — set system tags above' : Math.round(designDone/Math.max(designItems.length,1)*100) + '% complete'}</div>
       <button class="btn btn-sm" style="margin-top:10px" onclick="switchTab('design')">View design checklist →</button>
     </div>
     <div class="dashboard-card">
       <div class="dashboard-card-title">Install Progress <span style="font-weight:400;color:#6E7681">${installDone}/${installItems.length}</span></div>
-      <div class="timeline-bar">
-        ${installItems.map((_,i) => `<div class="timeline-segment ${installChecked[i] ? 'done' : ''}"></div>`).join('')}
-      </div>
-      <div style="font-size:12px;color:#6E7681">${installItems.length === 0 ? 'No install templates detected' : `${Math.round(installDone/installItems.length*100)}% complete`}</div>
+      <div class="timeline-bar">${installItems.map((_,i) => `<div class="timeline-segment ${installChecked[i] ? 'done' : ''}"></div>`).join('')}</div>
+      <div style="font-size:12px;color:#6E7681">${installItems.length === 0 ? 'No install templates — set system tags above' : Math.round(installDone/Math.max(installItems.length,1)*100) + '% complete'}</div>
       <button class="btn btn-sm" style="margin-top:10px" onclick="switchTab('install')">View install checklist →</button>
     </div>
   </div>
 </div>
 
+<div id="tab-scope" style="display:none">
+  <div class="dashboard-card">
+    <div class="dashboard-card-title">${project.discussion_title || 'Scope of Work'}</div>
+    <div style="font-size:13px;color:#C9D1D9;line-height:1.8;white-space:pre-wrap">${project.description || 'No scope of work available. Add description in Jetbuilt.'}</div>
+  </div>
+  ${project.short_desc ? `
+  <div class="dashboard-card" style="margin-top:14px">
+    <div class="dashboard-card-title">Short Description</div>
+    <div style="font-size:13px;color:#C9D1D9;line-height:1.6">${project.short_desc}</div>
+  </div>` : ''}
+</div>
+
 <div id="tab-design" style="display:none">
-  ${designItems.length === 0 ? '<div class="alert alert-info">No design templates detected for this project. Systems detected: ' + (project.systems || []).join(', ') + '</div>' : ''}
+  ${designItems.length === 0 ? '<div class="alert alert-info">No design templates detected. Set system tags in the Overview tab to auto-populate checklists.</div>' : ''}
   ${(project.systems || []).map(sys => TEMPLATES.design[sys] ? `
     <div class="dashboard-card" style="margin-bottom:14px">
       <div class="dashboard-card-title">${TEMPLATES.design[sys].name}</div>
       ${TEMPLATES.design[sys].items.map((item, i) => `
         <div class="checklist-item ${designChecked[sys+'_'+i] ? 'checked' : ''}" onclick="toggleCheck('design','${projectId}','${sys}_${i}',this)">
-          <div class="checklist-box">
-            <svg class="checklist-check" width="10" height="10" viewBox="0 0 10 10" fill="none">
-              <polyline points="2,5 4,7 8,3" stroke="white" stroke-width="1.5" fill="none"/>
-            </svg>
-          </div>
+          <div class="checklist-box"><svg class="checklist-check" width="10" height="10" viewBox="0 0 10 10" fill="none"><polyline points="2,5 4,7 8,3" stroke="white" stroke-width="1.5" fill="none"/></svg></div>
           <div class="checklist-label">${item}</div>
-        </div>
-      `).join('')}
-    </div>
-  ` : '').join('')}
+        </div>`).join('')}
+    </div>` : '').join('')}
 </div>
 
 <div id="tab-install" style="display:none">
-  ${installItems.length === 0 ? '<div class="alert alert-info">No install templates detected for this project.</div>' : ''}
+  ${installItems.length === 0 ? '<div class="alert alert-info">No install templates detected. Set system tags in the Overview tab to auto-populate checklists.</div>' : ''}
   ${(project.systems || []).map(sys => TEMPLATES.install[sys] ? `
     <div class="dashboard-card" style="margin-bottom:14px">
       <div class="dashboard-card-title">${TEMPLATES.install[sys].name}</div>
       ${TEMPLATES.install[sys].items.map((item, i) => `
         <div class="checklist-item ${installChecked[sys+'_'+i] ? 'checked' : ''}" onclick="toggleCheck('install','${projectId}','${sys}_${i}',this)">
-          <div class="checklist-box">
-            <svg class="checklist-check" width="10" height="10" viewBox="0 0 10 10" fill="none">
-              <polyline points="2,5 4,7 8,3" stroke="white" stroke-width="1.5" fill="none"/>
-            </svg>
-          </div>
+          <div class="checklist-box"><svg class="checklist-check" width="10" height="10" viewBox="0 0 10 10" fill="none"><polyline points="2,5 4,7 8,3" stroke="white" stroke-width="1.5" fill="none"/></svg></div>
           <div class="checklist-label">${item}</div>
-        </div>
-      `).join('')}
-    </div>
-  ` : '').join('')}
+        </div>`).join('')}
+    </div>` : '').join('')}
 </div>
 
 <div id="tab-scheduling" style="display:none">
@@ -1080,107 +1159,104 @@ function renderProjectDashboard(projectId) {
       <div class="form-group">
         <div class="form-label">Timeline Type</div>
         <select class="form-select" onchange="updateProjectField('${projectId}','timeline_type',this.value)">
-          <option value="soft" ${project.timeline_type === 'soft' ? 'selected' : ''}>Soft — can be moved</option>
+          <option value="soft" ${project.timeline_type !== 'hard' ? 'selected' : ''}>Soft — can be moved</option>
           <option value="hard" ${project.timeline_type === 'hard' ? 'selected' : ''}>Hard — cannot move</option>
         </select>
       </div>
       <div style="display:flex;gap:8px;margin-top:4px">
         <div style="flex:1;background:#0D1117;border:1px solid #1C2333;border-radius:8px;padding:10px;text-align:center">
           <div style="font-size:10px;color:#6E7681;text-transform:uppercase;letter-spacing:0.06em;margin-bottom:4px">Prep Day</div>
-          <div style="font-size:12px;color:#E6EDF3">${project.install_start ? new Date(new Date(project.install_start).getTime() - 86400000).toLocaleDateString('en',{month:'short',day:'numeric'}) : 'TBD'}</div>
+          <div style="font-size:12px;color:#E6EDF3">${project.install_start ? new Date(new Date(project.install_start).getTime()-86400000).toLocaleDateString('en',{month:'short',day:'numeric'}) : 'TBD'}</div>
         </div>
         <div style="flex:1;background:#0D1117;border:1px solid #1C2333;border-radius:8px;padding:10px;text-align:center">
           <div style="font-size:10px;color:#6E7681;text-transform:uppercase;letter-spacing:0.06em;margin-bottom:4px">Install</div>
-          <div style="font-size:12px;color:#E6EDF3">${project.install_start && project.install_end ? new Date(project.install_start).toLocaleDateString('en',{month:'short',day:'numeric'}) + ' – ' + new Date(project.install_end).toLocaleDateString('en',{month:'short',day:'numeric'}) : 'TBD'}</div>
+          <div style="font-size:12px;color:#E6EDF3">${project.install_start ? new Date(project.install_start).toLocaleDateString('en',{month:'short',day:'numeric'}) : 'TBD'}</div>
         </div>
         <div style="flex:1;background:#0D1117;border:1px solid #1C2333;border-radius:8px;padding:10px;text-align:center">
           <div style="font-size:10px;color:#6E7681;text-transform:uppercase;letter-spacing:0.06em;margin-bottom:4px">Deprep Day</div>
-          <div style="font-size:12px;color:#E6EDF3">${project.install_end ? new Date(new Date(project.install_end).getTime() + 86400000).toLocaleDateString('en',{month:'short',day:'numeric'}) : 'TBD'}</div>
+          <div style="font-size:12px;color:#E6EDF3">${project.install_end ? new Date(new Date(project.install_end).getTime()+86400000).toLocaleDateString('en',{month:'short',day:'numeric'}) : 'TBD'}</div>
         </div>
       </div>
     </div>
     <div class="dashboard-card">
-      <div class="dashboard-card-title">Crew Assignment</div>
-      <div style="color:#6E7681;font-size:12px;margin-bottom:10px">Crew management coming in Phase 2. Track crew assignments, availability, and Google Calendar sync.</div>
-      <div class="alert alert-info">Crew scheduling, drag-and-drop task assignment, and Google Calendar integration will be available in the next build.</div>
+      <div class="dashboard-card-title">Team Assignment</div>
+      ${(state.assignments[projectId] || []).map((a,i) => `
+        <div style="display:flex;align-items:center;justify-content:space-between;padding:7px 0;border-bottom:1px solid #0D1117">
+          <div style="display:flex;align-items:center;gap:8px">
+            <div style="width:28px;height:28px;border-radius:50%;background:#1565C0;display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:600;color:#fff">${a.name.charAt(0)}</div>
+            <div><div style="font-size:12px;font-weight:500;color:#E6EDF3">${a.name}</div><div style="font-size:11px;color:#6E7681">${a.role}</div></div>
+          </div>
+          <button class="btn btn-sm btn-danger" onclick="removeAssignment('${projectId}',${i})">×</button>
+        </div>`).join('') || '<div style="color:#6E7681;font-size:12px;padding:10px 0">No team assigned yet</div>'}
+      <button class="btn btn-sm" style="margin-top:10px" onclick="openAssignModal('${projectId}','${project.name.replace(/'/g,"\'")}')">+ Assign team member</button>
     </div>
   </div>
+</div>
+
+<div id="tab-financials" style="display:${canSee('financials') ? 'block' : 'none'}">
+  <div class="dashboard-grid">
+    <div class="dashboard-card">
+      <div class="dashboard-card-title">Financial Summary</div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
+        ${[
+          ['Contract Value', '$' + Math.round(project.estimated_amount||0).toLocaleString()],
+          ['Budget', project.budget ? '$' + Math.round(project.budget).toLocaleString() : '—'],
+          ['Equipment', '$' + Math.round(project.equipment_total||0).toLocaleString()],
+          ['Labor', '$' + Math.round(project.labor_total||0).toLocaleString()],
+          ['Shipping', '$' + Math.round(project.shipping_total||0).toLocaleString()],
+          ['Paid to Date', '$' + Math.round(parseFloat(project.paid_to_date||0)).toLocaleString()],
+          ['Margin', Math.round(project.total_margin||0) + '%'],
+          ['Equipment Margin', Math.round(project.equipment_margin||0) + '%']
+        ].map(([label, val]) => `
+          <div style="background:#0D1117;border-radius:8px;padding:10px">
+            <div style="font-size:10px;color:#6E7681;text-transform:uppercase;letter-spacing:0.05em;margin-bottom:3px">${label}</div>
+            <div style="font-size:14px;font-weight:500;color:${label.includes('Margin') ? (parseInt(val)>30?'#3FB950':'#D29922') : label==='Contract Value'?'#58A6FF':'#E6EDF3'}">${val}</div>
+          </div>`).join('')}
+      </div>
+    </div>
+    ${project.labor_detail && project.labor_detail.length > 0 ? `
+    <div class="dashboard-card">
+      <div class="dashboard-card-title">Labor Breakdown</div>
+      <table style="width:100%;border-collapse:collapse;font-size:12px">
+        <tr style="color:#6E7681;border-bottom:1px solid #0D1117">
+          <th style="text-align:left;padding:6px 0;font-weight:500">Category</th>
+          <th style="text-align:right;padding:6px 0;font-weight:500">Hours</th>
+          <th style="text-align:right;padding:6px 0;font-weight:500">Rate</th>
+          <th style="text-align:right;padding:6px 0;font-weight:500">Total</th>
+        </tr>
+        ${project.labor_detail.map(l => `
+          <tr style="border-bottom:1px solid #0D1117">
+            <td style="padding:7px 0;color:#C9D1D9">${l.name}</td>
+            <td style="padding:7px 0;text-align:right;color:#8B949E">${parseFloat(l.total_hours||0).toFixed(1)}</td>
+            <td style="padding:7px 0;text-align:right;color:#8B949E">$${parseFloat(l.price||0).toFixed(0)}/hr</td>
+            <td style="padding:7px 0;text-align:right;color:#E6EDF3">$${Math.round(parseFloat(l.total_hours||0)*parseFloat(l.price||0)).toLocaleString()}</td>
+          </tr>`).join('')}
+      </table>
+    </div>` : ''}
+  </div>
+  ${project.versions && project.versions.length > 1 ? `
+  <div class="dashboard-card" style="margin-top:14px">
+    <div class="dashboard-card-title">Versions / Revisions</div>
+    <div style="display:flex;gap:8px;flex-wrap:wrap">
+      ${project.versions.map(v => `<span class="tag tag-control">${v.name}${v.locked ? ' 🔒' : ''}</span>`).join('')}
+    </div>
+  </div>` : ''}
 </div>
 
 <div id="tab-assets" style="display:none">
   <div class="dashboard-card">
     <div class="dashboard-card-title">Project Assets</div>
     <div style="color:#6E7681;font-size:12px;margin-bottom:12px">Upload drawings, specs, as-builts, and other project documents here.</div>
-    <div class="alert alert-info">Asset management (drawings, specs, as-builts) coming in Phase 2. Will integrate with Vectorworks and allow photo upload from field.</div>
+    <div class="alert alert-info">Asset management (drawings, specs, as-builts, photos from field) coming in Phase 2.</div>
   </div>
+  ${project.image_url ? `
+  <div class="dashboard-card" style="margin-top:14px">
+    <div class="dashboard-card-title">Client Logo</div>
+    <img src="${project.image_url}" style="max-height:80px;max-width:200px;object-fit:contain;border-radius:6px" onerror="this.style.display='none'">
+  </div>` : ''}
 </div>
-`;
-}
+`;}
 
-function renderReadinessChecklist(project, staffChecked, equipChecked) {
-  const readinessItems = [
-    { key: 'design_handoff', label: 'Design handoff meeting completed' },
-    { key: 'install_handoff', label: 'Install handoff meeting completed' },
-    { key: 'crew_assigned', label: 'Crew assigned and confirmed' },
-    { key: 'contractors_booked', label: 'Contractors booked (electricians, rigging)' },
-    { key: 'vehicles_assigned', label: 'Vehicles assigned (trailer, van)' },
-    { key: 'inventory_confirmed', label: 'Equipment inventory confirmed' },
-    { key: 'prep_day_scheduled', label: 'Prep day scheduled' },
-    { key: 'deprep_day_scheduled', label: 'Deprep day scheduled' },
-    { key: 'client_approved', label: 'Client approved install schedule' },
-    { key: 'commissioning_scheduled', label: 'Commissioning scheduled with client' }
-  ];
-  const all = readinessItems.every(item => staffChecked[item.key]);
-  return readinessItems.map(item => `
-    <div class="checklist-item ${staffChecked[item.key] ? 'checked' : ''}" onclick="toggleReadiness('${project.id}','${item.key}',this)">
-      <div class="checklist-box">
-        <svg class="checklist-check" width="10" height="10" viewBox="0 0 10 10" fill="none">
-          <polyline points="2,5 4,7 8,3" stroke="white" stroke-width="1.5" fill="none"/>
-        </svg>
-      </div>
-      <div class="checklist-label">${item.label}</div>
-    </div>
-  `).join('');
-}
-
-function switchTab(tab) {
-  const tabs = document.querySelectorAll('#proj-tabs .tab');
-  const tabNames = ['overview','design','install','scheduling','assets'];
-  tabs.forEach((t, i) => t.classList.toggle('active', tabNames[i] === tab));
-  tabNames.forEach(name => {
-    const el = document.getElementById('tab-' + name);
-    if (el) el.style.display = name === tab ? 'block' : 'none';
-  });
-}
-
-function toggleCheck(type, projectId, key, el) {
-  if (!state.checklists[projectId]) state.checklists[projectId] = {};
-  if (!state.checklists[projectId][type]) state.checklists[projectId][type] = {};
-  state.checklists[projectId][type][key] = !state.checklists[projectId][type][key];
-  el.classList.toggle('checked');
-  saveState();
-  updateProjectReadiness(projectId);
-}
-
-function toggleReadiness(projectId, key, el) {
-  if (!state.checklists[projectId]) state.checklists[projectId] = {};
-  if (!state.checklists[projectId].staff) state.checklists[projectId].staff = {};
-  state.checklists[projectId].staff[key] = !state.checklists[projectId].staff[key];
-  el.classList.toggle('checked');
-  saveState();
-  updateProjectReadiness(projectId);
-}
-
-function updateProjectReadiness(projectId) {
-  const project = state.projects.find(p => p.id === projectId);
-  if (project) project.readiness = getProjectReadiness(projectId);
-  document.getElementById('proj-count').textContent = state.projects.length;
-}
-
-function updateProjectField(projectId, field, value) {
-  const project = state.projects.find(p => p.id === projectId);
-  if (project) { project[field] = value; saveState(); }
-}
 
 // ── Calendar ──
 function renderCalendar() {
@@ -1913,7 +1989,15 @@ async function fetchClientNames() {
       try {
         const data = await fetchJetbuilt(`/clients/${id}`);
         if (data && (data.company_name || data.name)) {
-          clientNameCache[id] = data.company_name || data.name;
+          clientNameCache[id] = {
+            name: data.company_name || data.name,
+            email: data.primary_contact_email || '',
+            phone: data.primary_contact_phone_number_1 || '',
+            contact_name: [data.primary_contact_first_name, data.primary_contact_last_name].filter(Boolean).join(' '),
+            address: data.address || '',
+            city: data.city || '',
+            state: data.state || ''
+          };
         }
       } catch (e) {}
     }));
@@ -1924,12 +2008,36 @@ async function fetchClientNames() {
   // Update project client names
   state.projects.forEach(p => {
     if (p.client?.id && clientNameCache[p.client.id]) {
-      p.client_name = clientNameCache[p.client.id];
+      const c = clientNameCache[p.client.id];
+      p.client_name = c.name;
+      p.primary_contact_name = c.contact_name;
+      p.primary_contact_email = c.email;
+      p.primary_contact_phone = c.phone;
+      if (!p.address && c.address) p.address = c.address;
+      if (!p.city && c.city) p.city = c.city;
+      if (!p.state && c.state) p.state = c.state;
     }
   });
 
   // Re-render to show updated names
   renderCurrentPage();
+}
+
+// ── Full Project Detail Fetcher ──
+const projectDetailCache = {};
+
+async function fetchProjectDetail(projectId) {
+  if (projectDetailCache[projectId]) return projectDetailCache[projectId];
+  const project = state.projects.find(p => p.id === projectId);
+  if (!project || !project.jetbuilt_id) return null;
+  try {
+    const data = await fetchJetbuilt(`/projects/${project.jetbuilt_id}`);
+    if (data && data.id) {
+      projectDetailCache[projectId] = data;
+      return data;
+    }
+  } catch(e) { console.error('Failed to fetch project detail:', e); }
+  return null;
 }
 
 // ── Init ──
