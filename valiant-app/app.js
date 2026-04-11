@@ -9,6 +9,8 @@ const state = {
   checklists: JSON.parse(localStorage.getItem('vi_checklists') || '{}'),
   assignments: JSON.parse(localStorage.getItem('vi_assignments') || '{}'),
   reviewed: JSON.parse(localStorage.getItem('vi_reviewed') || '{}'),
+  gbbLinks: JSON.parse(localStorage.getItem('vi_gbb') || '{}'),
+  fizzled: JSON.parse(localStorage.getItem('vi_fizzled') || '[]'),
   currentPage: 'dashboard',
   currentProject: null,
   calendarDate: new Date(),
@@ -399,10 +401,10 @@ function getProjectsForTab(tab) {
 }
 
 function renderDashboard() {
+  if (dashboardTab === 'sales') return renderSalesDashboard();
+
   const tabProjects = getProjectsForTab(dashboardTab);
   const allAssigned = Object.values(state.assignments).flat();
-
-  // Summary counts
   const salesCount = state.projects.filter(p => ['lead','estimate','contract'].includes(p.status)).length;
   const designCount = state.projects.filter(p => ['contract','install'].includes(p.status)).length;
   const installCount = state.projects.filter(p => ['contract','install','complete'].includes(p.status)).length;
@@ -433,9 +435,9 @@ function renderDashboard() {
 
 <div class="metrics-grid" style="margin-bottom:20px">
   <div class="metric-card">
-    <div class="metric-label">${dashboardTab === 'sales' ? 'Pipeline Projects' : dashboardTab === 'design' ? 'Design Projects' : 'Install Projects'}</div>
+    <div class="metric-label">${dashboardTab === 'design' ? 'Design Projects' : 'Install Projects'}</div>
     <div class="metric-value">${tabProjects.length}</div>
-    <div class="metric-sub">${dashboardTab === 'sales' ? 'lead → contract' : dashboardTab === 'design' ? 'contract → install' : 'contract → complete'}</div>
+    <div class="metric-sub">${dashboardTab === 'design' ? 'contract → install' : 'contract → complete'}</div>
   </div>
   <div class="metric-card">
     <div class="metric-label">Needs Attention</div>
@@ -445,7 +447,7 @@ function renderDashboard() {
   <div class="metric-card">
     <div class="metric-label">Team Assigned</div>
     <div class="metric-value">${Object.keys(state.assignments).length}</div>
-    <div class="metric-sub">projects have assignments</div>
+    <div class="metric-sub">projects with assignments</div>
   </div>
   <div class="metric-card">
     <div class="metric-label">Vendors</div>
@@ -460,67 +462,42 @@ function renderDashboard() {
 </div>
 
 ${tabProjects.length === 0 ? `
-  <div class="card">
-    <div class="empty-state"><span class="empty-icon">○</span>
-      ${state.projects.length === 0 ? 'Sync Jetbuilt to load projects' : 'No projects in this view' + (selectedUser !== 'all' ? ' for ' + selectedUser : '')}
-    </div>
-  </div>
+  <div class="card"><div class="empty-state"><span class="empty-icon">○</span>${state.projects.length === 0 ? 'Sync Jetbuilt to load projects' : 'No projects in this view'}</div></div>
 ` : `
   <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:10px">
     ${tabProjects.slice(0,12).map(p => {
       const assignments = state.assignments[p.id] || [];
       return `
-      <div class="card card-sm" style="cursor:pointer;transition:border-color 0.12s" onmouseenter="this.style.borderColor='#58A6FF'" onmouseleave="this.style.borderColor=''" >
+      <div class="card card-sm" style="cursor:pointer;transition:border-color 0.12s" onmouseenter="this.style.borderColor='#58A6FF'" onmouseleave="this.style.borderColor=''">
         <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:8px">
-          <div style="flex:1;min-width:0">
-            <div style="font-size:13px;font-weight:500;color:#E6EDF3;white-space:nowrap;overflow:hidden;text-overflow:ellipsis" onclick="navigate('project','${p.id}')">${p.name}</div>
-            <div style="font-size:11px;color:#6E7681;margin-top:1px">${p.id} · ${p.city || p.address || ''}</div>
+          <div style="flex:1;min-width:0" onclick="navigate('project','${p.id}')">
+            <div style="font-size:13px;font-weight:500;color:#E6EDF3;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${p.name}</div>
+            <div style="font-size:11px;color:#6E7681;margin-top:1px">${p.id} · ${p.city || ''}</div>
           </div>
           <span class="status-pill ${p.status==='complete'?'status-green':p.status==='contract'||p.status==='install'?'status-blue':'status-gray'}" style="margin-left:8px;flex-shrink:0">${p.status}</span>
         </div>
-
         ${assignments.length > 0 ? `
           <div style="display:flex;flex-wrap:wrap;gap:4px;margin-bottom:8px">
-            ${assignments.map(a => `
-              <div style="display:flex;align-items:center;gap:4px;background:#0D1117;border:1px solid #1C2333;border-radius:12px;padding:2px 8px">
-                <div style="width:18px;height:18px;border-radius:50%;background:#1565C0;display:flex;align-items:center;justify-content:center;font-size:9px;font-weight:600;color:#fff;flex-shrink:0">${a.name.charAt(0)}</div>
-                <span style="font-size:11px;color:#8B949E">${a.name}</span>
-                <span style="font-size:10px;color:#6E7681">· ${a.role}</span>
-              </div>
-            `).join('')}
+            ${assignments.map(a => `<div style="display:flex;align-items:center;gap:4px;background:#0D1117;border:1px solid #1C2333;border-radius:12px;padding:2px 8px"><div style="width:16px;height:16px;border-radius:50%;background:#1565C0;display:flex;align-items:center;justify-content:center;font-size:9px;font-weight:600;color:#fff">${a.name.charAt(0)}</div><span style="font-size:11px;color:#8B949E">${a.name} · ${a.role}</span></div>`).join('')}
           </div>
-        ` : `<div style="font-size:11px;color:#30363D;margin-bottom:8px;font-style:italic">No team assigned</div>`}
-
+        ` : ''}
         <div style="display:flex;justify-content:space-between;align-items:center">
           <div style="font-size:12px;font-weight:500;color:#58A6FF">${p.estimated_amount ? '$' + Math.round(p.estimated_amount).toLocaleString() : 'TBD'}</div>
           <button class="btn btn-sm" onclick="openAssignModal('${p.id}','${p.name.replace(/'/g,"\'")}')">+ Assign</button>
         </div>
-      </div>
-    `}).join('')}
+      </div>`;
+    }).join('')}
   </div>
-  ${tabProjects.length > 12 ? `<div style="text-align:center;margin-top:12px"><button class="btn" onclick="navigate('projects')">View all ${tabProjects.length} projects →</button></div>` : ''}
+  ${tabProjects.length > 12 ? `<div style="text-align:center;margin-top:12px"><button class="btn" onclick="navigate('projects')">View all ${tabProjects.length} →</button></div>` : ''}
 `}
 
 <div id="assign-modal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.7);z-index:100;align-items:center;justify-content:center">
   <div style="background:#161B22;border:1px solid #30363D;border-radius:12px;padding:24px;width:90%;max-width:380px">
     <div style="font-size:15px;font-weight:600;color:#E6EDF3;margin-bottom:4px">Assign Team Member</div>
     <div style="font-size:12px;color:#6E7681;margin-bottom:16px" id="assign-project-name"></div>
-
-    <div style="margin-bottom:12px">
-      <div class="form-label">Team Member</div>
-      <select id="assign-name" class="form-select">
-        ${TEAM.map(u => `<option value="${u}">${u}</option>`).join('')}
-      </select>
-    </div>
-    <div style="margin-bottom:16px">
-      <div class="form-label">Role on this project</div>
-      <select id="assign-role" class="form-select">
-        ${ROLES.map(r => `<option value="${r}">${r}</option>`).join('')}
-      </select>
-    </div>
-
+    <div style="margin-bottom:12px"><div class="form-label">Team Member</div><select id="assign-name" class="form-select">${TEAM.map(u => `<option value="${u}">${u}</option>`).join('')}</select></div>
+    <div style="margin-bottom:16px"><div class="form-label">Role on this project</div><select id="assign-role" class="form-select">${ROLES.map(r => `<option value="${r}">${r}</option>`).join('')}</select></div>
     <div id="current-assignments" style="margin-bottom:16px"></div>
-
     <div style="display:flex;gap:8px">
       <button class="btn-primary" onclick="saveAssignment()">Assign</button>
       <button class="btn" onclick="closeAssignModal()">Cancel</button>
@@ -529,6 +506,221 @@ ${tabProjects.length === 0 ? `
 </div>
 `;}
 
+// ── Sales Dashboard (Kanban CRM) ──
+function getSalesPipelineValue(projects, period) {
+  const now = new Date();
+  const filtered = projects.filter(p => {
+    if (!p.updated_at && !p.close_date && !p.created_at) return period === 'all';
+    const d = new Date(p.close_date || p.updated_at || p.created_at);
+    if (period === 'month') return d.getMonth() === now.getMonth() && d.getFullYear() === now.getFullYear();
+    if (period === 'quarter') return Math.floor(d.getMonth()/3) === Math.floor(now.getMonth()/3) && d.getFullYear() === now.getFullYear();
+    if (period === 'year') return d.getFullYear() === now.getFullYear();
+    return true;
+  });
+  return filtered.reduce((sum, p) => sum + (p.estimated_amount || 0), 0);
+}
+
+function getGBBGroups(projects) {
+  const groups = {};
+  const used = new Set();
+
+  // Auto-detect by name pattern
+  projects.forEach(p => {
+    const name = p.name || '';
+    const lc = name.toLowerCase();
+    const isGood = lc.endsWith('- good') || lc.endsWith('-good') || lc.includes(' good)') || lc.endsWith(' good');
+    const isBetter = lc.endsWith('- better') || lc.endsWith('-better') || lc.includes(' better)') || lc.endsWith(' better');
+    const isBest = lc.endsWith('- best') || lc.endsWith('-best') || lc.includes(' best)') || lc.endsWith(' best');
+
+    if (isGood || isBetter || isBest) {
+      const baseName = name.replace(/[-\s]*(good|better|best)\s*$/i, '').trim();
+      if (!groups[baseName]) groups[baseName] = { good: null, better: null, best: null, projects: [] };
+      if (isGood) groups[baseName].good = p;
+      if (isBetter) groups[baseName].better = p;
+      if (isBest) groups[baseName].best = p;
+      groups[baseName].projects.push(p);
+      used.add(p.id);
+    }
+  });
+
+  // Manual links from state.gbbLinks
+  Object.entries(state.gbbLinks).forEach(([groupId, ids]) => {
+    const linked = projects.filter(p => ids.includes(p.id));
+    if (linked.length > 0 && !groups['manual_'+groupId]) {
+      groups['manual_'+groupId] = { projects: linked, manual: true };
+      linked.forEach(p => used.add(p.id));
+    }
+  });
+
+  return { groups, used };
+}
+
+function renderSalesDashboard() {
+  const allSales = state.projects.filter(p => !state.fizzled.includes(p.id));
+  const leads = allSales.filter(p => ['lead','prospect','opportunity'].includes(p.status));
+  const estimates = allSales.filter(p => ['estimate','proposal'].includes(p.status));
+  const negotiation = allSales.filter(p => ['contract'].includes(p.status));
+  const closed = state.projects.filter(p => p.status === 'complete');
+  const fizzledProjects = state.projects.filter(p => state.fizzled.includes(p.id));
+  const salesCount = state.projects.filter(p => ['lead','estimate','contract'].includes(p.status)).length;
+  const designCount = state.projects.filter(p => ['contract','install'].includes(p.status)).length;
+  const installCount = state.projects.filter(p => ['contract','install','complete'].includes(p.status)).length;
+
+  // GBB deduplication for metrics
+  const { groups, used } = getGBBGroups(estimates.concat(negotiation));
+  const uniqueEstimates = estimates.filter(p => !used.has(p.id));
+  const gbbRepresentatives = Object.values(groups).map(g => g.good || g.projects[0]).filter(Boolean);
+  const pipelineProjects = [...uniqueEstimates, ...gbbRepresentatives];
+
+  const leadsValue = leads.reduce((s,p) => s+=(p.estimated_amount||0), 0);
+  const pipelineValue = pipelineProjects.reduce((s,p) => s+=(p.estimated_amount||0), 0);
+  const closedThisMonth = getSalesPipelineValue(closed, 'month');
+  const closedThisQuarter = getSalesPipelineValue(closed, 'quarter');
+  const closedThisYear = getSalesPipelineValue(closed, 'year');
+  const winRate = (leads.length + estimates.length + negotiation.length + closed.length) > 0
+    ? Math.round(closed.length / (leads.length + estimates.length + negotiation.length + closed.length) * 100) : 0;
+
+  function fmt(n) { return '$' + Math.round(n).toLocaleString(); }
+
+  function kanbanCard(p) {
+    const gbbGroup = Object.values(getGBBGroups([p]).groups)[0];
+    return `
+    <div class="project-card" draggable="true"
+      ondragstart="event.dataTransfer.setData('projectId','${p.id}')"
+      onclick="navigate('project','${p.id}')">
+      <div class="project-card-name">${p.name}</div>
+      <div class="project-card-client">${p.city || p.id}</div>
+      <div class="project-card-footer">
+        <div class="project-card-value">${p.estimated_amount ? fmt(p.estimated_amount) : 'TBD'}</div>
+        <button class="btn btn-sm" style="font-size:10px;padding:2px 6px;color:#F85149;border-color:#DA3633"
+          onclick="event.stopPropagation();fizzleProject('${p.id}')">Fizzle</button>
+      </div>
+    </div>`;
+  }
+
+  function kanbanCol(title, projects, stage, color) {
+    const total = projects.reduce((s,p) => s+(p.estimated_amount||0), 0);
+    return `
+    <div style="flex:1;min-width:220px;max-width:320px">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px">
+        <div style="font-size:11px;font-weight:600;color:${color};text-transform:uppercase;letter-spacing:0.06em">${title}</div>
+        <div style="display:flex;align-items:center;gap:6px">
+          <span style="font-size:11px;color:#6E7681">${fmt(total)}</span>
+          <span style="font-size:10px;background:#161B22;border:1px solid #1C2333;border-radius:10px;padding:1px 7px;color:#6E7681">${projects.length}</span>
+        </div>
+      </div>
+      <div style="background:#0D1117;border:1px solid #1C2333;border-radius:10px;padding:10px;min-height:200px"
+        ondragover="event.preventDefault()"
+        ondrop="moveProjectToStage(event,'${stage}')">
+        ${projects.map(p => kanbanCard(p)).join('') || '<div style="color:#30363D;font-size:12px;text-align:center;padding:20px 0">Drop here</div>'}
+      </div>
+    </div>`;
+  }
+
+  return `
+<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:20px;flex-wrap:wrap;gap:10px">
+  <div style="display:flex;gap:4px;background:#0D1117;border:1px solid #1C2333;border-radius:8px;padding:3px">
+    ${['sales','design','install'].map(tab => `
+      <button onclick="dashboardTab='${tab}';renderCurrentPage()"
+        style="padding:6px 16px;font-size:12px;font-weight:500;border-radius:6px;border:none;cursor:pointer;font-family:'DM Sans',sans-serif;transition:all 0.12s;
+          background:${dashboardTab===tab?'#1565C0':'transparent'};
+          color:${dashboardTab===tab?'#fff':'#6E7681'}">
+        ${tab.charAt(0).toUpperCase()+tab.slice(1)}
+        <span style="opacity:0.7;margin-left:4px;font-size:11px">${tab==='sales'?salesCount:tab==='design'?designCount:installCount}</span>
+      </button>
+    `).join('')}
+  </div>
+  <div style="display:flex;gap:8px;align-items:center">
+    <button class="btn btn-sm" onclick="showArchivedDeals()" style="font-size:11px">Archived (${fizzledProjects.length})</button>
+    <select onchange="selectedUser=this.value;renderCurrentPage()"
+      style="padding:5px 10px;background:#161B22;border:1px solid #30363D;border-radius:6px;color:#E6EDF3;font-size:12px;font-family:'DM Sans',sans-serif;cursor:pointer">
+      <option value="all">All team</option>
+      ${TEAM.map(u => `<option value="${u}" ${selectedUser===u?'selected':''}>${u}</option>`).join('')}
+    </select>
+  </div>
+</div>
+
+<div style="display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px;margin-bottom:24px">
+  <div class="metric-card">
+    <div class="metric-label">Pipeline value</div>
+    <div class="metric-value" style="font-size:18px">${fmt(pipelineValue)}</div>
+    <div class="metric-sub">${pipelineProjects.length} unique opportunities</div>
+  </div>
+  <div class="metric-card">
+    <div class="metric-label">Closed this month</div>
+    <div class="metric-value" style="font-size:18px;color:#3FB950">${fmt(closedThisMonth)}</div>
+    <div class="metric-sub">Q: ${fmt(closedThisQuarter)} · Y: ${fmt(closedThisYear)}</div>
+  </div>
+  <div class="metric-card">
+    <div class="metric-label">Leads value</div>
+    <div class="metric-value" style="font-size:18px">${fmt(leadsValue)}</div>
+    <div class="metric-sub">${leads.length} active leads</div>
+  </div>
+  <div class="metric-card">
+    <div class="metric-label">Win rate</div>
+    <div class="metric-value" style="font-size:18px">${winRate}%</div>
+    <div class="metric-sub">${closed.length} closed total</div>
+  </div>
+</div>
+
+<div style="display:flex;gap:12px;overflow-x:auto;padding-bottom:8px">
+  ${kanbanCol('Leads', leads, 'lead', '#6E7681')}
+  ${kanbanCol('Estimates', estimates, 'estimate', '#D29922')}
+  ${kanbanCol('Negotiation', negotiation, 'contract', '#58A6FF')}
+</div>
+
+<div id="archived-modal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.7);z-index:100;align-items:center;justify-content:center">
+  <div style="background:#161B22;border:1px solid #30363D;border-radius:12px;padding:24px;width:90%;max-width:600px;max-height:80vh;overflow-y:auto">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px">
+      <div style="font-size:15px;font-weight:600;color:#E6EDF3">Archived / Fizzled Deals</div>
+      <button onclick="document.getElementById('archived-modal').style.display='none'" style="background:none;border:none;color:#6E7681;cursor:pointer;font-size:18px">×</button>
+    </div>
+    ${fizzledProjects.length === 0 ? '<div style="color:#6E7681;font-size:13px;text-align:center;padding:20px">No archived deals yet</div>' :
+      fizzledProjects.map(p => `
+        <div style="display:flex;align-items:center;justify-content:space-between;padding:10px 0;border-bottom:1px solid #0D1117">
+          <div>
+            <div style="font-size:13px;font-weight:500;color:#6E7681">${p.name}</div>
+            <div style="font-size:11px;color:#30363D">${p.id} · ${p.estimated_amount ? fmt(p.estimated_amount) : 'TBD'}</div>
+          </div>
+          <button class="btn btn-sm" onclick="restoreProject('${p.id}')">Restore</button>
+        </div>
+      `).join('')}
+  </div>
+</div>
+`;}
+
+function moveProjectToStage(event, stage) {
+  const projectId = event.dataTransfer.getData('projectId');
+  const project = state.projects.find(p => p.id === projectId);
+  if (project) {
+    project.status = stage;
+    saveState();
+    renderCurrentPage();
+  }
+}
+
+function fizzleProject(projectId) {
+  if (!state.fizzled.includes(projectId)) {
+    state.fizzled.push(projectId);
+    saveState();
+    renderCurrentPage();
+  }
+}
+
+function restoreProject(projectId) {
+  state.fizzled = state.fizzled.filter(id => id !== projectId);
+  saveState();
+  document.getElementById('archived-modal').style.display = 'none';
+  renderCurrentPage();
+}
+
+function showArchivedDeals() {
+  renderCurrentPage();
+  setTimeout(() => {
+    const modal = document.getElementById('archived-modal');
+    if (modal) modal.style.display = 'flex';
+  }, 100);
+}
 let assigningProjectId = null;
 
 function openAssignModal(projectId, projectName) {
@@ -1386,6 +1578,8 @@ function saveState() {
   localStorage.setItem('vi_shopwork', JSON.stringify(state.shopwork));
   localStorage.setItem('vi_checklists', JSON.stringify(state.checklists));
   localStorage.setItem('vi_assignments', JSON.stringify(state.assignments));
+  localStorage.setItem('vi_gbb', JSON.stringify(state.gbbLinks));
+  localStorage.setItem('vi_fizzled', JSON.stringify(state.fizzled));
 }
 
 function attachEventListeners() {
