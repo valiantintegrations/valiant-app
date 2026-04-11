@@ -462,6 +462,9 @@ if (dashboardTab === ‘sales’) return renderSalesDashboard();
 
 const tabProjects = getProjectsForTab(dashboardTab);
 const allAssigned = Object.values(state.assignments).flat();
+if (state.projects.length === 0) {
+return `<div style="text-align:center;padding:60px 20px;color:#6E7681"> <div style="font-size:14px;margin-bottom:8px">No projects loaded</div> <button onclick="syncJetbuilt()" class="btn-primary" style="margin-top:8px">Sync Jetbuilt</button> </div>`;
+}
 const salesCount = state.projects.filter(p => [‘lead’,‘estimate’,‘contract’].includes(p.status)).length;
 const designCount = state.projects.filter(p => [‘contract’,‘install’].includes(p.status)).length;
 const installCount = state.projects.filter(p => [‘contract’,‘install’,‘complete’].includes(p.status)).length;
