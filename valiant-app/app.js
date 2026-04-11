@@ -9,6 +9,8 @@ const state = {
   checklists: JSON.parse(localStorage.getItem('vi_checklists') || '{}'),
   assignments: JSON.parse(localStorage.getItem('vi_assignments') || '{}'),
   reviewed: JSON.parse(localStorage.getItem('vi_reviewed') || '{}'),
+  designTrack: JSON.parse(localStorage.getItem('vi_design_track') || '{}'),
+  installTrack: JSON.parse(localStorage.getItem('vi_install_track') || '{}'),
   gbbLinks: JSON.parse(localStorage.getItem('vi_gbb') || '{}'),
   fizzled: JSON.parse(localStorage.getItem('vi_fizzled') || '[]'),
   currentPage: 'dashboard',
@@ -204,18 +206,12 @@ async function syncJetbuilt() {
     }
 
     if (allProjects.length > 0) {
-      // Filter to active phases only: contract, install, review
-      const activePhases = ['contract', 'install', 'review', 'in-build', 'in_build'];
-      const active = allProjects.filter(p => {
-        const status = (p.status || p.phase || p.stage || '').toLowerCase();
-        return activePhases.some(phase => status.includes(phase));
+      // Keep ALL projects except template - let the UI sort them into the right buckets
+      const projects = allProjects.filter(p => {
+        const stage = (p.stage || '').toLowerCase();
+        return stage !== 'template';
       });
-      // If filter returns nothing, show all non-completed projects
-      const projects = active.length > 0 ? active : allProjects.filter(p => {
-        const status = (p.status || p.phase || p.stage || '').toLowerCase();
-        return !status.includes('complet') && !status.includes('oppty') && status !== '';
-      });
-      state.projects = (projects.length > 0 ? projects : allProjects).map(p => enrichProject(p));
+      state.projects = projects.map(p => enrichProject(p));
     } else {
       console.log('No projects returned from API');
     }
@@ -997,6 +993,19 @@ function renderProjectDashboard(projectId) {
       ${renderReadinessChecklist(project, staffChecked, equipChecked)}
     </div>
   </div>
+  <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-bottom:20px">
+    <div class="dashboard-card">
+      <div class="dashboard-card-title">Design Track</div>
+      ${renderTrackStatus('design', project.id)}
+    </div>
+    <div class="dashboard-card">
+      <div class="dashboard-card-title">Install Track</div>
+      ${renderTrackStatus('install', project.id)}
+    </div>
+  </div>
+  <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px">
+    <div class="dashboard-card">
+  </div>
   <div class="dashboard-grid">
     <div class="dashboard-card">
       <div class="dashboard-card-title">Design Progress <span style="font-weight:400;color:#6E7681">${designDone}/${designItems.length}</span></div>
@@ -1608,12 +1617,66 @@ function saveState() {
   localStorage.setItem('vi_assignments', JSON.stringify(state.assignments));
   localStorage.setItem('vi_gbb', JSON.stringify(state.gbbLinks));
   localStorage.setItem('vi_fizzled', JSON.stringify(state.fizzled));
+  localStorage.setItem('vi_design_track', JSON.stringify(state.designTrack));
+  localStorage.setItem('vi_install_track', JSON.stringify(state.installTrack));
 }
 
 function attachEventListeners() {
   document.addEventListener('click', e => {
     if (e.target === document.getElementById('project-modal')) closeModal();
   });
+}
+
+// ── Track Status ──
+const DESIGN_STAGES = ['ready_for_design','designing','ready_for_purchase','purchasing','purchased','design_complete'];
+const INSTALL_STAGES = ['install_planning','ready_for_install','installing','review','completed'];
+const DESIGN_LABELS = {
+  ready_for_design: 'Ready for Design',
+  designing: 'Designing',
+  ready_for_purchase: 'Ready for Purchase',
+  purchasing: 'Purchasing',
+  purchased: 'Purchased',
+  design_complete: 'Design Complete'
+};
+const INSTALL_LABELS = {
+  install_planning: 'Install Planning',
+  ready_for_install: 'Ready for Install',
+  installing: 'Installing',
+  review: 'Review',
+  completed: 'Completed'
+};
+
+function renderTrackStatus(type, projectId) {
+  const stages = type === 'design' ? DESIGN_STAGES : INSTALL_STAGES;
+  const labels = type === 'design' ? DESIGN_LABELS : INSTALL_LABELS;
+  const track = type === 'design' ? state.designTrack : state.installTrack;
+  const current = track[projectId] || null;
+  const currentIdx = stages.indexOf(current);
+
+  if (!current) {
+    return `<div style="color:#6E7681;font-size:12px;font-style:italic">Not started — complete Contract Review to begin</div>`;
+  }
+
+  return `
+    <div style="margin-bottom:10px">
+      <span style="font-size:12px;font-weight:500;color:#E6EDF3">${labels[current] || current}</span>
+      <span style="font-size:11px;color:#6E7681;margin-left:6px">${currentIdx+1}/${stages.length}</span>
+    </div>
+    <div style="display:flex;gap:3px;margin-bottom:10px">
+      ${stages.map((s,i) => `<div style="flex:1;height:4px;border-radius:2px;background:${i <= currentIdx ? (type==='design'?'#1565C0':'#3FB950') : '#1C2333'}"></div>`).join('')}
+    </div>
+    <select onchange="updateTrack('${type}','${projectId}',this.value)"
+      style="width:100%;padding:6px 10px;background:#0D1117;border:1px solid #30363D;border-radius:6px;color:#E6EDF3;font-size:12px;font-family:'DM Sans',sans-serif">
+      ${stages.map(s => `<option value="${s}" ${current===s?'selected':''}>${labels[s]}</option>`).join('')}
+    </select>
+  `;
+}
+
+function updateTrack(type, projectId, stage) {
+  if (type === 'design') state.designTrack[projectId] = stage;
+  else state.installTrack[projectId] = stage;
+  saveState();
+  renderCurrentPage();
 }
 
 // ── Stage Changer ──
@@ -1700,8 +1763,8 @@ function openContractReview(projectId) {
           </div>
 
           <div style="margin-bottom:18px">
-            <div style="font-size:11px;font-weight:600;color:#6E7681;text-transform:uppercase;letter-spacing:0.06em;margin-bottom:6px">Timeline</div>
-            <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
+            <div style="font-size:11px;font-weight:600;color:#6E7681;text-transform:uppercase;letter-spacing:0.06em;margin-bottom:6px">Timeline & Crew</div>
+            <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:10px">
               <div>
                 <div style="font-size:11px;color:#6E7681;margin-bottom:3px">Est. install date</div>
                 <input type="date" id="cr-install-date" value="${project.install_start||''}" style="width:100%;padding:7px 10px;background:#0D1117;border:1px solid #30363D;border-radius:6px;color:#E6EDF3;font-size:12px;font-family:'DM Sans',sans-serif">
@@ -1711,6 +1774,25 @@ function openContractReview(projectId) {
                 <select id="cr-timeline" style="width:100%;padding:7px 10px;background:#0D1117;border:1px solid #30363D;border-radius:6px;color:#E6EDF3;font-size:12px;font-family:'DM Sans',sans-serif">
                   <option value="soft" ${project.timeline_type !== 'hard' ? 'selected' : ''}>Soft — can be moved</option>
                   <option value="hard" ${project.timeline_type === 'hard' ? 'selected' : ''}>Hard — cannot move</option>
+                </select>
+              </div>
+            </div>
+            <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
+              <div>
+                <div style="font-size:11px;color:#6E7681;margin-bottom:3px">Est. install duration</div>
+                <select id="cr-duration" style="width:100%;padding:7px 10px;background:#0D1117;border:1px solid #30363D;border-radius:6px;color:#E6EDF3;font-size:12px;font-family:'DM Sans',sans-serif">
+                  <option value="">Select...</option>
+                  <option>1 day</option><option>2 days</option><option>3 days</option>
+                  <option>1 week</option><option>2 weeks</option><option>3 weeks</option>
+                  <option>1 month</option><option>2+ months</option>
+                </select>
+              </div>
+              <div>
+                <div style="font-size:11px;color:#6E7681;margin-bottom:3px">Est. crew size</div>
+                <select id="cr-crew" style="width:100%;padding:7px 10px;background:#0D1117;border:1px solid #30363D;border-radius:6px;color:#E6EDF3;font-size:12px;font-family:'DM Sans',sans-serif">
+                  <option value="">Select...</option>
+                  <option>1 person</option><option>2 people</option><option>3 people</option>
+                  <option>4 people</option><option>5+ people</option>
                 </select>
               </div>
             </div>
@@ -1785,16 +1867,24 @@ function confirmContractReview(projectId) {
   state.reviewed[projectId] = { date: new Date().toISOString(), systems: project.systems };
   localStorage.setItem('vi_reviewed', JSON.stringify(state.reviewed));
 
-  // Auto-schedule design handoff meeting (placeholder)
-  console.log('Design kickoff triggered for', project.name, 'Systems:', project.systems);
+  // Set dual tracks
+  if (!state.designTrack) state.designTrack = {};
+  if (!state.installTrack) state.installTrack = {};
+  state.designTrack[projectId] = 'ready_for_design';
+  state.installTrack[projectId] = 'install_planning';
+
+  // Add crew size and install duration to project
+  const crewSize = document.getElementById('cr-crew')?.value;
+  const installDuration = document.getElementById('cr-duration')?.value;
+  if (crewSize) project.crew_size = crewSize;
+  if (installDuration) project.install_duration = installDuration;
 
   saveState();
   document.getElementById('cr-modal')?.remove();
   renderCurrentPage();
 
-  // Show confirmation
   setTimeout(() => {
-    alert(`✓ Contract reviewed for ${project.name}\n\nSystems confirmed: ${project.systems.map(s => s.replace('_install','').replace('_',' ')).join(', ')}\n\nDesign checklist populated. Design handoff meeting scheduling coming soon.`);
+    alert('✓ Contract reviewed for ' + project.name + '\n\nDesign track: Ready for Design → Kris notified\nInstall track: Install Planning → Clint notified\n\nSystems: ' + project.systems.map(s => s.replace('_install','').replace('_',' ')).join(', '));
   }, 100);
 }
 
