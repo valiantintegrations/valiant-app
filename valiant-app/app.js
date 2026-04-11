@@ -231,10 +231,11 @@ async function syncJetbuilt() {
 function enrichProject(p) {
   const desc = ((p.discussion_body || p.short_description || p.name || '')).toLowerCase();
   const systems = detectSystems(desc);
-  // Use Jetbuilt stage names directly, normalized to lowercase
+  // Real Jetbuilt stage names (confirmed from API)
   const stageMap = {
     'lead': 'lead',
     'opportunity': 'opportunity',
+    'estimate': 'estimate',
     'proposal': 'proposal',
     'revisions': 'revisions',
     'contract': 'contract',
@@ -245,8 +246,6 @@ function enrichProject(p) {
     'lost': 'lost',
     'template': 'template',
     'trash': 'trash',
-    // Legacy mappings
-    'estimate': 'proposal',
     'in-build': 'contract',
     'in_build': 'contract',
     'complete': 'completed'
@@ -390,7 +389,7 @@ const ROLES = ['Designer','Installer','Purchaser','Commissioner','Sales','Projec
 
 function getProjectsForTab(tab) {
   const stageMap = {
-    sales: ['lead','opportunity','proposal','revisions','contract'],
+    sales: ['lead','opportunity','estimate','proposal','revisions','contract'],
     design: ['contract','install','review'],
     install: ['contract','install','review','completed']
   };
@@ -563,9 +562,9 @@ function getGBBGroups(projects) {
 }
 
 function renderSalesDashboard() {
-  const allSales = state.projects.filter(p => !state.fizzled.includes(p.id) && !['icebox','template','trash','lost'].includes(p.status));
+  const allSales = state.projects.filter(p => !state.fizzled.includes(p.id) && !['icebox','template','trash','lost','completed','review','install'].includes(p.status));
   const leads = allSales.filter(p => ['lead','opportunity'].includes(p.status));
-  const estimates = allSales.filter(p => ['proposal','revisions'].includes(p.status));
+  const estimates = allSales.filter(p => ['estimate','proposal','revisions'].includes(p.status));
   const negotiation = allSales.filter(p => ['contract'].includes(p.status));
   const closed = state.projects.filter(p => p.status === 'completed');
   const fizzledProjects = state.projects.filter(p => state.fizzled.includes(p.id) || ['icebox','trash','lost'].includes(p.status));
@@ -686,7 +685,7 @@ function renderSalesDashboard() {
 
 <div style="display:flex;gap:12px;overflow-x:auto;padding-bottom:16px">
   ${kanbanCol('Leads', leads, 'opportunity', '#6E7681')}
-  ${kanbanCol('Estimates', estimates, 'proposal', '#D29922')}
+  ${kanbanCol('Estimates', estimates, 'estimate', '#D29922')}
   ${kanbanCol('Negotiation', negotiation, 'contract', '#58A6FF')}
 </div>
 
@@ -859,8 +858,8 @@ function sortArrow(field) {
 
 function renderProjects() {
   const filtered = getFilteredProjects();
-  const stages = ['all','lead','opportunity','proposal','revisions','contract','install','review','completed','icebox','lost'];
-  const stageLabels = { all:'All', lead:'Lead', opportunity:'Opportunity', proposal:'Proposal', revisions:'Revisions', contract:'Contract', install:'Install', review:'Review', completed:'Completed', icebox:'Icebox', lost:'Lost' };
+  const stages = ['all','lead','opportunity','estimate','proposal','revisions','contract','install','review','completed','icebox','lost'];
+  const stageLabels = { all:'All', lead:'Lead', opportunity:'Opportunity', estimate:'Estimate', proposal:'Proposal', revisions:'Revisions', contract:'Contract', install:'Install', review:'Review', completed:'Completed', icebox:'Icebox', lost:'Lost' };
   const stageCounts = {};
   stages.forEach(s => { stageCounts[s] = s === 'all' ? state.projects.length : state.projects.filter(p => p.status === s).length; });
 
@@ -947,7 +946,7 @@ function renderProjectDashboard(projectId) {
       </span>
       <select onchange="changeProjectStage('${project.id}', this.value)"
         style="padding:5px 10px;background:#161B22;border:1px solid #30363D;border-radius:6px;color:#E6EDF3;font-size:12px;font-family:'DM Sans',sans-serif;cursor:pointer;margin-top:4px">
-        ${['lead','opportunity','proposal','revisions','contract','install','review','completed','icebox','lost','template','trash'].map(s =>
+        ${['lead','opportunity','estimate','proposal','revisions','contract','install','review','completed','icebox','lost','template','trash'].map(s =>
           `<option value="${s}" ${project.status === s ? 'selected' : ''}>${s.charAt(0).toUpperCase()+s.slice(1)}</option>`
         ).join('')}
       </select>
