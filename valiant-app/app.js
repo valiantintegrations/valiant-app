@@ -7,6 +7,7 @@ const state = {
   vendors: JSON.parse(localStorage.getItem('vi_vendors') || '[]'),
   shopwork: JSON.parse(localStorage.getItem('vi_shopwork') || '[]'),
   checklists: JSON.parse(localStorage.getItem('vi_checklists') || '{}'),
+  assignments: JSON.parse(localStorage.getItem('vi_assignments') || '{}'),
   currentPage: 'dashboard',
   currentProject: null,
   calendarDate: new Date(),
@@ -371,35 +372,79 @@ function renderCurrentPage() {
 }
 
 // ── Dashboard ──
-function renderDashboard() {
-  const total = state.projects.length;
-  const green = state.projects.filter(p => p.readiness === 'green').length;
-  const red = state.projects.filter(p => p.readiness === 'red').length;
+let dashboardTab = 'sales';
+let selectedUser = 'all';
 
+const TEAM = ['Jacob','Kris','Clint','Daniel','Deiton','Caden'];
+const ROLES = ['Designer','Installer','Purchaser','Commissioner','Sales','Project Manager'];
+
+function getProjectsForTab(tab) {
   const stageMap = {
-    lead: state.projects.filter(p => ['lead','icebox','prospect','opportunity'].includes(p.status)),
-    estimate: state.projects.filter(p => ['estimate','proposal'].includes(p.status)),
-    contract: state.projects.filter(p => ['contract','in-build','in_build'].includes(p.status)),
-    install: state.projects.filter(p => ['install','review'].includes(p.status)),
-    complete: state.projects.filter(p => p.status === 'complete')
+    sales: ['lead','estimate','contract'],
+    design: ['contract','install'],
+    install: ['contract','install','complete']
   };
+  const stages = stageMap[tab] || [];
+  let projects = state.projects.filter(p => stages.includes(p.status));
+
+  // Filter by assigned user if not admin view
+  if (selectedUser !== 'all') {
+    projects = projects.filter(p => {
+      const assignments = state.assignments[p.id] || [];
+      return assignments.some(a => a.name === selectedUser);
+    });
+  }
+  return projects;
+}
+
+function renderDashboard() {
+  const tabProjects = getProjectsForTab(dashboardTab);
+  const allAssigned = Object.values(state.assignments).flat();
+
+  // Summary counts
+  const salesCount = state.projects.filter(p => ['lead','estimate','contract'].includes(p.status)).length;
+  const designCount = state.projects.filter(p => ['contract','install'].includes(p.status)).length;
+  const installCount = state.projects.filter(p => ['contract','install','complete'].includes(p.status)).length;
+  const needsAttention = state.projects.filter(p => p.readiness === 'red').length;
 
   return `
-<div class="metrics-grid">
-  <div class="metric-card">
-    <div class="metric-label">Active Projects</div>
-    <div class="metric-value">${total}</div>
-    <div class="metric-sub">in contract</div>
+<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:20px;flex-wrap:wrap;gap:10px">
+  <div style="display:flex;gap:4px;background:#0D1117;border:1px solid #1C2333;border-radius:8px;padding:3px">
+    ${['sales','design','install'].map(tab => `
+      <button onclick="dashboardTab='${tab}';renderCurrentPage()"
+        style="padding:6px 16px;font-size:12px;font-weight:500;border-radius:6px;border:none;cursor:pointer;font-family:'DM Sans',sans-serif;transition:all 0.12s;
+          background:${dashboardTab===tab?'#1565C0':'transparent'};
+          color:${dashboardTab===tab?'#fff':'#6E7681'}">
+        ${tab.charAt(0).toUpperCase()+tab.slice(1)}
+        <span style="opacity:0.7;margin-left:4px;font-size:11px">${tab==='sales'?salesCount:tab==='design'?designCount:installCount}</span>
+      </button>
+    `).join('')}
   </div>
+  <div style="display:flex;align-items:center;gap:8px">
+    <div style="font-size:11px;color:#6E7681">View as:</div>
+    <select onchange="selectedUser=this.value;renderCurrentPage()"
+      style="padding:5px 10px;background:#161B22;border:1px solid #30363D;border-radius:6px;color:#E6EDF3;font-size:12px;font-family:'DM Sans',sans-serif;cursor:pointer">
+      <option value="all" ${selectedUser==='all'?'selected':''}>All team</option>
+      ${TEAM.map(u => `<option value="${u}" ${selectedUser===u?'selected':''}>${u}</option>`).join('')}
+    </select>
+  </div>
+</div>
+
+<div class="metrics-grid" style="margin-bottom:20px">
   <div class="metric-card">
-    <div class="metric-label">Ready to Install</div>
-    <div class="metric-value">${green}</div>
-    <div class="metric-trend up">${green > 0 ? '✓ All checklists complete' : 'Complete checklists to go green'}</div>
+    <div class="metric-label">${dashboardTab === 'sales' ? 'Pipeline Projects' : dashboardTab === 'design' ? 'Design Projects' : 'Install Projects'}</div>
+    <div class="metric-value">${tabProjects.length}</div>
+    <div class="metric-sub">${dashboardTab === 'sales' ? 'lead → contract' : dashboardTab === 'design' ? 'contract → install' : 'contract → complete'}</div>
   </div>
   <div class="metric-card">
     <div class="metric-label">Needs Attention</div>
-    <div class="metric-value">${red}</div>
-    <div class="metric-trend warn">${red > 0 ? red + ' project' + (red > 1 ? 's' : '') + ' blocked' : 'All clear'}</div>
+    <div class="metric-value" style="color:${needsAttention>0?'#F85149':'#3FB950'}">${needsAttention}</div>
+    <div class="metric-sub">${needsAttention > 0 ? 'projects blocked' : 'all clear'}</div>
+  </div>
+  <div class="metric-card">
+    <div class="metric-label">Team Assigned</div>
+    <div class="metric-value">${Object.keys(state.assignments).length}</div>
+    <div class="metric-sub">projects have assignments</div>
   </div>
   <div class="metric-card">
     <div class="metric-label">Vendors</div>
@@ -408,65 +453,134 @@ function renderDashboard() {
   </div>
 </div>
 
-<div class="section-header">
-  <div class="section-title">Sales Pipeline</div>
+<div class="section-header" style="margin-bottom:12px">
+  <div class="section-title">${dashboardTab.charAt(0).toUpperCase()+dashboardTab.slice(1)} Projects ${selectedUser !== 'all' ? '— ' + selectedUser : ''}</div>
   <button class="section-action" onclick="navigate('projects')">View all →</button>
 </div>
-<div class="pipeline-grid">
-  ${renderPipelineCol('Lead', 'lead', stageMap.lead)}
-  ${renderPipelineCol('Estimate', 'estimate', stageMap.estimate)}
-  ${renderPipelineCol('Contract', 'contract', stageMap.contract)}
-  ${renderPipelineCol('Install', 'install', stageMap.install)}
-  ${renderPipelineCol('Complete', 'complete', stageMap.complete)}
-</div>
 
-<div class="section-header">
-  <div class="section-title">Upcoming Installs</div>
-  <button class="section-action" onclick="navigate('calendar')">View calendar →</button>
-</div>
-<div class="card">
-  ${state.projects.filter(p => p.install_start).sort((a,b) => new Date(a.install_start)-new Date(b.install_start)).slice(0,5).map(p => `
-    <div style="display:flex;align-items:center;gap:12px;padding:10px 0;border-bottom:1px solid #0D1117;cursor:pointer" onclick="navigate('project', '${p.id}')">
-      <div style="width:42px;height:42px;border-radius:8px;background:#0D1626;display:flex;align-items:center;justify-content:center;flex-shrink:0;font-size:10px;font-weight:600;color:#58A6FF;text-align:center;line-height:1.2">
-        ${p.install_start ? new Date(p.install_start).toLocaleDateString('en',{month:'short',day:'numeric'}) : 'TBD'}
-      </div>
-      <div style="flex:1;min-width:0">
-        <div style="font-size:13px;font-weight:500;color:#E6EDF3;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${p.name}</div>
-        <div style="font-size:11px;color:#6E7681">${p.client_name || ''} · ${p.timeline_type === 'hard' ? '🔒 Hard date' : '📅 Soft date'}</div>
-      </div>
-      <div>
-        <span class="status-pill ${p.readiness === 'green' ? 'status-green' : p.readiness === 'red' ? 'status-red' : 'status-blue'}">
-          ${p.readiness === 'green' ? 'Ready' : p.readiness === 'red' ? 'Blocked' : p.readiness === 'new' ? 'New' : 'In Progress'}
-        </span>
-      </div>
+${tabProjects.length === 0 ? `
+  <div class="card">
+    <div class="empty-state"><span class="empty-icon">○</span>
+      ${state.projects.length === 0 ? 'Sync Jetbuilt to load projects' : 'No projects in this view' + (selectedUser !== 'all' ? ' for ' + selectedUser : '')}
     </div>
-  `).join('') || '<div class="empty-state"><span class="empty-icon">📅</span>Sync Jetbuilt to load projects</div>'}
-</div>
-`;
-}
-
-function renderPipelineCol(label, key, projects) {
-  return `
-<div class="pipeline-col">
-  <div class="pipeline-col-header">
-    <div class="pipeline-col-name">${label}</div>
-    <div class="pipeline-col-count">${projects.length}</div>
   </div>
-  ${projects.map(p => `
-    <div class="project-card" onclick="navigate('project', '${p.id}')">
-      <div class="project-card-name">${p.name.split('—')[0].trim()}</div>
-      <div class="project-card-client">${p.client_name || ''}</div>
-      <div class="project-card-footer">
-        <div class="project-card-value">${p.estimated_amount ? '$' + (p.estimated_amount/1000).toFixed(0) + 'k' : 'TBD'}</div>
-        <span class="status-pill ${p.readiness === 'green' ? 'status-green' : p.readiness === 'red' ? 'status-red' : 'status-blue'}">
-          ${p.readiness === 'green' ? 'Ready' : p.readiness === 'red' ? 'Blocked' : 'Active'}
-        </span>
+` : `
+  <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:10px">
+    ${tabProjects.slice(0,12).map(p => {
+      const assignments = state.assignments[p.id] || [];
+      return `
+      <div class="card card-sm" style="cursor:pointer;transition:border-color 0.12s" onmouseenter="this.style.borderColor='#58A6FF'" onmouseleave="this.style.borderColor=''" >
+        <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:8px">
+          <div style="flex:1;min-width:0">
+            <div style="font-size:13px;font-weight:500;color:#E6EDF3;white-space:nowrap;overflow:hidden;text-overflow:ellipsis" onclick="navigate('project','${p.id}')">${p.name}</div>
+            <div style="font-size:11px;color:#6E7681;margin-top:1px">${p.id} · ${p.city || p.address || ''}</div>
+          </div>
+          <span class="status-pill ${p.status==='complete'?'status-green':p.status==='contract'||p.status==='install'?'status-blue':'status-gray'}" style="margin-left:8px;flex-shrink:0">${p.status}</span>
+        </div>
+
+        ${assignments.length > 0 ? `
+          <div style="display:flex;flex-wrap:wrap;gap:4px;margin-bottom:8px">
+            ${assignments.map(a => `
+              <div style="display:flex;align-items:center;gap:4px;background:#0D1117;border:1px solid #1C2333;border-radius:12px;padding:2px 8px">
+                <div style="width:18px;height:18px;border-radius:50%;background:#1565C0;display:flex;align-items:center;justify-content:center;font-size:9px;font-weight:600;color:#fff;flex-shrink:0">${a.name.charAt(0)}</div>
+                <span style="font-size:11px;color:#8B949E">${a.name}</span>
+                <span style="font-size:10px;color:#6E7681">· ${a.role}</span>
+              </div>
+            `).join('')}
+          </div>
+        ` : `<div style="font-size:11px;color:#30363D;margin-bottom:8px;font-style:italic">No team assigned</div>`}
+
+        <div style="display:flex;justify-content:space-between;align-items:center">
+          <div style="font-size:12px;font-weight:500;color:#58A6FF">${p.estimated_amount ? '$' + Math.round(p.estimated_amount).toLocaleString() : 'TBD'}</div>
+          <button class="btn btn-sm" onclick="openAssignModal('${p.id}','${p.name.replace(/'/g,"\'")}')">+ Assign</button>
+        </div>
       </div>
+    `}).join('')}
+  </div>
+  ${tabProjects.length > 12 ? `<div style="text-align:center;margin-top:12px"><button class="btn" onclick="navigate('projects')">View all ${tabProjects.length} projects →</button></div>` : ''}
+`}
+
+<div id="assign-modal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.7);z-index:100;align-items:center;justify-content:center">
+  <div style="background:#161B22;border:1px solid #30363D;border-radius:12px;padding:24px;width:90%;max-width:380px">
+    <div style="font-size:15px;font-weight:600;color:#E6EDF3;margin-bottom:4px">Assign Team Member</div>
+    <div style="font-size:12px;color:#6E7681;margin-bottom:16px" id="assign-project-name"></div>
+
+    <div style="margin-bottom:12px">
+      <div class="form-label">Team Member</div>
+      <select id="assign-name" class="form-select">
+        ${TEAM.map(u => `<option value="${u}">${u}</option>`).join('')}
+      </select>
     </div>
-  `).join('') || ''}
-</div>`;
+    <div style="margin-bottom:16px">
+      <div class="form-label">Role on this project</div>
+      <select id="assign-role" class="form-select">
+        ${ROLES.map(r => `<option value="${r}">${r}</option>`).join('')}
+      </select>
+    </div>
+
+    <div id="current-assignments" style="margin-bottom:16px"></div>
+
+    <div style="display:flex;gap:8px">
+      <button class="btn-primary" onclick="saveAssignment()">Assign</button>
+      <button class="btn" onclick="closeAssignModal()">Cancel</button>
+    </div>
+  </div>
+</div>
+`;}
+
+let assigningProjectId = null;
+
+function openAssignModal(projectId, projectName) {
+  assigningProjectId = projectId;
+  document.getElementById('assign-project-name').textContent = projectName;
+  const modal = document.getElementById('assign-modal');
+  if (modal) { modal.style.display = 'flex'; }
+
+  const current = state.assignments[projectId] || [];
+  const currentDiv = document.getElementById('current-assignments');
+  if (currentDiv && current.length > 0) {
+    currentDiv.innerHTML = `
+      <div class="form-label" style="margin-bottom:6px">Current assignments</div>
+      ${current.map((a,i) => `
+        <div style="display:flex;align-items:center;justify-content:space-between;padding:5px 0;border-bottom:1px solid #0D1117">
+          <span style="font-size:12px;color:#C9D1D9">${a.name} <span style="color:#6E7681">· ${a.role}</span></span>
+          <button class="btn btn-sm btn-danger" onclick="removeAssignment('${projectId}',${i})">×</button>
+        </div>
+      `).join('')}
+    `;
+  } else if (currentDiv) {
+    currentDiv.innerHTML = '';
+  }
 }
 
+function closeAssignModal() {
+  const modal = document.getElementById('assign-modal');
+  if (modal) modal.style.display = 'none';
+  assigningProjectId = null;
+}
+
+function saveAssignment() {
+  if (!assigningProjectId) return;
+  const name = document.getElementById('assign-name').value;
+  const role = document.getElementById('assign-role').value;
+  if (!state.assignments[assigningProjectId]) state.assignments[assigningProjectId] = [];
+  // Avoid duplicate role assignments
+  const existing = state.assignments[assigningProjectId].findIndex(a => a.name === name && a.role === role);
+  if (existing === -1) {
+    state.assignments[assigningProjectId].push({ name, role });
+    saveState();
+  }
+  closeAssignModal();
+  renderCurrentPage();
+}
+
+function removeAssignment(projectId, index) {
+  if (state.assignments[projectId]) {
+    state.assignments[projectId].splice(index, 1);
+    saveState();
+    renderCurrentPage();
+  }
+}
 // ── Projects Page ──
 let projectSort = { field: 'name', dir: 'asc' };
 let projectSearch = '';
@@ -1244,6 +1358,7 @@ function saveState() {
   localStorage.setItem('vi_vendors', JSON.stringify(state.vendors));
   localStorage.setItem('vi_shopwork', JSON.stringify(state.shopwork));
   localStorage.setItem('vi_checklists', JSON.stringify(state.checklists));
+  localStorage.setItem('vi_assignments', JSON.stringify(state.assignments));
 }
 
 function attachEventListeners() {
