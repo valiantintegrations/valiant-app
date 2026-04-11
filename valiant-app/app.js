@@ -429,6 +429,7 @@ let dashboardTab = ‘sales’;
 let selectedUser = ‘all’;
 
 const TEAM = [‘Jacob’,‘Kris’,‘Clint’,‘Daniel’,‘Deiton’,‘Caden’];
+const fmt = n => ‘$’ + Math.round(n||0).toLocaleString();
 const ROLES = [‘Sales’,‘Designer’,‘Project Manager’,‘Install Manager’,‘Installer’,‘Purchaser’,‘Commissioner’];
 
 function getProjectsForTab(tab) {
