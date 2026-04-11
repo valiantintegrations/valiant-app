@@ -577,15 +577,16 @@ function renderSalesDashboard() {
   const { groups, used } = getGBBGroups(estimates.concat(negotiation));
   const uniqueEstimates = estimates.filter(p => !used.has(p.id));
   const gbbRepresentatives = Object.values(groups).map(g => g.good || g.projects[0]).filter(Boolean);
-  const pipelineProjects = [...uniqueEstimates, ...gbbRepresentatives];
 
-  const leadsValue = leads.reduce((s,p) => s+=(p.estimated_amount||0), 0);
-  const pipelineValue = pipelineProjects.reduce((s,p) => s+=(p.estimated_amount||0), 0);
+  // Pipeline = ALL active deals: leads + estimates + negotiation (GBB deduplicated)
+  const allActiveProjects = [...leads, ...uniqueEstimates, ...gbbRepresentatives, ...negotiation.filter(p => !used.has(p.id))];
+  const leadsValue = leads.reduce((s,p) => { s += (p.estimated_amount||0); return s; }, 0);
+  const pipelineValue = allActiveProjects.reduce((s,p) => { s += (p.estimated_amount||0); return s; }, 0);
   const closedThisMonth = getSalesPipelineValue(closed, 'month');
   const closedThisQuarter = getSalesPipelineValue(closed, 'quarter');
   const closedThisYear = getSalesPipelineValue(closed, 'year');
-  const winRate = (leads.length + estimates.length + negotiation.length + closed.length) > 0
-    ? Math.round(closed.length / (leads.length + estimates.length + negotiation.length + closed.length) * 100) : 0;
+  const totalDeals = leads.length + estimates.length + negotiation.length + closed.length;
+  const winRate = totalDeals > 0 ? Math.round(closed.length / totalDeals * 100) : 0;
 
   function fmt(n) { return '$' + Math.round(n).toLocaleString(); }
 
@@ -666,19 +667,19 @@ function renderSalesDashboard() {
 
 <div style="display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px;margin-bottom:24px">
   <div class="metric-card">
+    <div class="metric-label">Leads value</div>
+    <div class="metric-value" style="font-size:18px">${fmt(leadsValue)}</div>
+    <div class="metric-sub">${leads.length} active lead${leads.length !== 1 ? 's' : ''}</div>
+  </div>
+  <div class="metric-card">
     <div class="metric-label">Pipeline value</div>
     <div class="metric-value" style="font-size:18px">${fmt(pipelineValue)}</div>
-    <div class="metric-sub">${pipelineProjects.length} unique opportunities</div>
+    <div class="metric-sub">${allActiveProjects.length} active opportunities</div>
   </div>
   <div class="metric-card">
     <div class="metric-label">Closed this month</div>
     <div class="metric-value" style="font-size:18px;color:#3FB950">${fmt(closedThisMonth)}</div>
     <div class="metric-sub">Q: ${fmt(closedThisQuarter)} · Y: ${fmt(closedThisYear)}</div>
-  </div>
-  <div class="metric-card">
-    <div class="metric-label">Leads value</div>
-    <div class="metric-value" style="font-size:18px">${fmt(leadsValue)}</div>
-    <div class="metric-sub">${leads.length} active leads</div>
   </div>
   <div class="metric-card">
     <div class="metric-label">Win rate</div>
