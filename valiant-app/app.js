@@ -354,9 +354,24 @@ return null;
 
 // ── Init ──
 async function init() {
+// Show immediate loading state
+const c = document.getElementById(‘content’);
+if (c) c.innerHTML = ‘<div style="padding:24px;color:#8B949E;font-size:13px">Starting up…</div>’;
+
+try {
 renderCurrentPage();
-// Auto sync from Jetbuilt on load
-setTimeout(syncJetbuilt, 500);
+} catch(e) {
+if (c) c.innerHTML = ’<div style="padding:24px;color:#F85149;font-size:12px">Render error: ’ + e.message + ‘</div>’;
+return;
+}
+
+// Manual sync with status updates
+try {
+const c2 = document.getElementById(‘content’);
+if (c2 && state.projects.length === 0) {
+c2.innerHTML = ‘<div style="padding:24px;text-align:center"><div style="color:#8B949E;font-size:13px;margin-bottom:12px">Connecting to Jetbuilt…</div><button onclick="syncJetbuilt()" class="btn-primary">Tap to Load Projects</button></div>’;
+}
+} catch(e2) {}
 }
 
 init();
