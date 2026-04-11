@@ -231,18 +231,25 @@ async function syncJetbuilt() {
 function enrichProject(p) {
   const desc = ((p.discussion_body || p.short_description || p.name || '')).toLowerCase();
   const systems = detectSystems(desc);
+  // Use Jetbuilt stage names directly, normalized to lowercase
   const stageMap = {
-    'completed': 'complete',
-    'icebox': 'lead',
-    'prospect': 'lead',
-    'opportunity': 'lead',
+    'lead': 'lead',
+    'opportunity': 'opportunity',
     'proposal': 'proposal',
-    'estimate': 'estimate',
+    'revisions': 'revisions',
     'contract': 'contract',
     'install': 'install',
-    'review': 'install',
+    'review': 'review',
+    'completed': 'completed',
+    'icebox': 'icebox',
+    'lost': 'lost',
+    'template': 'template',
+    'trash': 'trash',
+    // Legacy mappings
+    'estimate': 'proposal',
     'in-build': 'contract',
-    'in_build': 'contract'
+    'in_build': 'contract',
+    'complete': 'completed'
   };
   const stage = p.stage ? (stageMap[p.stage.toLowerCase()] || p.stage.toLowerCase()) : 'lead';
   return {
@@ -383,9 +390,9 @@ const ROLES = ['Designer','Installer','Purchaser','Commissioner','Sales','Projec
 
 function getProjectsForTab(tab) {
   const stageMap = {
-    sales: ['lead','estimate','contract'],
-    design: ['contract','install'],
-    install: ['contract','install','complete']
+    sales: ['lead','opportunity','proposal','revisions','contract'],
+    design: ['contract','install','review'],
+    install: ['contract','install','review','completed']
   };
   const stages = stageMap[tab] || [];
   let projects = state.projects.filter(p => stages.includes(p.status));
@@ -556,12 +563,12 @@ function getGBBGroups(projects) {
 }
 
 function renderSalesDashboard() {
-  const allSales = state.projects.filter(p => !state.fizzled.includes(p.id));
-  const leads = allSales.filter(p => ['lead','prospect','opportunity'].includes(p.status));
-  const estimates = allSales.filter(p => ['estimate','proposal'].includes(p.status));
+  const allSales = state.projects.filter(p => !state.fizzled.includes(p.id) && !['icebox','template','trash','lost'].includes(p.status));
+  const leads = allSales.filter(p => ['lead','opportunity'].includes(p.status));
+  const estimates = allSales.filter(p => ['proposal','revisions'].includes(p.status));
   const negotiation = allSales.filter(p => ['contract'].includes(p.status));
-  const closed = state.projects.filter(p => p.status === 'complete');
-  const fizzledProjects = state.projects.filter(p => state.fizzled.includes(p.id));
+  const closed = state.projects.filter(p => p.status === 'completed');
+  const fizzledProjects = state.projects.filter(p => state.fizzled.includes(p.id) || ['icebox','trash','lost'].includes(p.status));
   const salesCount = state.projects.filter(p => ['lead','estimate','contract'].includes(p.status)).length;
   const designCount = state.projects.filter(p => ['contract','install'].includes(p.status)).length;
   const installCount = state.projects.filter(p => ['contract','install','complete'].includes(p.status)).length;
@@ -663,10 +670,29 @@ function renderSalesDashboard() {
   </div>
 </div>
 
-<div style="display:flex;gap:12px;overflow-x:auto;padding-bottom:8px">
-  ${kanbanCol('Leads', leads, 'lead', '#6E7681')}
-  ${kanbanCol('Estimates', estimates, 'estimate', '#D29922')}
+<div style="display:flex;gap:12px;overflow-x:auto;padding-bottom:16px">
+  ${kanbanCol('Leads', leads, 'opportunity', '#6E7681')}
+  ${kanbanCol('Estimates', estimates, 'proposal', '#D29922')}
   ${kanbanCol('Negotiation', negotiation, 'contract', '#58A6FF')}
+</div>
+
+<div style="display:flex;gap:12px;margin-top:4px">
+  <div id="drop-lost"
+    ondragover="event.preventDefault();this.style.borderColor='#F85149';this.style.background='#1A0D0D'"
+    ondragleave="this.style.borderColor='#DA3633';this.style.background='transparent'"
+    ondrop="dropToArchive(event,'lost',this)"
+    style="flex:1;border:2px dashed #DA3633;border-radius:10px;padding:14px;display:flex;align-items:center;justify-content:center;gap:8px;cursor:pointer;transition:all 0.15s;background:transparent">
+    <svg width="18" height="18" viewBox="0 0 18 18" fill="none"><circle cx="9" cy="9" r="7" stroke="#F85149" stroke-width="1.5"/><path d="M6 9l2 2 4-4" stroke="#F85149" stroke-width="1.5" stroke-linecap="round"/></svg>
+    <span style="font-size:12px;font-weight:500;color:#F85149">Drop here — Lost</span>
+  </div>
+  <div id="drop-icebox"
+    ondragover="event.preventDefault();this.style.borderColor='#58A6FF';this.style.background='#0D1626'"
+    ondragleave="this.style.borderColor='#1565C0';this.style.background='transparent'"
+    ondrop="dropToArchive(event,'icebox',this)"
+    style="flex:1;border:2px dashed #1565C0;border-radius:10px;padding:14px;display:flex;align-items:center;justify-content:center;gap:8px;cursor:pointer;transition:all 0.15s;background:transparent">
+    <svg width="18" height="18" viewBox="0 0 18 18" fill="none"><rect x="3" y="5" width="12" height="10" rx="1.5" stroke="#58A6FF" stroke-width="1.5"/><path d="M6 5V4a3 3 0 0 1 6 0v1" stroke="#58A6FF" stroke-width="1.5"/><path d="M9 9v3" stroke="#58A6FF" stroke-width="1.5" stroke-linecap="round"/></svg>
+    <span style="font-size:12px;font-weight:500;color:#58A6FF">Drop here — Icebox</span>
+  </div>
 </div>
 
 <div id="archived-modal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.7);z-index:100;align-items:center;justify-content:center">
@@ -694,6 +720,19 @@ function moveProjectToStage(event, stage) {
   const project = state.projects.find(p => p.id === projectId);
   if (project) {
     project.status = stage;
+    saveState();
+    renderCurrentPage();
+  }
+}
+
+function dropToArchive(event, stage, el) {
+  el.style.borderColor = stage === 'lost' ? '#DA3633' : '#1565C0';
+  el.style.background = 'transparent';
+  const projectId = event.dataTransfer.getData('projectId');
+  const project = state.projects.find(p => p.id === projectId);
+  if (project) {
+    project.status = stage;
+    if (!state.fizzled.includes(projectId)) state.fizzled.push(projectId);
     saveState();
     renderCurrentPage();
   }
@@ -825,8 +864,8 @@ function sortArrow(field) {
 
 function renderProjects() {
   const filtered = getFilteredProjects();
-  const stages = ['all','lead','estimate','contract','install','complete'];
-  const stageLabels = { all:'All', lead:'Lead', estimate:'Estimate', contract:'Contract', install:'Install', complete:'Complete' };
+  const stages = ['all','lead','opportunity','proposal','revisions','contract','install','review','completed','icebox','lost'];
+  const stageLabels = { all:'All', lead:'Lead', opportunity:'Opportunity', proposal:'Proposal', revisions:'Revisions', contract:'Contract', install:'Install', review:'Review', completed:'Completed', icebox:'Icebox', lost:'Lost' };
   const stageCounts = {};
   stages.forEach(s => { stageCounts[s] = s === 'all' ? state.projects.length : state.projects.filter(p => p.status === s).length; });
 
@@ -863,7 +902,7 @@ function renderProjects() {
           <td style="color:#8B949E;font-size:12px">${p.client_name || p.city || '—'}</td>
           <td>${(p.systems||[]).map(s=>`<span class="tag tag-${s==='led_wall'?'led':s==='pa_install'?'audio':s==='lighting'?'lighting':s==='streaming'?'streaming':'control'}">${s.replace('_install','').replace('_',' ')}</span>`).join('')||'<span style="color:#30363D;font-size:11px">—</span>'}</td>
           <td style="color:#8B949E;font-size:12px">${p.install_start?new Date(p.install_start).toLocaleDateString('en',{month:'short',day:'numeric',year:'numeric'}):'—'}</td>
-          <td><span class="status-pill ${p.status==='complete'?'status-green':p.status==='contract'||p.status==='install'?'status-blue':p.status==='lead'?'status-gray':'status-amber'}">${p.status||'—'}</span></td>
+          <td><span class="status-pill ${p.status==='completed'?'status-green':p.status==='contract'||p.status==='install'||p.status==='review'?'status-blue':p.status==='lead'||p.status==='opportunity'?'status-gray':p.status==='icebox'||p.status==='trash'||p.status==='lost'?'status-red':'status-amber'}">${p.status||'—'}</span></td>
           <td style="color:#58A6FF;font-weight:500;font-size:12px">${p.estimated_amount?'$'+Math.round(p.estimated_amount).toLocaleString():'—'}</td>
         </tr>
       `).join('')||'<tr><td colspan="6" style="text-align:center;padding:40px;color:#6E7681">No projects match your search</td></tr>'}
@@ -913,7 +952,7 @@ function renderProjectDashboard(projectId) {
       </span>
       <select onchange="changeProjectStage('${project.id}', this.value)"
         style="padding:5px 10px;background:#161B22;border:1px solid #30363D;border-radius:6px;color:#E6EDF3;font-size:12px;font-family:'DM Sans',sans-serif;cursor:pointer;margin-top:4px">
-        ${['lead','estimate','contract','install','review','complete'].map(s =>
+        ${['lead','opportunity','proposal','revisions','contract','install','review','completed','icebox','lost','template','trash'].map(s =>
           `<option value="${s}" ${project.status === s ? 'selected' : ''}>${s.charAt(0).toUpperCase()+s.slice(1)}</option>`
         ).join('')}
       </select>
