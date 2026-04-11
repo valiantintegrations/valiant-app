@@ -218,6 +218,8 @@ async function syncJetbuilt() {
 
     document.getElementById('proj-count').textContent = state.projects.length;
     renderCurrentPage();
+    // Fetch client names in background
+    setTimeout(fetchClientNames, 500);
   } finally {
     state.syncing = false;
     if (btn) { btn.classList.remove('syncing'); btn.innerHTML = '<svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M12 7A5 5 0 1 1 7 2" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/><path d="M7 2l2-2M7 2l2 2" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/></svg> Sync Jetbuilt'; }
@@ -583,7 +585,7 @@ function renderSalesDashboard() {
       <div class="project-card-name">${p.name}</div>
       <div style="display:flex;align-items:center;gap:6px;margin:3px 0 6px;flex-wrap:wrap">
         <span style="font-size:10px;font-family:'DM Mono',monospace;color:#58A6FF;background:#0D1626;padding:1px 6px;border-radius:3px;border:1px solid #1565C0">${p.id}</span>
-        ${p.city ? `<span style="font-size:11px;color:#6E7681">${p.city}${p.state ? ', ' + p.state : ''}</span>` : ''}
+        <span style="font-size:11px;color:#6E7681">${p.client_name || (p.city ? p.city + (p.state ? ', ' + p.state : '') : '')}</span>
       </div>
       <div class="project-card-footer">
         <div class="project-card-value">${p.estimated_amount ? fmt(p.estimated_amount) : 'TBD'}</div>
@@ -1889,6 +1891,45 @@ function confirmContractReview(projectId) {
   setTimeout(() => {
     alert('✓ Contract reviewed for ' + project.name + '\n\nDesign track: Ready for Design → Kris notified\nInstall track: Install Planning → Clint notified\n\nSystems: ' + project.systems.map(s => s.replace('_install','').replace('_',' ')).join(', '));
   }, 100);
+}
+
+// ── Client Name Fetcher ──
+const clientNameCache = {};
+
+async function fetchClientNames() {
+  // Get unique client IDs from projects
+  const clientIds = [...new Set(
+    state.projects
+      .filter(p => p.client?.id && !clientNameCache[p.client.id])
+      .map(p => p.client.id)
+  )].slice(0, 50); // Fetch up to 50 at a time to avoid rate limits
+
+  if (clientIds.length === 0) return;
+
+  // Fetch client names in small batches
+  for (let i = 0; i < clientIds.length; i += 5) {
+    const batch = clientIds.slice(i, i + 5);
+    await Promise.all(batch.map(async (id) => {
+      try {
+        const data = await fetchJetbuilt(`/clients/${id}`);
+        if (data && data.name) {
+          clientNameCache[id] = data.name;
+        }
+      } catch (e) {}
+    }));
+    // Small delay to avoid rate limiting
+    if (i + 5 < clientIds.length) await new Promise(r => setTimeout(r, 300));
+  }
+
+  // Update project client names
+  state.projects.forEach(p => {
+    if (p.client?.id && clientNameCache[p.client.id]) {
+      p.client_name = clientNameCache[p.client.id];
+    }
+  });
+
+  // Re-render to show updated names
+  renderCurrentPage();
 }
 
 // ── Init ──
