@@ -412,7 +412,13 @@ document.getElementById(‘sidebar’).classList.toggle(‘open’);
 function renderCurrentPage() {
 const content = document.getElementById(‘content’);
 switch (state.currentPage) {
-case ‘dashboard’: content.innerHTML = renderDashboard(); break;
+case ‘dashboard’:
+try {
+content.innerHTML = renderDashboard();
+} catch(e) {
+content.innerHTML = `<div style="padding:20px;background:#1A0D0D;border:1px solid #DA3633;border-radius:8px;color:#F85149;font-size:12px;font-family:monospace;white-space:pre-wrap">Dashboard error: ${e.message}\n\n${e.stack}</div>`;
+}
+break;
 case ‘calendar’: content.innerHTML = renderCalendar(); break;
 case ‘projects’: content.innerHTML = renderProjects(); break;
 case ‘shopwork’: content.innerHTML = renderShopWork(); break;
