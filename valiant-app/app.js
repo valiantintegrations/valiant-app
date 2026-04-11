@@ -581,7 +581,10 @@ function renderSalesDashboard() {
       ondragstart="event.dataTransfer.setData('projectId','${p.id}')"
       onclick="navigate('project','${p.id}')">
       <div class="project-card-name">${p.name}</div>
-      <div class="project-card-client">${p.city || p.id}</div>
+      <div style="display:flex;align-items:center;gap:6px;margin:3px 0 6px;flex-wrap:wrap">
+        <span style="font-size:10px;font-family:'DM Mono',monospace;color:#58A6FF;background:#0D1626;padding:1px 6px;border-radius:3px;border:1px solid #1565C0">${p.id}</span>
+        ${p.city ? `<span style="font-size:11px;color:#6E7681">${p.city}${p.state ? ', ' + p.state : ''}</span>` : ''}
+      </div>
       <div class="project-card-footer">
         <div class="project-card-value">${p.estimated_amount ? fmt(p.estimated_amount) : 'TBD'}</div>
       </div>
