@@ -670,29 +670,29 @@ function renderSalesDashboard() {
   </div>
 </div>
 
-<div style="display:flex;gap:12px;overflow-x:auto;padding-bottom:16px">
-  ${kanbanCol('Leads', leads, 'opportunity', '#6E7681')}
-  ${kanbanCol('Estimates', estimates, 'proposal', '#D29922')}
-  ${kanbanCol('Negotiation', negotiation, 'contract', '#58A6FF')}
-</div>
-
-<div style="display:flex;gap:12px;margin-top:4px">
+<div style="display:flex;gap:8px;margin-bottom:14px;justify-content:flex-end">
   <div id="drop-lost"
     ondragover="event.preventDefault();this.style.borderColor='#F85149';this.style.background='#1A0D0D'"
     ondragleave="this.style.borderColor='#DA3633';this.style.background='transparent'"
     ondrop="dropToArchive(event,'lost',this)"
-    style="flex:1;border:2px dashed #DA3633;border-radius:10px;padding:14px;display:flex;align-items:center;justify-content:center;gap:8px;cursor:pointer;transition:all 0.15s;background:transparent">
-    <svg width="18" height="18" viewBox="0 0 18 18" fill="none"><circle cx="9" cy="9" r="7" stroke="#F85149" stroke-width="1.5"/><path d="M6 9l2 2 4-4" stroke="#F85149" stroke-width="1.5" stroke-linecap="round"/></svg>
-    <span style="font-size:12px;font-weight:500;color:#F85149">Drop here — Lost</span>
+    style="border:1.5px dashed #DA3633;border-radius:8px;padding:6px 14px;display:flex;align-items:center;gap:6px;cursor:pointer;transition:all 0.15s;background:transparent">
+    <svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M2 4h10M5 4V3a2 2 0 0 1 4 0v1M6 7v3M8 7v3" stroke="#F85149" stroke-width="1.2" stroke-linecap="round"/><path d="M3 4l.7 7.3A1 1 0 0 0 4.7 12h4.6a1 1 0 0 0 1-.7L11 4" stroke="#F85149" stroke-width="1.2" stroke-linecap="round"/></svg>
+    <span style="font-size:11px;font-weight:500;color:#F85149">Lost</span>
   </div>
   <div id="drop-icebox"
     ondragover="event.preventDefault();this.style.borderColor='#58A6FF';this.style.background='#0D1626'"
     ondragleave="this.style.borderColor='#1565C0';this.style.background='transparent'"
     ondrop="dropToArchive(event,'icebox',this)"
-    style="flex:1;border:2px dashed #1565C0;border-radius:10px;padding:14px;display:flex;align-items:center;justify-content:center;gap:8px;cursor:pointer;transition:all 0.15s;background:transparent">
-    <svg width="18" height="18" viewBox="0 0 18 18" fill="none"><rect x="3" y="5" width="12" height="10" rx="1.5" stroke="#58A6FF" stroke-width="1.5"/><path d="M6 5V4a3 3 0 0 1 6 0v1" stroke="#58A6FF" stroke-width="1.5"/><path d="M9 9v3" stroke="#58A6FF" stroke-width="1.5" stroke-linecap="round"/></svg>
-    <span style="font-size:12px;font-weight:500;color:#58A6FF">Drop here — Icebox</span>
+    style="border:1.5px dashed #1565C0;border-radius:8px;padding:6px 14px;display:flex;align-items:center;gap:6px;cursor:pointer;transition:all 0.15s;background:transparent">
+    <svg width="14" height="14" viewBox="0 0 14 14" fill="none"><rect x="2" y="4" width="10" height="8" rx="1" stroke="#58A6FF" stroke-width="1.2"/><path d="M5 4V3a2 2 0 0 1 4 0v1" stroke="#58A6FF" stroke-width="1.2"/><path d="M7 7v2" stroke="#58A6FF" stroke-width="1.2" stroke-linecap="round"/></svg>
+    <span style="font-size:11px;font-weight:500;color:#58A6FF">Icebox</span>
   </div>
+</div>
+
+<div style="display:flex;gap:12px;overflow-x:auto;padding-bottom:16px">
+  ${kanbanCol('Leads', leads, 'opportunity', '#6E7681')}
+  ${kanbanCol('Estimates', estimates, 'proposal', '#D29922')}
+  ${kanbanCol('Negotiation', negotiation, 'contract', '#58A6FF')}
 </div>
 
 <div id="archived-modal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.7);z-index:100;align-items:center;justify-content:center">
