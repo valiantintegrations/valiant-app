@@ -729,3 +729,33 @@ td.today .cal-day-num {
   .widget-tab-bar { display: flex; }
   .widget-grid { grid-template-columns: 1fr !important; margin-top: 0 !important; }
 }
+
+/* ── Notes Sidebar ── */
+.dash-sidebar {
+  width: 280px;
+  flex-shrink: 0;
+  background: #0D1117;
+  border: 1px solid #1C2333;
+  border-radius: 10px;
+  margin-left: 14px;
+  display: flex;
+  flex-direction: column;
+  max-height: calc(100vh - 80px);
+  position: sticky;
+  top: 16px;
+  overflow: hidden;
+}
+@media (max-width: 768px) {
+  .dash-sidebar {
+    position: fixed;
+    top: 52px;
+    right: 0;
+    bottom: 64px;
+    width: 88vw;
+    max-width: 320px;
+    margin-left: 0;
+    border-radius: 10px 0 0 10px;
+    z-index: 60;
+    max-height: none;
+  }
+}
