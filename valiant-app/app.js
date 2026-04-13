@@ -69,6 +69,8 @@ const state = {
   rightPanel: null,
   messages: JSON.parse(localStorage.getItem('vi_messages') || '[]'),
   lastReadTime: parseInt(localStorage.getItem('vi_last_read') || '0'),
+  lastReadByChannel: JSON.parse(localStorage.getItem('vi_last_read_ch') || '{}'),
+  activeConversation: null,
   meetings: JSON.parse(localStorage.getItem('vi_meetings') || '[]'),
   noteSections: JSON.parse(localStorage.getItem('vi_note_sections') || '{}')
 };
@@ -271,6 +273,67 @@ const TEMPLATES = {
         'Cable schedule completed',
         'Shop work identified (clamp installation, fixture addressing, console pre-build)'
       ]
+    },
+    control: {
+      name: 'Control System Design',
+      items: [
+        'Control platform selected (Q-SYS / Crestron / AMX / Extron / simple relay)',
+        'Platform selection justified by budget, complexity, and client needs',
+        'Core/processor selected and rack location determined',
+        'I/O requirements defined (inputs, outputs, GPIO, serial, network)',
+        'Block diagram created showing all connected devices',
+        'Network topology designed (separate VLAN for AV control if required)',
+        'Dante / AVB networking designed if applicable',
+        'UCI/touchpanel layout designed and reviewed with client',
+        'Physical touchpanel locations determined and mounting method specified',
+        'Third-party device control verified (serial, IP, IR, relay)',
+        'Scheduling and automation logic defined (room combining, presets)',
+        'Programming scope documented (scenes, presets, macros)',
+        'Cable schedule completed for control wiring',
+        'Power and UPS requirements confirmed',
+        'IT coordination required — document IP addresses, VLANs, firewall rules',
+        'Shop work identified (rack pre-build, initial programming at shop)'
+      ]
+    },
+    streaming: {
+      name: 'Streaming / Broadcast Design',
+      items: [
+        'Streaming platform determined (YouTube Live, Vimeo, Facebook, custom RTMP)',
+        'Encoder hardware or software selected (Tricaster, vMix, OBS, hardware encoder)',
+        'Encoder location determined and network path planned',
+        'Bitrate, resolution, and latency requirements confirmed with client',
+        'Multiview layout designed (program, preview, return feeds)',
+        'NDI / SDI / HDMI signal routing diagram created',
+        'Upstream internet connection speed verified (upload bandwidth)',
+        'Dedicated streaming VLAN or network path specified',
+        'Redundancy plan documented (backup encoder, backup stream key)',
+        'Graphics and lower thirds workflow defined',
+        'Recording workflow defined (local NAS, cloud, portable drive)',
+        'Replay/highlight capability required — specify solution',
+        'Intercom / IFB system for talent required — specify',
+        'Cable schedule completed for video and data runs',
+        'Shop work identified (encoder pre-build, initial config)'
+      ]
+    },
+    camera: {
+      name: 'Camera System Design',
+      items: [
+        'Camera positions determined and documented on floor plan',
+        'Camera type specified per position (PTZ, manned, jib, POV)',
+        'PTZ camera model selected and justified per position requirements',
+        'Cable runs designed per camera position (SDI, HDMI, or NDI/IP)',
+        'PTZ control protocol selected (VISCA over IP, VISCA over serial, NDI)',
+        'Camera control device specified (joystick, software, control panel)',
+        'Video switcher/router integration designed',
+        'Return video feed to camera operators designed',
+        'Lens requirements specified (telephoto, wide, standard) per position',
+        'Lighting levels at camera positions verified — cameras need minimum foot-candles',
+        'Tally system designed (active tally lights for talent awareness)',
+        'Shot preset count defined per PTZ camera',
+        'Power over Ethernet (PoE) or local power specified per camera',
+        'Cable schedule completed',
+        'Shop work identified'
+      ]
     }
   },
   install: {
@@ -337,6 +400,69 @@ const TEMPLATES = {
         'Backup console configuration saved',
         'Backup node configuration saved'
       ]
+    },
+    control: {
+      name: 'Control System Install',
+      items: [
+        'Core/processor rack-mounted and powered',
+        'All I/O connections wired and labeled per block diagram',
+        'Network switch configured — VLANs, IP reservations, firewall rules applied',
+        'Dante / AVB network configured and verified if applicable',
+        'All controlled devices verified on network or serial connection',
+        'Third-party device control tested (each device responds to commands)',
+        'Touchpanel(s) mounted and powered',
+        'Touchpanel connected to core and project loaded',
+        'All UCI pages functional — buttons trigger correct actions',
+        'Room combining logic tested (all combine / split scenarios)',
+        'Presets and scenes programmed and verified',
+        'Scheduling / automation tested',
+        'Volume controls verified across all zones',
+        'Source routing tested — all sources to all displays/zones',
+        'Backup project file saved to Google Drive',
+        'Client walkthrough completed — staff can operate independently'
+      ]
+    },
+    streaming: {
+      name: 'Streaming / Broadcast Install',
+      items: [
+        'Encoder hardware racked and powered',
+        'All video inputs connected and verified in encoder software',
+        'Audio inputs connected and levels set',
+        'Multiview output configured and displaying correctly',
+        'Stream keys entered and RTMP destinations configured',
+        'Test stream pushed — verified on destination platform',
+        'Upload bandwidth confirmed adequate for configured bitrate',
+        'Recording workflow tested — files saving to correct location',
+        'Redundant stream path tested if specified',
+        'Graphics system connected and integrated',
+        'Lower thirds workflow verified with operator',
+        'Replay system configured and tested if applicable',
+        'Intercom / IFB system functional if specified',
+        'All cable runs labeled and dressed',
+        'Backup encoder config file saved',
+        'Operator training completed — staff can run show independently'
+      ]
+    },
+    camera: {
+      name: 'Camera System Install',
+      items: [
+        'All camera mounting hardware installed at specified positions',
+        'Cameras mounted and physically aimed at primary position',
+        'All cable runs pulled, terminated, and labeled',
+        'SDI / HDMI / NDI signal verified at switcher for each camera',
+        'PTZ cameras connected to control network and responding to commands',
+        'IP addresses assigned and documented for all PTZ cameras',
+        'Shot presets programmed per camera (minimum 3 per PTZ)',
+        'Joystick / control panel calibrated and all cameras reachable',
+        'Tally system wired and functional (cameras show red when live)',
+        'Return video feed verified at camera operator positions',
+        'All cameras color-balanced and exposure matched',
+        'Switcher integrated — all cameras available as selectable sources',
+        'Recording / streaming path tested with all cameras',
+        'PoE switch confirmed powering all cameras at full load',
+        'Backup PTZ preset file saved per camera',
+        'Operator training completed — basic PTZ operation and shot calling'
+      ]
     }
   }
 };
@@ -349,8 +475,9 @@ function detectSystems(text) {
   if (t.includes('led') || t.includes('video wall') || t.includes('led wall') || t.includes('display wall')) systems.push('led_wall');
   if (t.includes('pa ') || t.includes('audio') || t.includes('speaker') || t.includes('microphone') || t.includes('sound system') || t.includes('amp') || t.includes('dsp')) systems.push('pa_install');
   if (t.includes('light') || t.includes('fixture') || t.includes('dmx') || t.includes('stage light') || t.includes('key light')) systems.push('lighting');
-  if (t.includes('control') || t.includes('qsys') || t.includes('q-sys') || t.includes('crestron') || t.includes('extron')) systems.push('control');
-  if (t.includes('stream') || t.includes('broadcast') || t.includes('camera') || t.includes('video produc')) systems.push('streaming');
+  if (t.includes('control') || t.includes('qsys') || t.includes('q-sys') || t.includes('crestron') || t.includes('extron') || t.includes('amx') || t.includes('automation')) systems.push('control');
+  if (t.includes('stream') || t.includes('broadcast') || t.includes('encoder') || t.includes('vmix') || t.includes('tricaster') || t.includes('switcher') || t.includes('video produc')) systems.push('streaming');
+  if (t.includes('camera') || t.includes('ptz') || t.includes('cam ') || t.includes('video camera') || t.includes('imag')) systems.push('camera');
   return systems;
 }
 
@@ -376,13 +503,13 @@ function shortDate(d) {
 
 function systemTagHTML(sys) {
   const map = {
-    led_wall: ['LED Wall', 'tag-led'],
-    pa_install: ['Audio/PA', 'tag-audio'],
-    lighting: ['Lighting', 'tag-lighting'],
-    control: ['Control', 'tag-control'],
-    streaming: ['Streaming', 'tag-streaming'],
-    video: ['Video', 'tag-video'],
-    camera: ['Camera', 'tag-streaming']
+    led_wall:   ['LED Wall',   'tag-led'],
+    pa_install: ['Audio/PA',   'tag-audio'],
+    lighting:   ['Lighting',   'tag-lighting'],
+    control:    ['Control',    'tag-control'],
+    streaming:  ['Streaming',  'tag-streaming'],
+    video:      ['Video',      'tag-video'],
+    camera:     ['Camera',     'tag-camera']
   };
   const [label, cls] = map[sys] || [sys, 'tag-audio'];
   return `<span class="tag ${cls}">${label}</span>`;
@@ -1512,19 +1639,58 @@ function getCloseRate() {
 // ── Notes Sidebar ──
 function toggleRightPanel(panel) {
   state.rightPanel = state.rightPanel === panel ? null : panel;
-  if (state.rightPanel === 'messages') {
-    state.lastReadTime = Date.now();
-    localStorage.setItem('vi_last_read', state.lastReadTime);
+  if (state.rightPanel !== 'messages') state.activeConversation = null;
+  if (state.rightPanel === 'messages' && state.activeConversation) {
+    markChannelRead(state.activeConversation);
   }
-  renderCurrentPage();
-  if (state.rightPanel === 'messages') {
+  updateRightPanel();
+  if (state.rightPanel === 'messages' && state.activeConversation) {
     setTimeout(() => { const el = document.getElementById('msg-list'); if (el) el.scrollTop = el.scrollHeight; }, 50);
   }
 }
 
+function getDMChannelId(id1, id2) {
+  return `dm_${Math.min(id1, id2)}_${Math.max(id1, id2)}`;
+}
+
+function getChannelMessages(channelId) {
+  return state.messages.filter(m => (m.channelId || 'team') === channelId);
+}
+
+function getChannelUnread(channelId) {
+  const myId = getActiveTeamMemberId();
+  const lastRead = state.lastReadByChannel[channelId] || 0;
+  return state.messages.filter(m =>
+    (m.channelId || 'team') === channelId &&
+    m.senderId !== myId &&
+    m.timestamp > lastRead
+  ).length;
+}
+
+function markChannelRead(channelId) {
+  state.lastReadByChannel[channelId] = Date.now();
+  localStorage.setItem('vi_last_read_ch', JSON.stringify(state.lastReadByChannel));
+}
+
 function getUnreadCount() {
   const myId = getActiveTeamMemberId();
-  return state.messages.filter(m => m.senderId !== myId && m.timestamp > state.lastReadTime).length;
+  return state.messages.filter(m => {
+    const ch = m.channelId || 'team';
+    const lastRead = state.lastReadByChannel[ch] || 0;
+    return m.senderId !== myId && m.timestamp > lastRead;
+  }).length;
+}
+
+function openConversation(channelId) {
+  state.activeConversation = channelId;
+  markChannelRead(channelId);
+  updateRightPanel();
+  setTimeout(() => { const el = document.getElementById('msg-list'); if (el) el.scrollTop = el.scrollHeight; }, 50);
+}
+
+function closeConversation() {
+  state.activeConversation = null;
+  updateRightPanel();
 }
 
 function sendMessage() {
@@ -1540,6 +1706,7 @@ function sendMessage() {
     senderInitials: member.initials || getInitials(member.name),
     senderColor: DASHBOARD_ACCESS.find(d => d.key === member.primaryRole)?.color || '#6E7681',
     text,
+    channelId: state.activeConversation || 'team',
     timestamp: Date.now()
   });
   save('vi_messages', state.messages);
@@ -1702,13 +1869,15 @@ function renderNotesSection(role, s) {
   `;
 }
 
-function renderMessagesList() {
+function renderMessagesList(channelId) {
+  channelId = channelId || state.activeConversation || 'team';
   const myId = getActiveTeamMemberId();
-  if (state.messages.length === 0) {
-    return '<div style="text-align:center;padding:32px 12px;color:#6E7681;font-size:12px">No messages yet.<br>Say hi to the team 👋</div>';
+  const messages = getChannelMessages(channelId);
+  if (messages.length === 0) {
+    return '<div style="text-align:center;padding:32px 12px;color:#6E7681;font-size:12px">No messages yet.<br>Say something 👋</div>';
   }
   let lastDate = '';
-  return state.messages.map(m => {
+  return messages.map(m => {
     const isMe = m.senderId === myId;
     const dt = new Date(m.timestamp);
     const dateStr = dt.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
@@ -1743,7 +1912,12 @@ function updateRightPanel() {
   const el = document.getElementById('right-panel');
   if (!el) return;
   el.innerHTML = renderRightPanelHTML();
-  if (state.rightPanel === 'messages') {
+  // Push main content so panel never overlaps
+  const main = document.getElementById('main');
+  if (main && window.innerWidth > 768) {
+    main.style.paddingRight = state.rightPanel ? '336px' : '52px';
+  }
+  if (state.rightPanel === 'messages' && state.activeConversation) {
     const list = document.getElementById('msg-list');
     if (list) list.scrollTop = list.scrollHeight;
   }
@@ -1889,28 +2063,101 @@ function renderRightPanelHTML() {
     </div>`;
 
   // ── Messages Panel ──
-  const messagesPanel = `
-    <div class="rpanel-header">
-      <div>
-        <div class="rpanel-header-title">Team Chat</div>
-        <div style="font-size:10px;color:#6E7681">${state.team.length} member${state.team.length!==1?'s':''}</div>
-      </div>
-    </div>
-    <div id="msg-list" class="rpanel-body" style="flex:1">
-      ${renderMessagesList()}
-    </div>
-    <div style="padding:10px;border-top:1px solid #1C2333;flex-shrink:0">
-      <div style="display:flex;gap:6px;align-items:flex-end">
-        <textarea id="msg-input" placeholder="Message the team…"
-          style="flex:1;background:#0D1117;border:1px solid #30363D;border-radius:8px;color:#E6EDF3;font-size:12px;font-family:'DM Sans',sans-serif;padding:8px 10px;resize:none;outline:none;line-height:1.4;max-height:80px;min-height:36px"
-          rows="1"
-          onkeydown="if(event.key==='Enter'&&!event.shiftKey){event.preventDefault();sendMessage()}"
-          oninput="this.style.height='auto';this.style.height=Math.min(this.scrollHeight,80)+'px'"></textarea>
-        <button onclick="sendMessage()" style="background:#1565C0;border:none;border-radius:8px;color:#fff;cursor:pointer;padding:8px 10px;-webkit-tap-highlight-color:transparent">
-          <svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M12 7L2 2l2.5 5L2 12l10-5z" fill="currentColor"/></svg>
+  const myId = getActiveTeamMemberId();
+  let messagesPanel;
+
+  if (!state.activeConversation) {
+    // Conversation list
+    const teamUnread = getChannelUnread('team');
+    const teamLast = getChannelMessages('team').slice(-1)[0];
+    const teamPreview = teamLast
+      ? (teamLast.senderId === myId ? 'You: ' : '') + teamLast.text.slice(0, 32) + (teamLast.text.length > 32 ? '…' : '')
+      : 'No messages yet';
+
+    const dms = state.team.filter(m => m.id !== myId).map(m => {
+      const chId = getDMChannelId(myId, m.id);
+      const last = getChannelMessages(chId).slice(-1)[0];
+      const unread = getChannelUnread(chId);
+      const preview = last
+        ? (last.senderId === myId ? 'You: ' : '') + last.text.slice(0, 32) + (last.text.length > 32 ? '…' : '')
+        : 'Start a conversation…';
+      const color = DASHBOARD_ACCESS.find(d => d.key === m.primaryRole)?.color || '#6E7681';
+      return { m, chId, preview, unread, color, last };
+    });
+
+    messagesPanel = `
+      <div class="rpanel-header"><div class="rpanel-header-title">Messages</div></div>
+      <div class="rpanel-body" style="padding:8px">
+        <div onclick="openConversation('team')" style="display:flex;align-items:center;gap:10px;padding:10px;border-radius:8px;cursor:pointer;margin-bottom:4px;background:#161B22;border:1px solid #1C2333;-webkit-tap-highlight-color:transparent">
+          <div style="width:36px;height:36px;border-radius:50%;background:#1565C022;border:1.5px solid #1565C0;display:flex;align-items:center;justify-content:center;flex-shrink:0">
+            <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="#58A6FF" stroke-width="1.3"><circle cx="5" cy="6" r="2.5"/><circle cx="11" cy="6" r="2"/><path d="M1 13c0-2.761 1.791-4 4-4s4 1.239 4 4"/><path d="M11 9.5c2 0 3.5.9 3.5 2.5"/></svg>
+          </div>
+          <div style="flex:1;min-width:0">
+            <div style="display:flex;align-items:center;justify-content:space-between">
+              <span style="font-size:13px;font-weight:500;color:#E6EDF3">Team</span>
+              ${teamUnread > 0 ? `<span style="font-size:10px;font-weight:700;padding:1px 6px;border-radius:10px;background:#DA3633;color:#fff">${teamUnread}</span>` : ''}
+            </div>
+            <div style="font-size:11px;color:#6E7681;margin-top:1px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${esc(teamPreview)}</div>
+          </div>
+        </div>
+        <div style="font-size:10px;color:#6E7681;font-weight:600;text-transform:uppercase;letter-spacing:0.06em;padding:8px 4px 4px">Direct Messages</div>
+        ${dms.length === 0 ? '<div style="font-size:12px;color:#6E7681;padding:8px 4px">Add team members to start DMs</div>' :
+          dms.map(({ m, chId, preview, unread, color }) => `
+            <div onclick="openConversation('${chId}')" style="display:flex;align-items:center;gap:10px;padding:10px;border-radius:8px;cursor:pointer;margin-bottom:4px;background:${unread > 0 ? '#0D1626' : 'transparent'};border:1px solid ${unread > 0 ? '#1565C044' : 'transparent'};-webkit-tap-highlight-color:transparent">
+              <div style="width:36px;height:36px;border-radius:50%;background:${color}22;border:1.5px solid ${color}66;display:flex;align-items:center;justify-content:center;font-size:12px;font-weight:600;color:${color};flex-shrink:0">${esc(m.initials || getInitials(m.name))}</div>
+              <div style="flex:1;min-width:0">
+                <div style="display:flex;align-items:center;justify-content:space-between">
+                  <span style="font-size:13px;font-weight:${unread > 0 ? '600' : '500'};color:#E6EDF3">${esc(m.name)}</span>
+                  ${unread > 0 ? `<span style="font-size:10px;font-weight:700;padding:1px 6px;border-radius:10px;background:#DA3633;color:#fff">${unread}</span>` : ''}
+                </div>
+                <div style="font-size:11px;color:${unread > 0 ? '#C9D1D9' : '#6E7681'};margin-top:1px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${esc(preview)}</div>
+              </div>
+            </div>
+          `).join('')}
+      </div>`;
+  } else {
+    // Active conversation thread
+    const isTeam = state.activeConversation === 'team';
+    let headerName, headerSub, headerColor;
+    if (isTeam) {
+      headerName = 'Team';
+      headerSub = `${state.team.length} members`;
+      headerColor = '#58A6FF';
+    } else {
+      const parts = state.activeConversation.split('_');
+      const otherId = parseInt(parts[1]) === myId ? parseInt(parts[2]) : parseInt(parts[1]);
+      const other = getTeamMember(otherId);
+      headerName = other?.name || 'Unknown';
+      headerColor = DASHBOARD_ACCESS.find(d => d.key === other?.primaryRole)?.color || '#6E7681';
+      headerSub = DASHBOARD_ACCESS.find(d => d.key === other?.primaryRole)?.label || '';
+    }
+
+    messagesPanel = `
+      <div class="rpanel-header" style="gap:8px">
+        <button onclick="closeConversation()" style="background:none;border:none;color:#6E7681;cursor:pointer;padding:4px;display:flex;align-items:center;-webkit-tap-highlight-color:transparent">
+          <svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M9 2L4 7l5 5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
         </button>
+        <div style="flex:1">
+          <div style="font-size:13px;font-weight:600;color:#E6EDF3">${esc(headerName)}</div>
+          ${headerSub ? `<div style="font-size:10px;color:${headerColor}">${esc(headerSub)}</div>` : ''}
+        </div>
       </div>
-    </div>`;
+      <div id="msg-list" class="rpanel-body" style="flex:1;display:flex;flex-direction:column">
+        ${renderMessagesList(state.activeConversation)}
+      </div>
+      <div style="padding:10px;border-top:1px solid #1C2333;flex-shrink:0">
+        <div style="display:flex;gap:6px;align-items:flex-end">
+          <textarea id="msg-input" placeholder="Message ${esc(headerName)}…"
+            style="flex:1;background:#0D1117;border:1px solid #30363D;border-radius:8px;color:#E6EDF3;font-size:12px;font-family:'DM Sans',sans-serif;padding:8px 10px;resize:none;outline:none;line-height:1.4;max-height:80px;min-height:36px"
+            rows="1"
+            onkeydown="if(event.key==='Enter'&&!event.shiftKey){event.preventDefault();sendMessage()}"
+            oninput="this.style.height='auto';this.style.height=Math.min(this.scrollHeight,80)+'px'"></textarea>
+          <button onclick="sendMessage()" style="background:#1565C0;border:none;border-radius:8px;color:#fff;cursor:pointer;padding:8px 10px;-webkit-tap-highlight-color:transparent">
+            <svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M12 7L2 2l2.5 5L2 12l10-5z" fill="currentColor"/></svg>
+          </button>
+        </div>
+      </div>`;
+  }
 
   // ── Schedule Panel ──
   const schedulePanel = `
