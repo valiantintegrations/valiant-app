@@ -69,6 +69,7 @@ const state = {
   rightPanel: null,
   messages: JSON.parse(localStorage.getItem('vi_messages') || '[]'),
   lastReadTime: parseInt(localStorage.getItem('vi_last_read') || '0'),
+  meetings: JSON.parse(localStorage.getItem('vi_meetings') || '[]'),
   noteSections: JSON.parse(localStorage.getItem('vi_note_sections') || '{}')
 };
 
@@ -1056,6 +1057,7 @@ function renderCurrentPage() {
     c.innerHTML = `<div class="alert alert-error">Render error: ${e.message}</div>`;
     console.error(e);
   }
+  updateRightPanel();
 }
 
 // ── To-Do List (per-role) ──
@@ -1542,12 +1544,8 @@ function sendMessage() {
   });
   save('vi_messages', state.messages);
   if (input) input.value = '';
-  // Re-render just the messages panel to avoid losing scroll position
-  const msgList = document.getElementById('msg-list');
-  if (msgList) {
-    msgList.innerHTML = renderMessagesList();
-    msgList.scrollTop = msgList.scrollHeight;
-  }
+  updateRightPanel();
+  setTimeout(() => { const list = document.getElementById('msg-list'); if (list) list.scrollTop = list.scrollHeight; }, 50);
 }
 
 function getNoteSections(role) {
@@ -1731,97 +1729,266 @@ function renderMessagesList() {
   }).join('');
 }
 
-function renderRightPanel(role) {
+// ── Global Right Command Panel ──
+
+function injectRightPanel() {
+  if (document.getElementById('right-panel')) return;
+  const el = document.createElement('div');
+  el.id = 'right-panel';
+  document.body.appendChild(el);
+  updateRightPanel();
+}
+
+function updateRightPanel() {
+  const el = document.getElementById('right-panel');
+  if (!el) return;
+  el.innerHTML = renderRightPanelHTML();
+  if (state.rightPanel === 'messages') {
+    const list = document.getElementById('msg-list');
+    if (list) list.scrollTop = list.scrollHeight;
+  }
+}
+
+// ── Meetings ──
+function getUpcomingMeetings() {
+  const today = new Date().toISOString().slice(0, 10);
+  return state.meetings
+    .filter(m => m.date >= today)
+    .sort((a, b) => (a.date + a.time).localeCompare(b.date + b.time))
+    .slice(0, 5);
+}
+
+function scheduleMeeting() {
+  const title = document.getElementById('mtg-title')?.value?.trim();
+  const date  = document.getElementById('mtg-date')?.value;
+  const time  = document.getElementById('mtg-time')?.value || '';
+  const dur   = document.getElementById('mtg-dur')?.value || '1hr';
+  const notes = document.getElementById('mtg-notes')?.value?.trim() || '';
+  if (!title || !date) { alert('Title and date are required.'); return; }
+  const attendees = [];
+  document.querySelectorAll('#mtg-attendees [data-mid]').forEach(el => {
+    if (el.classList.contains('selected')) attendees.push(parseInt(el.dataset.mid));
+  });
+  state.meetings.push({
+    id: Date.now(), title, date, time, duration: dur,
+    attendees, notes, createdBy: getActiveTeamMemberId(), createdAt: Date.now()
+  });
+  save('vi_meetings', state.meetings);
+  // Reset form
+  ['mtg-title','mtg-date','mtg-time','mtg-notes'].forEach(id => {
+    const f = document.getElementById(id); if (f) f.value = '';
+  });
+  updateRightPanel();
+}
+
+function deleteMeeting(id) {
+  state.meetings = state.meetings.filter(m => m.id !== id);
+  save('vi_meetings', state.meetings);
+  updateRightPanel();
+}
+
+// ── Right Panel HTML ──
+function renderRightPanelHTML() {
+  const role = currentUserRole;
+  const panel = state.rightPanel;
   const sections = getNoteSections(role);
   const unread = getUnreadCount();
-  const panel = state.rightPanel;
-  const roleColor = DASHBOARD_ACCESS.find(d => d.key === role)?.color || '#8B949E';
+  const upcoming = getUpcomingMeetings();
+  const activeTasks = state.tasks.filter(t => t.memberId === getActiveTeamMemberId() && !t.done).length;
 
-  // Icon strip
-  const iconStrip = `
-    <div class="rpanel-strip">
-      <div class="rpanel-icon ${panel === 'notes' ? 'rpanel-icon-active' : ''}" onclick="toggleRightPanel('notes')" title="Notes">
-        <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M3 2h7l3 3v9H3V2z" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round"/><path d="M9.5 2v3.5H13M5 6.5h4M5 9h6M5 11.5h4" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/></svg>
-        ${sections.length > 0 ? `<span class="rpanel-badge">${sections.length}</span>` : ''}
-      </div>
-      <div class="rpanel-icon ${panel === 'messages' ? 'rpanel-icon-active' : ''}" onclick="toggleRightPanel('messages')" title="Team Messages">
-        <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M2 3h12v8H9l-3 2v-2H2V3z" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round"/></svg>
-        ${unread > 0 ? `<span class="rpanel-badge rpanel-badge-alert">${unread}</span>` : ''}
-      </div>
-    </div>
-  `;
+  const icons = [
+    { key: 'notes',    title: 'Notes',          badge: sections.length || null,
+      svg: '<svg width="17" height="17" viewBox="0 0 17 17" fill="none"><path d="M3 2h8l3.5 3.5V15H3V2z" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"/><path d="M10.5 2v4H14M5.5 7h5M5.5 9.5h6M5.5 12h4" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/></svg>' },
+    { key: 'task',     title: 'Quick Add Task',  badge: activeTasks || null, badgeColor: '#D29922',
+      svg: '<svg width="17" height="17" viewBox="0 0 17 17" fill="none"><rect x="2" y="2" width="13" height="13" rx="2" stroke="currentColor" stroke-width="1.3"/><path d="M8.5 5.5v6M5.5 8.5h6" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>' },
+    { key: 'messages', title: 'Team Messages',   badge: unread || null, badgeColor: '#F85149',
+      svg: '<svg width="17" height="17" viewBox="0 0 17 17" fill="none"><path d="M2 3h13v9H9.5l-3.5 2.5V12H2V3z" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"/></svg>' },
+    { key: 'schedule', title: 'Schedule Meeting', badge: upcoming.length || null, badgeColor: '#BC8CFF',
+      svg: '<svg width="17" height="17" viewBox="0 0 17 17" fill="none"><rect x="2" y="3.5" width="13" height="11" rx="1.5" stroke="currentColor" stroke-width="1.3"/><path d="M5.5 2v3M11.5 2v3M2 7.5h13" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/><circle cx="8.5" cy="11" r="1" fill="currentColor"/></svg>' },
+  ];
 
-  if (!panel) return `<div style="display:flex;align-self:flex-start;position:sticky;top:16px">${iconStrip}</div>`;
+  const strip = `<div class="rpanel-strip">
+    ${icons.map(ic => {
+      const bc = ic.badgeColor || '#1565C0';
+      return `<div class="rpanel-icon${panel === ic.key ? ' rpanel-icon-active' : ''}" onclick="toggleRightPanel('${ic.key}')" title="${ic.title}">
+        ${ic.svg}
+        ${ic.badge ? `<span class="rpanel-badge" style="background:${bc}">${ic.badge > 9 ? '9+' : ic.badge}</span>` : ''}
+      </div>`;
+    }).join('')}
+  </div>`;
 
-  // Notes panel content
-  const notesContent = `
-    <div style="padding:12px 12px 8px;border-bottom:1px solid #1C2333;display:flex;align-items:center;justify-content:space-between">
+  if (!panel) return strip;
+
+  // ── Notes Panel ──
+  const notesPanel = `
+    <div class="rpanel-header">
       <div>
-        <div style="font-size:13px;font-weight:600;color:#E6EDF3">Notes</div>
-        <div style="font-size:10px;color:${roleColor};margin-top:1px">${DASHBOARD_ACCESS.find(d=>d.key===role)?.label||role}</div>
+        <div class="rpanel-header-title">Notes</div>
+        <div style="font-size:10px;color:${DASHBOARD_ACCESS.find(d=>d.key===role)?.color||'#6E7681'}">${DASHBOARD_ACCESS.find(d=>d.key===role)?.label||role}</div>
       </div>
       <button class="btn btn-sm" onclick="showAddSectionDialog('${role}')" style="font-size:11px;padding:4px 10px">+ Section</button>
     </div>
-    <div style="padding:10px;overflow-y:auto;flex:1">
+    <div class="rpanel-body">
       ${sections.length === 0
-        ? '<div style="text-align:center;padding:24px 8px;color:#6E7681;font-size:12px">No sections yet.<br><span style="color:#C9D1D9">Tap + Section</span> to add notes or a checklist.</div>'
-        : `<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">${sections.map(s => {
-            const doneCount = s.type === 'checklist' ? (s.items||[]).filter(i=>i.done).length : 0;
-            const totalCount = s.type === 'checklist' ? (s.items||[]).length : 0;
-            const preview = s.type === 'text'
-              ? (s.content ? s.content.slice(0,40) + (s.content.length > 40 ? '…' : '') : '')
-              : (s.items||[]).slice(0,2).map(i=>(i.done?'✓ ':'○ ')+i.text.slice(0,12)).join('\n');
-            return `
-              <div onclick="toggleNoteSectionCollapsed('${role}',${s.id})"
-                style="background:#161B22;border:1px solid ${s.collapsed?'#1C2333':'#30363D'};border-radius:8px;padding:10px;cursor:pointer;-webkit-tap-highlight-color:transparent;position:relative">
-                <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:4px">
+        ? '<div style="text-align:center;padding:28px 12px;color:#6E7681;font-size:12px">No sections yet.<br><span style="color:#C9D1D9">Tap + Section</span> to get started.</div>'
+        : `<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:10px">
+            ${sections.map(s => {
+              const doneCount = s.type === 'checklist' ? (s.items||[]).filter(i=>i.done).length : 0;
+              const totalCount = s.type === 'checklist' ? (s.items||[]).length : 0;
+              const preview = s.type === 'text'
+                ? (s.content?.slice(0,36) + (s.content?.length > 36 ? '…' : '') || '')
+                : (s.items||[]).slice(0,2).map(i=>(i.done?'✓ ':'· ')+i.text.slice(0,14)).join('\n');
+              return `<div onclick="toggleNoteSectionCollapsed('${role}',${s.id})" style="background:#161B22;border:1px solid ${s.collapsed?'#1C2333':'#30363D'};border-radius:8px;padding:9px 10px;cursor:pointer;-webkit-tap-highlight-color:transparent">
+                <div style="display:flex;justify-content:space-between;margin-bottom:3px">
                   <span style="font-size:10px;color:#6E7681">${s.type==='checklist'?'☑':'📝'}</span>
                   <button onclick="event.stopPropagation();deleteNoteSection('${role}',${s.id})" style="background:none;border:none;color:#6E7681;cursor:pointer;font-size:12px;padding:0;line-height:1">×</button>
                 </div>
-                <div style="font-size:12px;font-weight:500;color:#E6EDF3;margin-bottom:3px;word-break:break-word">${esc(s.title)}</div>
+                <div style="font-size:12px;font-weight:500;color:#E6EDF3;word-break:break-word;margin-bottom:3px">${esc(s.title)}</div>
                 ${s.type==='checklist'&&totalCount>0
                   ? `<div style="font-size:10px;color:${doneCount===totalCount?'#3FB950':'#6E7681'}">${doneCount}/${totalCount} done</div>`
                   : preview ? `<div style="font-size:10px;color:#6E7681;line-height:1.4;white-space:pre-line">${esc(preview)}</div>` : ''}
               </div>`;
-          }).join('')}</div>
-          ${sections.some(s => !s.collapsed) ? `
-            <div style="margin-top:10px">
-              ${sections.filter(s => !s.collapsed).map(s => renderNotesSection(role, s)).join('')}
-            </div>` : ''}`}
-    </div>
-  `;
+            }).join('')}
+          </div>
+          ${sections.filter(s=>!s.collapsed).map(s=>renderNotesSection(role,s)).join('')}`}
+    </div>`;
 
-  // Messages panel content
-  const messagesContent = `
-    <div style="padding:12px;border-bottom:1px solid #1C2333">
-      <div style="font-size:13px;font-weight:600;color:#E6EDF3">Team</div>
-      <div style="font-size:10px;color:#6E7681;margin-top:1px">${state.team.length} member${state.team.length!==1?'s':''}</div>
+  // ── Quick Add Task Panel ──
+  const projectOptions = state.projects.filter(p=>!p.archived)
+    .map(p=>`<option value="${p.id}">${esc(p.name)}</option>`).join('');
+  const taskPanel = `
+    <div class="rpanel-header"><div class="rpanel-header-title">Quick Add Task</div></div>
+    <div class="rpanel-body">
+      <div class="form-group">
+        <input class="form-input" id="qt-text" placeholder="What needs to get done?" style="font-size:13px">
+      </div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">
+        <div class="form-group">
+          <label class="form-label">Due Date</label>
+          <input class="form-input" type="date" id="qt-date" style="font-size:12px">
+        </div>
+        <div class="form-group">
+          <label class="form-label">Project</label>
+          <select class="form-select" id="qt-proj" style="font-size:12px">
+            <option value="">None</option>${projectOptions}
+          </select>
+        </div>
+      </div>
+      <button class="btn-primary" onclick="quickAddTask()" style="width:100%;padding:10px;font-size:13px;margin-top:4px">Add Task</button>
+      ${activeTasks > 0 ? `<div style="margin-top:16px;padding-top:12px;border-top:1px solid #1C2333">
+        <div style="font-size:11px;color:#6E7681;font-weight:600;text-transform:uppercase;letter-spacing:0.06em;margin-bottom:8px">Open (${activeTasks})</div>
+        ${state.tasks.filter(t=>t.memberId===getActiveTeamMemberId()&&!t.done).slice(0,6).map(t=>{
+          const u=getTaskUrgency(t.dueDate);
+          return `<div style="display:flex;align-items:center;gap:8px;padding:6px 0;border-bottom:1px solid #0D1117">
+            <div onclick="toggleTask(${t.id})" style="width:14px;height:14px;border-radius:3px;border:1.5px solid #30363D;cursor:pointer;flex-shrink:0"></div>
+            <span style="flex:1;font-size:12px;color:#C9D1D9">${esc(t.text)}</span>
+            ${u.label ? `<span style="font-size:10px;font-weight:600;color:${u.color}">${u.label}</span>` : ''}
+          </div>`;
+        }).join('')}
+      </div>` : ''}
+    </div>`;
+
+  // ── Messages Panel ──
+  const messagesPanel = `
+    <div class="rpanel-header">
+      <div>
+        <div class="rpanel-header-title">Team Chat</div>
+        <div style="font-size:10px;color:#6E7681">${state.team.length} member${state.team.length!==1?'s':''}</div>
+      </div>
     </div>
-    <div id="msg-list" style="flex:1;overflow-y:auto;padding:10px;display:flex;flex-direction:column">
+    <div id="msg-list" class="rpanel-body" style="flex:1">
       ${renderMessagesList()}
     </div>
-    <div style="padding:10px;border-top:1px solid #1C2333">
+    <div style="padding:10px;border-top:1px solid #1C2333;flex-shrink:0">
       <div style="display:flex;gap:6px;align-items:flex-end">
         <textarea id="msg-input" placeholder="Message the team…"
           style="flex:1;background:#0D1117;border:1px solid #30363D;border-radius:8px;color:#E6EDF3;font-size:12px;font-family:'DM Sans',sans-serif;padding:8px 10px;resize:none;outline:none;line-height:1.4;max-height:80px;min-height:36px"
           rows="1"
           onkeydown="if(event.key==='Enter'&&!event.shiftKey){event.preventDefault();sendMessage()}"
           oninput="this.style.height='auto';this.style.height=Math.min(this.scrollHeight,80)+'px'"></textarea>
-        <button onclick="sendMessage()" style="background:#1565C0;border:none;border-radius:8px;color:#fff;cursor:pointer;padding:8px 12px;font-size:12px;white-space:nowrap;-webkit-tap-highlight-color:transparent">
+        <button onclick="sendMessage()" style="background:#1565C0;border:none;border-radius:8px;color:#fff;cursor:pointer;padding:8px 10px;-webkit-tap-highlight-color:transparent">
           <svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M12 7L2 2l2.5 5L2 12l10-5z" fill="currentColor"/></svg>
         </button>
       </div>
-    </div>
-  `;
+    </div>`;
+
+  // ── Schedule Panel ──
+  const schedulePanel = `
+    <div class="rpanel-header"><div class="rpanel-header-title">Schedule Meeting</div></div>
+    <div class="rpanel-body">
+      <div class="form-group">
+        <input class="form-input" id="mtg-title" placeholder="Meeting title" style="font-size:13px">
+      </div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">
+        <div class="form-group">
+          <label class="form-label">Date</label>
+          <input class="form-input" type="date" id="mtg-date" style="font-size:12px">
+        </div>
+        <div class="form-group">
+          <label class="form-label">Time</label>
+          <input class="form-input" type="time" id="mtg-time" style="font-size:12px">
+        </div>
+      </div>
+      <div class="form-group">
+        <label class="form-label">Duration</label>
+        <select class="form-select" id="mtg-dur" style="font-size:12px">
+          <option value="30min">30 min</option>
+          <option value="1hr" selected>1 hour</option>
+          <option value="2hr">2 hours</option>
+          <option value="halfday">Half day</option>
+          <option value="allday">All day</option>
+        </select>
+      </div>
+      <div class="form-group">
+        <label class="form-label">Attendees</label>
+        <div id="mtg-attendees" style="display:flex;flex-wrap:wrap;gap:6px">
+          ${state.team.map(m => {
+            const c = DASHBOARD_ACCESS.find(d=>d.key===m.primaryRole)?.color||'#6E7681';
+            return `<div data-mid="${m.id}" onclick="this.classList.toggle('selected');this.style.borderColor=this.classList.contains('selected')?'${c}':'#1C2333';this.style.background=this.classList.contains('selected')?'${c}18':'transparent';this.style.color=this.classList.contains('selected')?'${c}':'#6E7681'"
+              style="padding:4px 10px;border-radius:20px;border:1px solid #1C2333;font-size:11px;color:#6E7681;cursor:pointer;-webkit-tap-highlight-color:transparent">${esc(m.name)}</div>`;
+          }).join('')}
+        </div>
+      </div>
+      <div class="form-group">
+        <label class="form-label">Notes <span style="color:#6E7681;font-weight:400">(optional)</span></label>
+        <textarea class="form-textarea" id="mtg-notes" rows="2" placeholder="Agenda, location…" style="font-size:12px"></textarea>
+      </div>
+      <button class="btn-primary" onclick="scheduleMeeting()" style="width:100%;padding:10px;font-size:13px">Schedule</button>
+      ${upcoming.length > 0 ? `
+        <div style="margin-top:16px;padding-top:12px;border-top:1px solid #1C2333">
+          <div style="font-size:11px;color:#6E7681;font-weight:600;text-transform:uppercase;letter-spacing:0.06em;margin-bottom:8px">Upcoming</div>
+          ${upcoming.map(m => {
+            const dateStr = new Date(m.date + 'T00:00').toLocaleDateString('en-US',{month:'short',day:'numeric'});
+            const attendeeNames = m.attendees.map(id=>getTeamMember(id)?.name||'').filter(Boolean).join(', ');
+            return `<div style="padding:8px 0;border-bottom:1px solid #0D1117">
+              <div style="display:flex;justify-content:space-between;align-items:flex-start">
+                <div style="font-size:12px;font-weight:500;color:#E6EDF3">${esc(m.title)}</div>
+                <button onclick="deleteMeeting(${m.id})" style="background:none;border:none;color:#6E7681;cursor:pointer;font-size:13px;padding:0;flex-shrink:0">×</button>
+              </div>
+              <div style="font-size:11px;color:#58A6FF;margin-top:2px">${dateStr}${m.time ? ' · ' + m.time : ''} · ${m.duration}</div>
+              ${attendeeNames ? `<div style="font-size:10px;color:#6E7681;margin-top:1px">${esc(attendeeNames)}</div>` : ''}
+            </div>`;
+          }).join('')}
+        </div>` : ''}
+    </div>`;
+
+  const contentMap = { notes: notesPanel, task: taskPanel, messages: messagesPanel, schedule: schedulePanel };
 
   return `
-    <div style="display:flex;align-self:flex-start;position:sticky;top:16px">
-      <div class="rpanel-content">
-        ${panel === 'notes' ? notesContent : messagesContent}
-      </div>
-      ${iconStrip}
-    </div>
+    <div class="rpanel-content">${contentMap[panel] || ''}</div>
+    ${strip}
   `;
+}
+
+function quickAddTask() {
+  const text = document.getElementById('qt-text')?.value?.trim();
+  const dueDate = document.getElementById('qt-date')?.value || '';
+  const projectId = parseInt(document.getElementById('qt-proj')?.value) || null;
+  if (!text) { document.getElementById('qt-text')?.focus(); return; }
+  addTask(text, dueDate, projectId);
+  const inp = document.getElementById('qt-text');
+  if (inp) inp.value = '';
+  updateRightPanel();
 }
 
 // ── Dashboard ──
@@ -1868,9 +2035,7 @@ function renderDashboard(c) {
   const closeRate = getCloseRate();
 
   c.innerHTML = `
-    <div style="display:flex;gap:0;align-items:flex-start">
-      <div style="flex:1;min-width:0">
-        ${viewTabs.replace('margin-bottom:16px', 'margin-bottom:12px')}
+    ${viewTabs.replace('margin-bottom:16px', 'margin-bottom:12px')}
 
         <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-bottom:20px;align-items:start">
           <div class="metrics-grid" style="margin-bottom:0">
@@ -1967,9 +2132,6 @@ function renderDashboard(c) {
         <div id="archive-expanded"></div>
 
         ${renderRecentActivity()}
-      </div>
-      ${renderRightPanel(activeView)}
-    </div>
   `;
 }
 
@@ -3459,6 +3621,8 @@ async function init() {
 
   // Inject mobile bottom nav
   injectBottomNav();
+  // Inject global right command panel
+  injectRightPanel();
 
   // Inject Team nav item into sidebar for admin
   const activeMemberInit = getTeamMember(getActiveTeamMemberId());
