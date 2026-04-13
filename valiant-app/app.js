@@ -38,7 +38,7 @@ const state = {
   designTrack: JSON.parse(localStorage.getItem('vi_design_track') || '{}'),
   installTrack: JSON.parse(localStorage.getItem('vi_install_track') || '{}'),
   gbbLinks: JSON.parse(localStorage.getItem('vi_gbb') || '{}'),
-  fizzled: JSON.parse(localStorage.getItem('vi_fizzled') || '[]'),
+  archived: JSON.parse(localStorage.getItem('vi_archived') || '{}'),
   currentPage: 'dashboard',
   currentProject: null,
   calendarDate: new Date(),
@@ -51,7 +51,6 @@ const STAGES = [
   { key: 'lead', label: 'Lead', color: 'gray' },
   { key: 'proposal', label: 'Proposal', color: 'blue' },
   { key: 'sent', label: 'Sent', color: 'amber' },
-  { key: 'needs_approval', label: 'Needs Approval', color: 'red' },
   { key: 'contract', label: 'Contract', color: 'green' }
 ];
 
@@ -60,13 +59,30 @@ function mapStage(raw) {
   const s = raw.toLowerCase();
   if (s.includes('lead') || s.includes('prospect')) return 'lead';
   if (s.includes('propos') || s.includes('design') || s.includes('bid') || s.includes('estimat')) return 'proposal';
-  if (s.includes('sent') || s.includes('present') || s.includes('pending') || s.includes('review') || s.includes('needs approval')) return 'sent';
-  if (s.includes('approv') && !s.includes('needs')) return 'needs_approval';
-  if (s.includes('contract') || s.includes('accept') || s.includes('won') || s.includes('sold') || s.includes('awarded')) return 'contract';
+  if (s.includes('sent') || s.includes('present') || s.includes('pending') || s.includes('review')) return 'sent';
+  if (s.includes('approv') || s.includes('contract') || s.includes('accept') || s.includes('won') || s.includes('sold') || s.includes('awarded')) return 'contract';
   if (s.includes('install') || s.includes('progress') || s.includes('active') || s.includes('current') || s.includes('in progress') || s.includes('construction')) return 'contract';
   if (s.includes('complete') || s.includes('close') || s.includes('done') || s.includes('finish') || s.includes('final')) return 'contract';
   if (s.includes('lost') || s.includes('dead') || s.includes('cancel')) return 'lead';
   return 'lead';
+}
+
+// ── Contract Review Tracking ──
+// Projects in "contract" stage need review before handoff to design & install
+const contractReviewed = JSON.parse(localStorage.getItem('vi_contract_reviewed') || '{}');
+
+function isContractNeedsReview(project) {
+  return project.stage === 'contract' && !contractReviewed[project.id];
+}
+
+function markContractReviewed(projectId) {
+  contractReviewed[projectId] = new Date().toISOString();
+  localStorage.setItem('vi_contract_reviewed', JSON.stringify(contractReviewed));
+  renderCurrentPage();
+  // Also re-render modal if open
+  if (state.currentProject && state.currentProject.id === projectId) {
+    openProject(projectId);
+  }
 }
 
 // ── Design & Install Checklist Templates ──
@@ -266,7 +282,7 @@ function enrichProject(p) {
   const labor = parseFloat(p.labor_total) || 0;
   const equipment = parseFloat(p.equipment_total) || total - labor;
   const stage = mapStage(p.stage || p.status);
-  const isFizzled = state.fizzled.includes(p.id);
+  const archiveStatus = state.archived[p.id] || null;
 
   return {
     id: p.id,
@@ -292,8 +308,287 @@ function enrichProject(p) {
     primary_contact_name: '',
     primary_contact_email: '',
     primary_contact_phone: '',
-    is_fizzled: isFizzled
+    archived: archiveStatus
   };
+}
+
+// ── Archive System (Icebox / Lost / Trash) ──
+const ARCHIVE_BINS = [
+  { key: 'icebox', label: 'Icebox', icon: '❄️', color: '#58A6FF' },
+  { key: 'lost', label: 'Lost', icon: '✕', color: '#F85149' },
+  { key: 'trash', label: 'Trash', icon: '🗑', color: '#6E7681' }
+];
+
+function archiveProject(projectId, bin) {
+  state.archived[projectId] = bin;
+  save('vi_archived', state.archived);
+  const p = state.projects.find(x => x.id === projectId);
+  if (p) p.archived = bin;
+  renderCurrentPage();
+}
+
+function unarchiveProject(projectId) {
+  delete state.archived[projectId];
+  save('vi_archived', state.archived);
+  const p = state.projects.find(x => x.id === projectId);
+  if (p) p.archived = null;
+  renderCurrentPage();
+}
+
+function getArchivedProjects(bin) {
+  return state.projects.filter(p => p.archived === bin);
+}
+
+// ── GBB (Good/Better/Best) Linking ──
+// Structure: { groupId: { good: projectId, better: projectId, best: projectId } }
+function getGBBGroup(projectId) {
+  for (const [gid, group] of Object.entries(state.gbbLinks)) {
+    if (group.good === projectId || group.better === projectId || group.best === projectId) {
+      return { groupId: gid, ...group };
+    }
+  }
+  return null;
+}
+
+function getGBBTier(projectId) {
+  const group = getGBBGroup(projectId);
+  if (!group) return null;
+  if (group.good === projectId) return 'good';
+  if (group.better === projectId) return 'better';
+  if (group.best === projectId) return 'best';
+  return null;
+}
+
+function linkGBB(goodId, betterId, bestId) {
+  const groupId = 'gbb_' + Date.now();
+  state.gbbLinks[groupId] = { good: goodId, better: betterId, best: bestId };
+  save('vi_gbb', state.gbbLinks);
+}
+
+function unlinkGBB(projectId) {
+  const group = getGBBGroup(projectId);
+  if (group) {
+    delete state.gbbLinks[group.groupId];
+    save('vi_gbb', state.gbbLinks);
+  }
+}
+
+function showGBBLinkDialog(projectId) {
+  const p = state.projects.find(x => x.id === projectId);
+  if (!p) return;
+  const existing = getGBBGroup(projectId);
+  const others = state.projects.filter(x => x.id !== projectId && !x.archived && !getGBBGroup(x.id));
+
+  const modal = document.createElement('div');
+  modal.id = 'gbb-dialog';
+  modal.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.7);z-index:110;display:flex;align-items:center;justify-content:center;padding:20px';
+
+  if (existing) {
+    const goodP = state.projects.find(x => x.id === existing.good);
+    const betterP = state.projects.find(x => x.id === existing.better);
+    const bestP = state.projects.find(x => x.id === existing.best);
+    modal.innerHTML = `<div style="background:#161B22;border:1px solid #30363D;border-radius:12px;padding:20px;max-width:400px;width:100%">
+      <div style="font-size:15px;font-weight:600;color:#E6EDF3;margin-bottom:14px">Good / Better / Best Group</div>
+      <div style="font-size:13px;color:#C9D1D9;line-height:2">
+        <div>🥉 <strong>Good:</strong> ${esc(goodP?.name || 'Unknown')}</div>
+        <div>🥈 <strong>Better:</strong> ${esc(betterP?.name || 'Unknown')} <span style="color:#58A6FF;font-size:11px">(counts in pipeline)</span></div>
+        <div>🥇 <strong>Best:</strong> ${esc(bestP?.name || 'Unknown')}</div>
+      </div>
+      <div style="display:flex;gap:8px;margin-top:16px">
+        <button class="btn btn-danger" onclick="unlinkGBB(${projectId});document.getElementById('gbb-dialog')?.remove();openProject(${projectId})">Unlink Group</button>
+        <button class="btn" onclick="document.getElementById('gbb-dialog')?.remove()">Close</button>
+      </div>
+    </div>`;
+  } else {
+    const opts = others.map(o => `<option value="${o.id}">${esc(o.name)}${o.client_name ? ' — ' + esc(o.client_name) : ''}</option>`).join('');
+    modal.innerHTML = `<div style="background:#161B22;border:1px solid #30363D;border-radius:12px;padding:20px;max-width:400px;width:100%">
+      <div style="font-size:15px;font-weight:600;color:#E6EDF3;margin-bottom:4px">Link Good / Better / Best</div>
+      <div style="font-size:12px;color:#6E7681;margin-bottom:14px">This project: <strong style="color:#E6EDF3">${esc(p.name)}</strong></div>
+      <div class="form-group">
+        <label class="form-label">This project is the…</label>
+        <select class="form-select" id="gbb-tier">
+          <option value="good">Good (lowest tier)</option>
+          <option value="better" selected>Better (middle tier)</option>
+          <option value="best">Best (highest tier)</option>
+        </select>
+      </div>
+      <div class="form-group" id="gbb-good-group">
+        <label class="form-label">Good project</label>
+        <select class="form-select" id="gbb-good"><option value="">Select…</option>${opts}</select>
+      </div>
+      <div class="form-group" id="gbb-better-group">
+        <label class="form-label">Better project</label>
+        <select class="form-select" id="gbb-better"><option value="">Select…</option>${opts}</select>
+      </div>
+      <div class="form-group" id="gbb-best-group">
+        <label class="form-label">Best project</label>
+        <select class="form-select" id="gbb-best"><option value="">Select…</option>${opts}</select>
+      </div>
+      <div style="display:flex;gap:8px;margin-top:12px">
+        <button class="btn-primary" onclick="submitGBBLink(${projectId})">Link Projects</button>
+        <button class="btn" onclick="document.getElementById('gbb-dialog')?.remove()">Cancel</button>
+      </div>
+    </div>`;
+  }
+  document.body.appendChild(modal);
+  modal.addEventListener('click', e => { if (e.target === modal) modal.remove(); });
+
+  // Auto-hide the field for the current project's tier
+  if (!existing) {
+    const tierSel = document.getElementById('gbb-tier');
+    function updateGBBFields() {
+      const tier = tierSel.value;
+      document.getElementById('gbb-good-group').style.display = tier === 'good' ? 'none' : '';
+      document.getElementById('gbb-better-group').style.display = tier === 'better' ? 'none' : '';
+      document.getElementById('gbb-best-group').style.display = tier === 'best' ? 'none' : '';
+    }
+    tierSel.addEventListener('change', updateGBBFields);
+    updateGBBFields();
+  }
+}
+
+function submitGBBLink(projectId) {
+  const tier = document.getElementById('gbb-tier')?.value;
+  const goodId = tier === 'good' ? projectId : parseInt(document.getElementById('gbb-good')?.value);
+  const betterId = tier === 'better' ? projectId : parseInt(document.getElementById('gbb-better')?.value);
+  const bestId = tier === 'best' ? projectId : parseInt(document.getElementById('gbb-best')?.value);
+  if (!goodId || !betterId || !bestId) { alert('Please select all three projects.'); return; }
+  if (new Set([goodId, betterId, bestId]).size !== 3) { alert('Each project must be different.'); return; }
+  linkGBB(goodId, betterId, bestId);
+  document.getElementById('gbb-dialog')?.remove();
+  openProject(projectId);
+}
+
+// ── Pipeline Value (GBB-aware) ──
+function getPipelineValue(projects) {
+  let total = 0;
+  const counted = new Set();
+  projects.forEach(p => {
+    if (counted.has(p.id)) return;
+    const group = getGBBGroup(p.id);
+    if (group) {
+      // Only count the "better" tier for GBB groups
+      if (!counted.has(group.good) && !counted.has(group.better) && !counted.has(group.best)) {
+        const betterProject = state.projects.find(x => x.id === group.better);
+        if (betterProject) total += betterProject.total;
+        counted.add(group.good);
+        counted.add(group.better);
+        counted.add(group.best);
+      }
+    } else {
+      total += p.total;
+      counted.add(p.id);
+    }
+  });
+  return total;
+}
+
+// ── Dashboard Title ──
+function getDashboardTitle() {
+  const roleLabels = {
+    admin: 'Admin Dashboard',
+    sales: 'Sales Dashboard',
+    design: 'Design Dashboard',
+    project_manager: 'Project Management Dashboard',
+    installer: 'Install Dashboard'
+  };
+  return `${currentUserName}\u2019s ${roleLabels[currentUserRole] || 'Dashboard'}`;
+}
+
+// ── Drag & Drop (pipeline) ──
+function onDragStart(e, projectId) {
+  e.dataTransfer.setData('text/plain', projectId);
+  e.dataTransfer.effectAllowed = 'move';
+  e.target.style.opacity = '0.5';
+}
+
+function onDragEnd(e) {
+  e.target.style.opacity = '1';
+  document.querySelectorAll('.pipeline-col, .archive-bin').forEach(el => el.classList.remove('drag-over'));
+}
+
+function onDragOver(e) {
+  e.preventDefault();
+  e.dataTransfer.dropEffect = 'move';
+  e.currentTarget.classList.add('drag-over');
+}
+
+function onDragLeave(e) {
+  e.currentTarget.classList.remove('drag-over');
+}
+
+function onDropStage(e, stage) {
+  e.preventDefault();
+  e.currentTarget.classList.remove('drag-over');
+  const projectId = parseInt(e.dataTransfer.getData('text/plain'));
+  if (!projectId) return;
+  moveProjectToStage(projectId, stage);
+}
+
+function onDropArchive(e, bin) {
+  e.preventDefault();
+  e.currentTarget.classList.remove('drag-over');
+  const projectId = parseInt(e.dataTransfer.getData('text/plain'));
+  if (!projectId) return;
+  archiveProject(projectId, bin);
+}
+
+function moveProjectToStage(projectId, newStage) {
+  const p = state.projects.find(x => x.id === projectId);
+  if (!p) return;
+  // If coming from archive, unarchive first
+  if (p.archived) {
+    delete state.archived[projectId];
+    save('vi_archived', state.archived);
+    p.archived = null;
+  }
+  p.stage = newStage;
+  // Update cache
+  try { localStorage.setItem('vi_projects_cache', JSON.stringify(state.projects)); } catch(e) {}
+  // If moved to contract, it needs review
+  if (newStage === 'contract' && !contractReviewed[projectId]) {
+    // Already handled by isContractNeedsReview
+  }
+  renderCurrentPage();
+}
+
+// ── Mobile Move-To (for projects on mobile) ──
+function showMoveMenu(projectId, event) {
+  event.stopPropagation();
+  const existing = document.getElementById('move-menu');
+  if (existing) existing.remove();
+
+  const menu = document.createElement('div');
+  menu.id = 'move-menu';
+  menu.style.cssText = 'position:fixed;bottom:70px;left:12px;right:12px;background:#161B22;border:1px solid #30363D;border-radius:12px;z-index:70;padding:8px 0;box-shadow:0 8px 32px rgba(0,0,0,0.5)';
+
+  const stageItems = STAGES.map(s =>
+    `<div onclick="moveProjectToStage(${projectId},'${s.key}');document.getElementById('move-menu')?.remove()" style="padding:14px 20px;color:#C9D1D9;font-size:14px;cursor:pointer;display:flex;align-items:center;gap:10px;-webkit-tap-highlight-color:transparent">
+      <span class="status-pill status-${s.color}" style="font-size:11px">${s.label}</span>
+    </div>`
+  ).join('');
+
+  const archiveItems = ARCHIVE_BINS.map(b =>
+    `<div onclick="archiveProject(${projectId},'${b.key}');document.getElementById('move-menu')?.remove()" style="padding:14px 20px;color:${b.color};font-size:14px;cursor:pointer;display:flex;align-items:center;gap:10px">
+      ${b.icon} ${b.label}
+    </div>`
+  ).join('');
+
+  menu.innerHTML = `
+    <div style="padding:8px 20px 4px;font-size:11px;color:#6E7681;text-transform:uppercase;letter-spacing:0.06em">Move to Stage</div>
+    ${stageItems}
+    <div style="border-top:1px solid #30363D;margin:4px 0"></div>
+    <div style="padding:8px 20px 4px;font-size:11px;color:#6E7681;text-transform:uppercase;letter-spacing:0.06em">Archive</div>
+    ${archiveItems}
+    <div style="border-top:1px solid #30363D;margin:4px 0"></div>
+    <div onclick="document.getElementById('move-menu')?.remove()" style="padding:12px 20px;color:#6E7681;font-size:13px;cursor:pointer;text-align:center">Cancel</div>
+  `;
+  document.body.appendChild(menu);
+  setTimeout(() => {
+    document.addEventListener('click', function closer(e) {
+      if (!menu.contains(e.target)) { menu.remove(); document.removeEventListener('click', closer); }
+    });
+  }, 10);
 }
 
 // ── Bottom Nav (injected for mobile) ──
@@ -409,7 +704,7 @@ function renderCurrentPage() {
 
 // ── Dashboard ──
 function renderDashboard(c) {
-  const projects = state.projects.filter(p => !p.is_fizzled);
+  const projects = state.projects.filter(p => !p.archived);
   const byStage = {};
   STAGES.forEach(s => byStage[s.key] = []);
   projects.forEach(p => {
@@ -417,31 +712,36 @@ function renderDashboard(c) {
     else byStage.lead.push(p);
   });
 
-  const totalValue = projects.reduce((s, p) => s + p.total, 0);
+  const totalValue = getPipelineValue(projects);
   const activeCount = projects.filter(p => p.stage === 'contract').length;
-  const proposalCount = byStage.proposal.length + byStage.sent.length + byStage.needs_approval.length;
+  const reviewCount = projects.filter(p => isContractNeedsReview(p)).length;
+  const proposalCount = byStage.proposal.length + byStage.sent.length;
+  const archivedCount = state.projects.filter(p => p.archived).length;
+
+  // Update page title for role
+  document.getElementById('page-title').textContent = getDashboardTitle();
 
   c.innerHTML = `
     <div class="metrics-grid">
       <div class="metric-card">
         <div class="metric-label">Total Projects</div>
         <div class="metric-value">${projects.length}</div>
-        <div class="metric-sub">${state.fizzled.length} fizzled / hidden</div>
+        <div class="metric-sub">${archivedCount > 0 ? archivedCount + ' archived' : 'All active'}</div>
       </div>
       <div class="metric-card">
         <div class="metric-label">Pipeline Value</div>
         <div class="metric-value">${fmt(totalValue)}</div>
-        <div class="metric-sub">All active projects</div>
+        <div class="metric-sub">GBB counts Better only</div>
       </div>
       <div class="metric-card">
         <div class="metric-label">Contracted</div>
         <div class="metric-value">${activeCount}</div>
-        <div class="metric-sub">Signed contracts</div>
+        <div class="metric-sub">${reviewCount > 0 ? `<span style="color:#F85149;font-weight:500">${reviewCount} needs review</span>` : 'All reviewed'}</div>
       </div>
       <div class="metric-card">
         <div class="metric-label">Open Proposals</div>
         <div class="metric-value">${proposalCount}</div>
-        <div class="metric-sub">Proposal + Sent + Needs Approval</div>
+        <div class="metric-sub">Proposal + Sent</div>
       </div>
     </div>
 
@@ -451,29 +751,75 @@ function renderDashboard(c) {
     </div>
     <div class="pipeline-grid">
       ${STAGES.map(s => `
-        <div class="pipeline-col">
+        <div class="pipeline-col" ondragover="onDragOver(event)" ondragleave="onDragLeave(event)" ondrop="onDropStage(event, '${s.key}')">
           <div class="pipeline-col-header">
             <span class="pipeline-col-name">${s.label}</span>
             <span class="pipeline-col-count">${(byStage[s.key] || []).length}</span>
           </div>
-          ${(byStage[s.key] || []).slice(0, 8).map(p => `
-            <div class="project-card" onclick="openProject(${p.id})">
-              <div class="project-card-name">${esc(p.name)}</div>
+          ${(byStage[s.key] || []).slice(0, 8).map(p => {
+            const gbbTier = getGBBTier(p.id);
+            const gbbBadge = gbbTier ? `<span style="font-size:9px;font-weight:600;padding:1px 5px;border-radius:3px;background:${gbbTier === 'better' ? '#0D1626;color:#58A6FF;border:1px solid #1565C0' : gbbTier === 'best' ? '#0D1A0E;color:#3FB950;border:1px solid #238636' : '#161B22;color:#6E7681;border:1px solid #30363D'}">${gbbTier.toUpperCase()}</span>` : '';
+            return `
+            <div class="project-card" draggable="true" ondragstart="onDragStart(event, ${p.id})" ondragend="onDragEnd(event)" onclick="openProject(${p.id})" style="${isContractNeedsReview(p) ? 'border-color:#DA3633' : ''}">
+              ${isContractNeedsReview(p) ? '<div style="background:#DA3633;color:#fff;font-size:10px;font-weight:600;padding:4px 8px;border-radius:4px;margin-bottom:8px;text-align:center;letter-spacing:0.03em">REVIEW — SEND TO DESIGN & INSTALL</div>' : ''}
+              <div style="display:flex;justify-content:space-between;align-items:flex-start">
+                <div class="project-card-name">${esc(p.name)}</div>
+                ${gbbBadge}
+              </div>
               <div class="project-card-client">${esc(p.client_name || 'No client')}</div>
               <div class="project-card-footer">
                 ${canSee('financials') ? `<span class="project-card-value">${fmt(p.total)}</span>` : '<span></span>'}
-                <span class="status-pill status-${s.color}">${s.label}</span>
+                <div style="display:flex;align-items:center;gap:4px">
+                  <span class="status-pill status-${s.color}">${s.label}</span>
+                  <button class="move-btn" onclick="event.stopPropagation();showMoveMenu(${p.id}, event)" title="Move">⋮</button>
+                </div>
               </div>
               ${p.systems.length ? `<div style="margin-top:6px">${p.systems.map(systemTagHTML).join('')}</div>` : ''}
-            </div>
-          `).join('')}
+            </div>`;
+          }).join('')}
           ${(byStage[s.key] || []).length === 0 ? '<div class="empty-state" style="padding:20px 10px;font-size:12px">No projects</div>' : ''}
           ${(byStage[s.key] || []).length > 8 ? `<div style="text-align:center;padding:6px;font-size:11px;color:#6E7681">+${(byStage[s.key]).length - 8} more</div>` : ''}
         </div>
       `).join('')}
     </div>
 
+    <div class="archive-row">
+      ${ARCHIVE_BINS.map(b => {
+        const count = getArchivedProjects(b.key).length;
+        return `
+        <div class="archive-bin" ondragover="onDragOver(event)" ondragleave="onDragLeave(event)" ondrop="onDropArchive(event, '${b.key}')">
+          <span class="archive-icon">${b.icon}</span>
+          <span class="archive-label">${b.label}</span>
+          ${count > 0 ? `<span class="archive-count" onclick="toggleArchiveExpand('${b.key}')">${count}</span>` : ''}
+        </div>`;
+      }).join('')}
+    </div>
+    <div id="archive-expanded"></div>
+
     ${renderRecentActivity()}
+  `;
+}
+
+function toggleArchiveExpand(bin) {
+  const el = document.getElementById('archive-expanded');
+  if (!el) return;
+  const b = ARCHIVE_BINS.find(x => x.key === bin);
+  const projects = getArchivedProjects(bin);
+  if (el.dataset.bin === bin) { el.innerHTML = ''; el.dataset.bin = ''; return; }
+  el.dataset.bin = bin;
+  el.innerHTML = `
+    <div class="card" style="margin-top:8px;margin-bottom:16px">
+      <div class="dashboard-card-title">${b?.icon || ''} ${b?.label || bin} <span style="font-weight:400;color:#6E7681">(${projects.length})</span></div>
+      ${projects.map(p => `
+        <div style="display:flex;align-items:center;justify-content:space-between;padding:8px 0;border-bottom:1px solid #0D1117">
+          <div>
+            <div style="font-size:13px;color:#E6EDF3">${esc(p.name)}</div>
+            <div style="font-size:11px;color:#6E7681">${esc(p.client_name || '')}</div>
+          </div>
+          <button class="btn btn-sm" onclick="unarchiveProject(${p.id})">Restore</button>
+        </div>
+      `).join('')}
+    </div>
   `;
 }
 
@@ -515,7 +861,7 @@ function esc(s) {
 
 // ── Projects Table ──
 function renderProjects(c) {
-  const projects = state.projects.filter(p => !p.is_fizzled);
+  const projects = state.projects.filter(p => !p.archived);
   const sorted = [...projects].sort((a, b) => (b.updated_at || '').localeCompare(a.updated_at || ''));
 
   c.innerHTML = `
@@ -551,7 +897,8 @@ function renderProjects(c) {
       ${sorted.map(p => {
         const stg = STAGES.find(s => s.key === p.stage) || STAGES[0];
         return `
-          <div class="mobile-project-item" onclick="openProject(${p.id})" data-stage="${p.stage}" data-name="${esc(p.name).toLowerCase()}">
+          <div class="mobile-project-item" onclick="openProject(${p.id})" data-stage="${p.stage}" data-name="${esc(p.name).toLowerCase()}" style="${isContractNeedsReview(p) ? 'border-color:#DA3633' : ''}">
+            ${isContractNeedsReview(p) ? '<div style="background:#DA3633;color:#fff;font-size:10px;font-weight:600;padding:4px 8px;border-radius:4px;margin-bottom:8px;text-align:center;letter-spacing:0.03em">REVIEW — SEND TO DESIGN & INSTALL</div>' : ''}
             <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:6px">
               <div>
                 <div style="font-size:14px;font-weight:500;color:#E6EDF3">${esc(p.name)}</div>
@@ -625,7 +972,20 @@ function openProject(id) {
   const installChecks = getChecklistState(p.id, 'install');
 
   const body = document.getElementById('modal-body');
+  const needsReview = isContractNeedsReview(p);
   body.innerHTML = `
+    ${needsReview ? `
+      <div style="background:#1A0D0D;border:1px solid #DA3633;border-radius:10px;padding:14px 16px;margin-bottom:16px">
+        <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px">
+          <div style="width:10px;height:10px;border-radius:50%;background:#DA3633;animation:pulse 1.5s infinite"></div>
+          <span style="font-size:13px;font-weight:600;color:#F85149">REVIEW REQUIRED — SEND TO DESIGN & INSTALL</span>
+        </div>
+        <div style="font-size:12px;color:#8B949E;margin-bottom:12px">This project has moved to contract. Review the details and send to Chris (Design) and Clint (Install) to begin the handoff.</div>
+        <button class="btn-primary" onclick="markContractReviewed(${p.id})" style="background:#238636;padding:10px 20px;font-size:13px">
+          ✓ Mark Reviewed & Send to Design/Install
+        </button>
+      </div>
+    ` : ''}
     <div class="tabs" id="modal-tabs">
       <div class="tab active" onclick="switchModalTab('overview')">Overview</div>
       <div class="tab" onclick="switchModalTab('design')">Design</div>
@@ -690,6 +1050,42 @@ function switchModalTab(tab) {
           <div style="font-size:13px;color:#C9D1D9;line-height:1.6">${esc(p.description)}</div>
         </div>
       ` : ''}
+      ${(() => {
+        const gbbGroup = getGBBGroup(p.id);
+        const gbbTier = getGBBTier(p.id);
+        if (gbbGroup) {
+          const goodP = state.projects.find(x => x.id === gbbGroup.good);
+          const betterP = state.projects.find(x => x.id === gbbGroup.better);
+          const bestP = state.projects.find(x => x.id === gbbGroup.best);
+          return `
+            <div class="dashboard-card" style="margin-top:14px">
+              <div class="dashboard-card-title">
+                <span>Good / Better / Best Group</span>
+                <span style="font-size:12px;font-weight:500;padding:2px 8px;border-radius:4px;background:${gbbTier === 'better' ? '#0D1626;color:#58A6FF' : gbbTier === 'best' ? '#0D1A0E;color:#3FB950' : '#161B22;color:#6E7681'}">${gbbTier ? gbbTier.toUpperCase() : ''}</span>
+              </div>
+              <div style="display:flex;flex-direction:column;gap:6px">
+                ${[{label:'Good', proj:goodP, id:gbbGroup.good}, {label:'Better', proj:betterP, id:gbbGroup.better}, {label:'Best', proj:bestP, id:gbbGroup.best}].map(t => `
+                  <div style="display:flex;align-items:center;justify-content:space-between;padding:8px 10px;border-radius:6px;background:${t.id === p.id ? '#0D1626;border:1px solid #1565C0' : '#0D1117;border:1px solid #1C2333'};cursor:${t.id !== p.id ? 'pointer' : 'default'}" ${t.id !== p.id ? `onclick="openProject(${t.id})"` : ''}>
+                    <div>
+                      <span style="font-size:11px;font-weight:600;color:#6E7681;text-transform:uppercase">${t.label}</span>
+                      <div style="font-size:13px;color:#E6EDF3;margin-top:2px">${t.proj ? esc(t.proj.name) : 'Unknown'}</div>
+                    </div>
+                    ${canSee('financials') && t.proj ? `<span style="font-size:13px;font-weight:500;color:${t.label === 'Better' ? '#58A6FF' : '#6E7681'}">${fmt(t.proj.total)}${t.label === 'Better' ? ' ★' : ''}</span>` : ''}
+                  </div>
+                `).join('')}
+              </div>
+              <div style="margin-top:10px;font-size:11px;color:#6E7681">★ Pipeline value uses the Better amount</div>
+              <button class="btn btn-sm btn-danger" onclick="showGBBLinkDialog(${p.id})" style="margin-top:8px">Manage GBB Link</button>
+            </div>`;
+        } else {
+          return `
+            <div class="dashboard-card" style="margin-top:14px">
+              <div class="dashboard-card-title">Good / Better / Best</div>
+              <div style="font-size:12px;color:#6E7681;margin-bottom:10px">Link this project to a Good/Better/Best group to track related bids together.</div>
+              <button class="btn btn-sm" onclick="showGBBLinkDialog(${p.id})">Link to GBB Group</button>
+            </div>`;
+        }
+      })()}
     `;
   } else if (tab === 'design') {
     renderChecklistTab(tc, p, 'design');
@@ -863,7 +1259,7 @@ function getEventsForDate(dateStr) {
     })
     .map(p => {
       const stg = STAGES.find(s => s.key === p.stage);
-      const colorMap = { lead: 'gray', proposal: 'blue', sent: 'amber', needs_approval: 'red', contract: 'green' };
+      const colorMap = { lead: 'gray', proposal: 'blue', sent: 'amber', contract: 'green' };
       return { id: p.id, name: p.name, color: colorMap[p.stage] || 'gray' };
     });
 }
@@ -1448,7 +1844,7 @@ async function syncJetbuilt() {
         const existing = existingMap[enriched.id];
         if (existing) {
           // Preserve Valiant-only data that Jetbuilt doesn't hold
-          enriched.is_fizzled = existing.is_fizzled;
+          enriched.archived = existing.archived;
         }
         return enriched;
       });
