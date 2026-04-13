@@ -731,16 +731,28 @@ td.today .cal-day-num {
 }
 
 
-/* ── Right Panel (Notes + Messages) ── */
+
+/* ── Global Right Command Panel ── */
+#right-panel {
+  position: fixed;
+  right: 0;
+  top: 60px;
+  bottom: 0;
+  display: flex;
+  align-items: stretch;
+  z-index: 50;
+  pointer-events: none;
+}
+#right-panel > * { pointer-events: all; }
+
 .rpanel-strip {
   width: 44px;
   background: #0D1117;
-  border: 1px solid #1C2333;
-  border-radius: 10px;
+  border-left: 1px solid #1C2333;
   display: flex;
   flex-direction: column;
   align-items: center;
-  padding: 8px 0;
+  padding: 10px 0;
   gap: 4px;
 }
 .rpanel-icon {
@@ -757,7 +769,7 @@ td.today .cal-day-num {
   -webkit-tap-highlight-color: transparent;
 }
 .rpanel-icon:hover { background: #161B22; color: #C9D1D9; }
-.rpanel-icon-active { background: #0D1626 !important; color: #58A6FF !important; }
+.rpanel-icon-active { background: #0D1626 !important; color: #58A6FF !important; border: 1px solid #1565C044; }
 .rpanel-badge {
   position: absolute;
   top: 2px; right: 2px;
@@ -774,27 +786,37 @@ td.today .cal-day-num {
   padding: 0 3px;
   line-height: 1;
 }
-.rpanel-badge-alert { background: #DA3633; }
 .rpanel-content {
-  width: 260px;
+  width: 280px;
   background: #0D1117;
-  border: 1px solid #1C2333;
-  border-radius: 10px;
-  margin-right: 8px;
+  border-left: 1px solid #1C2333;
   display: flex;
   flex-direction: column;
-  max-height: calc(100vh - 80px);
   overflow: hidden;
 }
+.rpanel-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 14px 10px;
+  border-bottom: 1px solid #1C2333;
+  flex-shrink: 0;
+}
+.rpanel-header-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: #E6EDF3;
+}
+.rpanel-body {
+  flex: 1;
+  overflow-y: auto;
+  padding: 12px;
+}
+
+/* Push main content left of the icon strip */
+#main { padding-right: 44px; }
+
 @media (max-width: 768px) {
-  .rpanel-strip { display: none; }
-  .rpanel-content {
-    position: fixed;
-    top: 52px; right: 0; bottom: 64px;
-    width: 88vw; max-width: 300px;
-    margin-right: 0;
-    border-radius: 10px 0 0 10px;
-    z-index: 60;
-    max-height: none;
-  }
+  #right-panel { display: none; }
+  #main { padding-right: 0; }
 }
