@@ -58,7 +58,10 @@ const state = {
   calendarView: 'month',
   syncing: false,
   timelineMode: localStorage.getItem('vi_timeline_mode') || 'estimated',
-  bookedDates: JSON.parse(localStorage.getItem('vi_booked_dates') || '{}')
+  bookedDates: JSON.parse(localStorage.getItem('vi_booked_dates') || '{}'),
+  todos: JSON.parse(localStorage.getItem('vi_todos') || '{}'),
+  tasks: JSON.parse(localStorage.getItem('vi_tasks') || '[]'),
+  widgetTab: 'todo'
 };
 
 // ── Team Roster ──
@@ -1040,6 +1043,364 @@ function renderCurrentPage() {
   }
 }
 
+// ── To-Do List (per-role) ──
+// Storage: vi_todos = { role: [{id, text, done, doneAt}] }
+
+function getTodos(role) {
+  return (state.todos[role] || []);
+}
+
+function addTodo(text) {
+  const role = state.dashboardView || currentUserRole;
+  if (!state.todos[role]) state.todos[role] = [];
+  state.todos[role].unshift({ id: Date.now(), text, done: false, doneAt: null });
+  save('vi_todos', state.todos);
+  renderCurrentPage();
+}
+
+function toggleTodo(id) {
+  const role = state.dashboardView || currentUserRole;
+  const item = (state.todos[role] || []).find(t => t.id === id);
+  if (!item) return;
+  item.done = !item.done;
+  item.doneAt = item.done ? new Date().toISOString() : null;
+  save('vi_todos', state.todos);
+  renderCurrentPage();
+}
+
+function deleteTodo(id) {
+  const role = state.dashboardView || currentUserRole;
+  state.todos[role] = (state.todos[role] || []).filter(t => t.id !== id);
+  save('vi_todos', state.todos);
+  renderCurrentPage();
+}
+
+function clearCompletedTodos() {
+  const role = state.dashboardView || currentUserRole;
+  state.todos[role] = (state.todos[role] || []).filter(t => !t.done);
+  save('vi_todos', state.todos);
+  renderCurrentPage();
+}
+
+// ── Time-Sensitive Tasks ──
+// Stored tasks: vi_tasks = [{id, text, dueDate, projectId, memberId, done, doneAt}]
+// Derived tasks come from incomplete project checklists for the current role (not stored)
+
+function getTaskUrgency(dueDate) {
+  if (!dueDate) return { label: '', color: '#6E7681', bg: 'transparent', border: '#1C2333' };
+  const now = new Date(); now.setHours(0,0,0,0);
+  const due = new Date(dueDate); due.setHours(0,0,0,0);
+  const diff = Math.round((due - now) / 86400000);
+  if (diff < 0)  return { label: 'Overdue',   color: '#F85149', bg: '#1A0D0D', border: '#DA363344' };
+  if (diff === 0) return { label: 'Today',    color: '#D29922', bg: '#1A130D', border: '#9E6A0344' };
+  if (diff <= 3)  return { label: `${diff}d`,  color: '#58A6FF', bg: '#0D1626', border: '#1565C044' };
+  if (diff <= 7)  return { label: `${diff}d`,  color: '#8B949E', bg: '#0D1117', border: '#1C2333' };
+  return              { label: fmtDate(dueDate), color: '#6E7681', bg: '#0D1117', border: '#1C2333' };
+}
+
+function addTask(text, dueDate, projectId) {
+  const activeMemberId = getActiveTeamMemberId();
+  state.tasks.push({
+    id: Date.now(),
+    text,
+    dueDate: dueDate || '',
+    projectId: projectId || null,
+    memberId: activeMemberId,
+    done: false,
+    doneAt: null
+  });
+  // Sort by due date ascending, undated at end
+  state.tasks.sort((a, b) => {
+    if (!a.dueDate && !b.dueDate) return 0;
+    if (!a.dueDate) return 1;
+    if (!b.dueDate) return -1;
+    return a.dueDate.localeCompare(b.dueDate);
+  });
+  save('vi_tasks', state.tasks);
+  renderCurrentPage();
+}
+
+function toggleTask(id) {
+  const task = state.tasks.find(t => t.id === id);
+  if (!task) return;
+  task.done = !task.done;
+  task.doneAt = task.done ? new Date().toISOString() : null;
+  save('vi_tasks', state.tasks);
+  renderCurrentPage();
+}
+
+function deleteTask(id) {
+  state.tasks = state.tasks.filter(t => t.id !== id);
+  save('vi_tasks', state.tasks);
+  renderCurrentPage();
+}
+
+// Derive tasks from project checklists for the current role
+function getDerivedTasks(role) {
+  const derived = [];
+  const activeProjects = state.projects.filter(p => !p.archived);
+
+  if (role === 'design' || role === 'admin') {
+    activeProjects.forEach(p => {
+      if (!['proposal','sent','contract'].includes(p.stage)) return;
+      p.systems.forEach(sys => {
+        const template = TEMPLATES.design[sys];
+        if (!template) return;
+        const checkKey = `${p.id}_design_${sys}`;
+        const checks = state.checklists[checkKey] || {};
+        const incomplete = template.items.filter((_, i) => !checks[i]);
+        if (incomplete.length > 0) {
+          derived.push({
+            id: `derived_design_${p.id}_${sys}`,
+            text: `${template.name}: ${incomplete.length} item${incomplete.length !== 1 ? 's' : ''} remaining`,
+            projectId: p.id,
+            projectName: p.name,
+            dueDate: p.start_date || '',
+            source: 'design',
+            done: false
+          });
+        }
+      });
+    });
+  }
+
+  if (role === 'installer' || role === 'project_manager' || role === 'admin') {
+    activeProjects.filter(p => p.stage === 'contract').forEach(p => {
+      p.systems.forEach(sys => {
+        const template = TEMPLATES.install[sys];
+        if (!template) return;
+        const checkKey = `${p.id}_install_${sys}`;
+        const checks = state.checklists[checkKey] || {};
+        const incomplete = template.items.filter((_, i) => !checks[i]);
+        if (incomplete.length > 0) {
+          derived.push({
+            id: `derived_install_${p.id}_${sys}`,
+            text: `${template.name}: ${incomplete.length} item${incomplete.length !== 1 ? 's' : ''} remaining`,
+            projectId: p.id,
+            projectName: p.name,
+            dueDate: p.start_date || '',
+            source: 'install',
+            done: false
+          });
+        }
+      });
+    });
+  }
+
+  return derived;
+}
+
+function showAddTaskDialog() {
+  let d = document.getElementById('add-task-dialog');
+  if (d) { d.remove(); return; }
+  d = document.createElement('div');
+  d.id = 'add-task-dialog';
+  d.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.7);z-index:120;display:flex;align-items:center;justify-content:center;padding:20px';
+
+  const projectOptions = state.projects
+    .filter(p => !p.archived)
+    .map(p => `<option value="${p.id}">${esc(p.name)}</option>`)
+    .join('');
+
+  d.innerHTML = `
+    <div style="background:#161B22;border:1px solid #30363D;border-radius:12px;padding:20px;max-width:380px;width:100%">
+      <div style="font-size:15px;font-weight:600;color:#E6EDF3;margin-bottom:16px">Add Task</div>
+      <div class="form-group">
+        <label class="form-label">Task</label>
+        <input class="form-input" id="new-task-text" placeholder="What needs to get done?" autofocus>
+      </div>
+      <div class="form-row">
+        <div class="form-group">
+          <label class="form-label">Due Date</label>
+          <input class="form-input" type="date" id="new-task-date">
+        </div>
+        <div class="form-group">
+          <label class="form-label">Project <span style="color:#6E7681;font-weight:400">(optional)</span></label>
+          <select class="form-select" id="new-task-project">
+            <option value="">None</option>
+            ${projectOptions}
+          </select>
+        </div>
+      </div>
+      <div style="display:flex;gap:8px;margin-top:4px">
+        <button class="btn-primary" onclick="submitAddTask()" style="flex:1;padding:11px">Add Task</button>
+        <button class="btn" onclick="document.getElementById('add-task-dialog')?.remove()">Cancel</button>
+      </div>
+    </div>
+  `;
+  document.body.appendChild(d);
+  d.addEventListener('click', e => { if (e.target === d) d.remove(); });
+  document.getElementById('new-task-text')?.focus();
+
+  document.getElementById('new-task-text')?.addEventListener('keydown', e => {
+    if (e.key === 'Enter') submitAddTask();
+  });
+}
+
+function switchWidgetTab(tab) {
+  state.widgetTab = tab;
+  renderCurrentPage();
+}
+
+function submitAddTask() {
+  const text = document.getElementById('new-task-text')?.value?.trim();
+  const dueDate = document.getElementById('new-task-date')?.value || '';
+  const projectId = parseInt(document.getElementById('new-task-project')?.value) || null;
+  if (!text) { document.getElementById('new-task-text')?.focus(); return; }
+  addTask(text, dueDate, projectId);
+  document.getElementById('add-task-dialog')?.remove();
+}
+
+// ── Dashboard Widgets ──
+function renderTodoWidget(role) {
+  const all = getTodos(role);
+  const active = all.filter(t => !t.done);
+  const done = all.filter(t => t.done);
+
+  const roleLabel = DASHBOARD_ACCESS.find(d => d.key === role)?.label || role;
+  const roleColor = DASHBOARD_ACCESS.find(d => d.key === role)?.color || '#8B949E';
+
+  return `
+    <div class="dashboard-card" style="height:100%">
+      <div class="dashboard-card-title" style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px">
+        <span>To-Do <span style="font-size:10px;font-weight:400;color:${roleColor};padding:1px 6px;border-radius:3px;background:${roleColor}18;margin-left:4px">${roleLabel}</span></span>
+        ${active.length > 0 ? `<span style="font-size:11px;color:#6E7681;font-weight:400">${active.length} open</span>` : ''}
+      </div>
+
+      <div style="display:flex;gap:6px;margin-bottom:10px">
+        <input class="form-input" id="todo-input-${role}" placeholder="Add item…"
+          style="flex:1;padding:8px 10px;font-size:13px"
+          onkeydown="if(event.key==='Enter'){const v=this.value.trim();if(v){addTodo(v);this.value=''}}">
+        <button class="btn-primary" style="padding:8px 12px;font-size:13px;flex-shrink:0"
+          onclick="const v=document.getElementById('todo-input-${role}')?.value?.trim();if(v){addTodo(v);document.getElementById('todo-input-${role}').value=''}">+</button>
+      </div>
+
+      ${active.length === 0 && done.length === 0 ? `
+        <div style="text-align:center;padding:16px 0;color:#6E7681;font-size:12px">No items — add one above</div>
+      ` : ''}
+
+      <div style="display:flex;flex-direction:column;gap:2px">
+        ${active.map(t => `
+          <div style="display:flex;align-items:center;gap:8px;padding:7px 6px;border-radius:6px;background:#0D1117;border:1px solid #1C2333;margin-bottom:2px">
+            <div onclick="toggleTodo(${t.id})" style="width:16px;height:16px;border-radius:4px;border:1.5px solid #30363D;cursor:pointer;flex-shrink:0;display:flex;align-items:center;justify-content:center;-webkit-tap-highlight-color:transparent"></div>
+            <span style="flex:1;font-size:13px;color:#C9D1D9;line-height:1.3">${esc(t.text)}</span>
+            <button onclick="deleteTodo(${t.id})" style="background:none;border:none;color:#6E7681;cursor:pointer;padding:2px 4px;font-size:14px;line-height:1;-webkit-tap-highlight-color:transparent" title="Remove">×</button>
+          </div>
+        `).join('')}
+      </div>
+
+      ${done.length > 0 ? `
+        <details style="margin-top:8px">
+          <summary style="font-size:11px;color:#6E7681;cursor:pointer;list-style:none;display:flex;align-items:center;gap:6px;-webkit-tap-highlight-color:transparent">
+            <svg width="10" height="10" viewBox="0 0 10 10" fill="none"><path d="M2 4l3 3 3-3" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/></svg>
+            ${done.length} completed
+            <span onclick="event.preventDefault();event.stopPropagation();clearCompletedTodos()" style="color:#F85149;margin-left:auto;font-size:10px">Clear all</span>
+          </summary>
+          <div style="margin-top:6px;display:flex;flex-direction:column;gap:2px">
+            ${done.slice(0, 8).map(t => `
+              <div style="display:flex;align-items:center;gap:8px;padding:6px;border-radius:6px;opacity:0.5">
+                <div onclick="toggleTodo(${t.id})" style="width:16px;height:16px;border-radius:4px;border:1.5px solid #3FB950;background:#3FB95022;cursor:pointer;flex-shrink:0;display:flex;align-items:center;justify-content:center">
+                  <svg width="9" height="9" viewBox="0 0 9 9" fill="none"><path d="M1.5 4.5l2 2L7.5 2" stroke="#3FB950" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+                </div>
+                <span style="flex:1;font-size:12px;color:#6E7681;text-decoration:line-through">${esc(t.text)}</span>
+                <button onclick="deleteTodo(${t.id})" style="background:none;border:none;color:#6E7681;cursor:pointer;padding:2px 4px;font-size:14px">×</button>
+              </div>
+            `).join('')}
+          </div>
+        </details>
+      ` : ''}
+    </div>
+  `;
+}
+
+function renderTasksWidget(role) {
+  const memberId = getActiveTeamMemberId();
+  const manualTasks = state.tasks.filter(t => t.memberId === memberId && !t.done);
+  const completedTasks = state.tasks.filter(t => t.memberId === memberId && t.done);
+  const derived = getDerivedTasks(role);
+
+  // Merge: derived first if no due date context, then manual sorted by date
+  const allActive = [
+    ...derived,
+    ...manualTasks.sort((a, b) => {
+      if (!a.dueDate && !b.dueDate) return 0;
+      if (!a.dueDate) return 1;
+      if (!b.dueDate) return -1;
+      return a.dueDate.localeCompare(b.dueDate);
+    })
+  ];
+
+  return `
+    <div class="dashboard-card" style="height:100%">
+      <div class="dashboard-card-title" style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px">
+        <span>Tasks</span>
+        <button class="btn btn-sm" onclick="showAddTaskDialog()" style="font-size:11px;padding:4px 10px">+ Add</button>
+      </div>
+
+      ${allActive.length === 0 && completedTasks.length === 0 ? `
+        <div style="text-align:center;padding:20px 0;color:#6E7681;font-size:12px">
+          No tasks — derived tasks appear here as checklists are started
+        </div>
+      ` : ''}
+
+      <div style="display:flex;flex-direction:column;gap:4px">
+        ${allActive.map(t => {
+          const urgency = getTaskUrgency(t.dueDate);
+          const proj = t.projectId ? state.projects.find(p => p.id === t.projectId) : null;
+          const isDerived = !!t.source;
+
+          return `
+            <div style="display:flex;align-items:flex-start;gap:8px;padding:9px 10px;border-radius:8px;background:${urgency.bg};border:1px solid ${urgency.border};cursor:${isDerived ? 'pointer' : 'default'}"
+              ${isDerived ? `onclick="openProject(${t.projectId})"` : ''}>
+              ${!isDerived ? `
+                <div onclick="event.stopPropagation();toggleTask(${t.id})" style="width:16px;height:16px;border-radius:4px;border:1.5px solid #30363D;cursor:pointer;flex-shrink:0;margin-top:1px;-webkit-tap-highlight-color:transparent"></div>
+              ` : `
+                <div style="width:16px;height:16px;border-radius:4px;background:${t.source === 'design' ? '#D2992222' : '#58A6FF22'};border:1.5px solid ${t.source === 'design' ? '#D29922' : '#58A6FF'};flex-shrink:0;margin-top:1px;display:flex;align-items:center;justify-content:center">
+                  <svg width="8" height="8" viewBox="0 0 8 8" fill="none"><path d="M1 4h6M4 1v6" stroke="${t.source === 'design' ? '#D29922' : '#58A6FF'}" stroke-width="1.3" stroke-linecap="round"/></svg>
+                </div>
+              `}
+              <div style="flex:1;min-width:0">
+                <div style="font-size:13px;color:#C9D1D9;line-height:1.3">${esc(t.text)}</div>
+                ${(proj || t.projectName) ? `<div style="font-size:11px;color:#6E7681;margin-top:2px">📁 ${esc(proj?.name || t.projectName || '')}</div>` : ''}
+              </div>
+              <div style="display:flex;flex-direction:column;align-items:flex-end;gap:3px;flex-shrink:0">
+                ${urgency.label ? `<span style="font-size:10px;font-weight:600;color:${urgency.color};white-space:nowrap">${urgency.label}</span>` : ''}
+                ${!isDerived ? `<button onclick="event.stopPropagation();deleteTask(${t.id})" style="background:none;border:none;color:#6E7681;cursor:pointer;padding:0;font-size:14px;line-height:1">×</button>` : ''}
+              </div>
+            </div>
+          `;
+        }).join('')}
+      </div>
+
+      ${completedTasks.length > 0 ? `
+        <details style="margin-top:10px">
+          <summary style="font-size:11px;color:#6E7681;cursor:pointer;list-style:none;display:flex;align-items:center;gap:6px;-webkit-tap-highlight-color:transparent">
+            <svg width="10" height="10" viewBox="0 0 10 10" fill="none"><path d="M2 4l3 3 3-3" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/></svg>
+            ${completedTasks.length} completed
+          </summary>
+          <div style="margin-top:6px;display:flex;flex-direction:column;gap:2px">
+            ${completedTasks.slice(0, 6).map(t => {
+              const proj = t.projectId ? state.projects.find(p => p.id === t.projectId) : null;
+              return `
+                <div style="display:flex;align-items:center;gap:8px;padding:7px;border-radius:6px;opacity:0.45">
+                  <div onclick="toggleTask(${t.id})" style="width:16px;height:16px;border-radius:4px;border:1.5px solid #3FB950;background:#3FB95022;cursor:pointer;flex-shrink:0;display:flex;align-items:center;justify-content:center">
+                    <svg width="9" height="9" viewBox="0 0 9 9" fill="none"><path d="M1.5 4.5l2 2L7.5 2" stroke="#3FB950" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+                  </div>
+                  <div style="flex:1;min-width:0">
+                    <div style="font-size:12px;color:#6E7681;text-decoration:line-through">${esc(t.text)}</div>
+                    ${proj ? `<div style="font-size:10px;color:#6E7681">${esc(proj.name)}</div>` : ''}
+                  </div>
+                  <button onclick="deleteTask(${t.id})" style="background:none;border:none;color:#6E7681;cursor:pointer;padding:2px 4px;font-size:14px">×</button>
+                </div>
+              `;
+            }).join('')}
+          </div>
+        </details>
+      ` : ''}
+    </div>
+  `;
+}
+
 // ── Dashboard ──
 function renderDashboard(c) {
   const projects = state.projects.filter(p => !p.archived);
@@ -1165,6 +1526,32 @@ function renderDashboard(c) {
       }).join('')}
     </div>
     <div id="archive-expanded"></div>
+
+    ${(() => {
+      const isMobile = window.innerWidth <= 768;
+      const tab = state.widgetTab;
+      const tabBar = isMobile ? `
+        <div class="widget-tab-bar">
+          <div class="widget-tab ${tab === 'todo' ? 'widget-tab-active' : ''}" onclick="switchWidgetTab('todo')">
+            <svg width="13" height="13" viewBox="0 0 13 13" fill="none"><rect x="1" y="1" width="4" height="4" rx="1" stroke="currentColor" stroke-width="1.2"/><rect x="1" y="8" width="4" height="4" rx="1" stroke="currentColor" stroke-width="1.2"/><path d="M7 3h5M7 10h5" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/></svg>
+            To-Do
+          </div>
+          <div class="widget-tab ${tab === 'tasks' ? 'widget-tab-active' : ''}" onclick="switchWidgetTab('tasks')">
+            <svg width="13" height="13" viewBox="0 0 13 13" fill="none"><path d="M2 6.5l2.5 2.5L11 3" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/></svg>
+            Tasks
+          </div>
+        </div>
+      ` : '';
+      const showTodo  = !isMobile || tab === 'todo';
+      const showTasks = !isMobile || tab === 'tasks';
+      return `
+        ${tabBar}
+        <div class="widget-grid" style="display:grid;grid-template-columns:1fr 1fr;gap:14px;align-items:start">
+          ${showTodo  ? `<div>${renderTodoWidget(activeView)}</div>` : ''}
+          ${showTasks ? `<div>${renderTasksWidget(activeView)}</div>` : ''}
+        </div>
+      `;
+    })()}
 
     ${renderRecentActivity()}
   `;
