@@ -1146,13 +1146,40 @@ function deleteTask(id) {
 }
 
 // Derive tasks from project checklists for the current role
+// ── Project Assignments ──
+// Structure: state.assignments = { [projectId]: { design: [memberId], install: [memberId] } }
+
+function getProjectAssignment(projectId) {
+  return state.assignments[projectId] || { design: [], install: [] };
+}
+
+function isAssignedTo(projectId, phase, memberId) {
+  const a = getProjectAssignment(projectId);
+  return (a[phase] || []).includes(memberId);
+}
+
+function toggleProjectAssignment(projectId, phase, memberId) {
+  if (!state.assignments[projectId]) state.assignments[projectId] = { design: [], install: [] };
+  const list = state.assignments[projectId][phase] || [];
+  const idx = list.indexOf(memberId);
+  if (idx >= 0) list.splice(idx, 1);
+  else list.push(memberId);
+  state.assignments[projectId][phase] = list;
+  save('vi_assignments', state.assignments);
+  // Re-render modal if open
+  if (state.currentProject?.id === projectId) openProject(projectId);
+}
+
 function getDerivedTasks(role) {
   const derived = [];
   const activeProjects = state.projects.filter(p => !p.archived);
+  const memberId = getActiveTeamMemberId();
 
   if (role === 'design' || role === 'admin') {
     activeProjects.forEach(p => {
       if (!['proposal','sent','contract'].includes(p.stage)) return;
+      // Only show if this member is assigned to design on this project (admin sees all)
+      if (role !== 'admin' && !isAssignedTo(p.id, 'design', memberId)) return;
       p.systems.forEach(sys => {
         const template = TEMPLATES.design[sys];
         if (!template) return;
@@ -1176,6 +1203,8 @@ function getDerivedTasks(role) {
 
   if (role === 'installer' || role === 'project_manager' || role === 'admin') {
     activeProjects.filter(p => p.stage === 'contract').forEach(p => {
+      // Only show if this member is assigned to install on this project (admin sees all)
+      if (role !== 'admin' && !isAssignedTo(p.id, 'install', memberId)) return;
       p.systems.forEach(sys => {
         const template = TEMPLATES.install[sys];
         if (!template) return;
@@ -1401,7 +1430,7 @@ function renderTasksWidget(role) {
         </div>
       ` : ''}
 
-      <div style="display:flex;flex-direction:column;gap:4px">
+      <div style="display:flex;flex-direction:column;gap:4px;max-height:320px;overflow-y:auto;padding-right:2px">
         ${allActive.map(t => {
           const urgency = getTaskUrgency(t.dueDate);
           const proj = t.projectId ? state.projects.find(p => p.id === t.projectId) : null;
@@ -1926,6 +1955,38 @@ function switchModalTab(tab) {
           <div>${p.systems.map(systemTagHTML).join(' ')}</div>
         </div>
       ` : ''}
+      <div class="dashboard-card" style="margin-top:14px">
+        <div class="dashboard-card-title">Project Team</div>
+        ${['design', 'install'].map(phase => {
+          const assigned = getProjectAssignment(p.id)[phase] || [];
+          const eligible = state.team.filter(m =>
+            phase === 'design'
+              ? m.access.includes('design') || m.access.includes('admin')
+              : m.access.includes('installer') || m.access.includes('project_manager') || m.access.includes('admin')
+          );
+          const phaseColor = phase === 'design' ? '#D29922' : '#58A6FF';
+          const phaseLabel = phase === 'design' ? 'Design' : 'Install';
+          return `
+            <div style="margin-bottom:10px">
+              <div style="font-size:11px;font-weight:600;color:${phaseColor};text-transform:uppercase;letter-spacing:0.06em;margin-bottom:6px">${phaseLabel}</div>
+              <div style="display:flex;flex-wrap:wrap;gap:6px">
+                ${eligible.map(m => {
+                  const active = assigned.includes(m.id);
+                  const color = DASHBOARD_ACCESS.find(d => d.key === m.primaryRole)?.color || '#6E7681';
+                  return `
+                    <div onclick="toggleProjectAssignment(${p.id},'${phase}',${m.id})"
+                      style="display:flex;align-items:center;gap:6px;padding:5px 10px;border-radius:20px;cursor:pointer;border:1px solid ${active ? color + '66' : '#1C2333'};background:${active ? color + '18' : '#0D1117'};-webkit-tap-highlight-color:transparent">
+                      <div style="width:20px;height:20px;border-radius:50%;background:${color}22;border:1px solid ${color}66;display:flex;align-items:center;justify-content:center;font-size:9px;font-weight:600;color:${color}">${esc(m.initials || m.name.slice(0,2).toUpperCase())}</div>
+                      <span style="font-size:12px;color:${active ? '#E6EDF3' : '#6E7681'};font-weight:${active ? '500' : '400'}">${esc(m.name)}</span>
+                      ${active ? `<svg width="10" height="10" viewBox="0 0 10 10" fill="none"><path d="M2 5l2.5 2.5L8 3" stroke="${color}" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>` : ''}
+                    </div>`;
+                }).join('')}
+                ${eligible.length === 0 ? `<span style="font-size:12px;color:#6E7681">No ${phaseLabel.toLowerCase()} team members yet</span>` : ''}
+              </div>
+            </div>
+          `;
+        }).join('')}
+      </div>
       <div class="dashboard-card" style="margin-top:14px">
         <div class="dashboard-card-title">Sales Indicators</div>
         <div onclick="toggleLikelyToClose(${p.id})" style="display:flex;align-items:center;justify-content:space-between;padding:10px 12px;border-radius:8px;cursor:pointer;background:${isLikelyToClose(p.id) ? '#0D1A0E;border:1px solid #238636' : '#0D1117;border:1px solid #1C2333'};-webkit-tap-highlight-color:transparent">
