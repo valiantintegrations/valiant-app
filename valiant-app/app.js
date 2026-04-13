@@ -51,8 +51,8 @@ const STAGES = [
   { key: 'lead', label: 'Lead', color: 'gray' },
   { key: 'proposal', label: 'Proposal', color: 'blue' },
   { key: 'sent', label: 'Sent', color: 'amber' },
-  { key: 'approved', label: 'Approved', color: 'green' },
-  { key: 'install', label: 'Install', color: 'green' }
+  { key: 'needs_approval', label: 'Needs Approval', color: 'red' },
+  { key: 'contract', label: 'Contract', color: 'green' }
 ];
 
 function mapStage(raw) {
@@ -60,10 +60,11 @@ function mapStage(raw) {
   const s = raw.toLowerCase();
   if (s.includes('lead') || s.includes('prospect')) return 'lead';
   if (s.includes('propos') || s.includes('design') || s.includes('bid') || s.includes('estimat')) return 'proposal';
-  if (s.includes('sent') || s.includes('present') || s.includes('pending') || s.includes('review')) return 'sent';
-  if (s.includes('approv') || s.includes('contract') || s.includes('accept') || s.includes('won') || s.includes('sold') || s.includes('awarded')) return 'approved';
-  if (s.includes('install') || s.includes('progress') || s.includes('active') || s.includes('current') || s.includes('in progress') || s.includes('construction')) return 'install';
-  if (s.includes('complete') || s.includes('close') || s.includes('done') || s.includes('finish') || s.includes('final')) return 'install';
+  if (s.includes('sent') || s.includes('present') || s.includes('pending') || s.includes('review') || s.includes('needs approval')) return 'sent';
+  if (s.includes('approv') && !s.includes('needs')) return 'needs_approval';
+  if (s.includes('contract') || s.includes('accept') || s.includes('won') || s.includes('sold') || s.includes('awarded')) return 'contract';
+  if (s.includes('install') || s.includes('progress') || s.includes('active') || s.includes('current') || s.includes('in progress') || s.includes('construction')) return 'contract';
+  if (s.includes('complete') || s.includes('close') || s.includes('done') || s.includes('finish') || s.includes('final')) return 'contract';
   if (s.includes('lost') || s.includes('dead') || s.includes('cancel')) return 'lead';
   return 'lead';
 }
@@ -417,8 +418,8 @@ function renderDashboard(c) {
   });
 
   const totalValue = projects.reduce((s, p) => s + p.total, 0);
-  const activeCount = projects.filter(p => p.stage === 'approved' || p.stage === 'install').length;
-  const proposalCount = byStage.proposal.length + byStage.sent.length;
+  const activeCount = projects.filter(p => p.stage === 'contract').length;
+  const proposalCount = byStage.proposal.length + byStage.sent.length + byStage.needs_approval.length;
 
   c.innerHTML = `
     <div class="metrics-grid">
@@ -433,14 +434,14 @@ function renderDashboard(c) {
         <div class="metric-sub">All active projects</div>
       </div>
       <div class="metric-card">
-        <div class="metric-label">Active Jobs</div>
+        <div class="metric-label">Contracted</div>
         <div class="metric-value">${activeCount}</div>
-        <div class="metric-sub">Approved + Installing</div>
+        <div class="metric-sub">Signed contracts</div>
       </div>
       <div class="metric-card">
         <div class="metric-label">Open Proposals</div>
         <div class="metric-value">${proposalCount}</div>
-        <div class="metric-sub">Proposal + Sent</div>
+        <div class="metric-sub">Proposal + Sent + Needs Approval</div>
       </div>
     </div>
 
@@ -862,7 +863,7 @@ function getEventsForDate(dateStr) {
     })
     .map(p => {
       const stg = STAGES.find(s => s.key === p.stage);
-      const colorMap = { lead: 'gray', proposal: 'blue', sent: 'amber', approved: 'green', install: 'green' };
+      const colorMap = { lead: 'gray', proposal: 'blue', sent: 'amber', needs_approval: 'red', contract: 'green' };
       return { id: p.id, name: p.name, color: colorMap[p.stage] || 'gray' };
     });
 }
