@@ -213,7 +213,7 @@ body {
 /* ── Project Pipeline ── */
 .pipeline-grid {
   display: grid;
-  grid-template-columns: repeat(5, minmax(0, 1fr));
+  grid-template-columns: repeat(4, minmax(0, 1fr));
   gap: 10px; margin-bottom: 28px;
 }
 .pipeline-col {
@@ -524,6 +524,7 @@ td.today .cal-day-num {
   animation: spin 0.8s linear infinite;
 }
 @keyframes spin { to { transform: rotate(360deg); } }
+@keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.4; } }
 
 /* ── Vendor Cards ── */
 .vendors-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 12px; }
@@ -632,3 +633,50 @@ td.today .cal-day-num {
 ::-webkit-scrollbar-track { background: transparent; }
 ::-webkit-scrollbar-thumb { background: #30363D; border-radius: 3px; }
 ::-webkit-scrollbar-thumb:hover { background: #6E7681; }
+
+/* ── Drag & Drop ── */
+.pipeline-col.drag-over { background: #161B22; border-color: #58A6FF; border-style: dashed; }
+.archive-bin.drag-over { background: #1C2333; border-color: #58A6FF; border-style: dashed; }
+.project-card[draggable="true"] { cursor: grab; }
+.project-card[draggable="true"]:active { cursor: grabbing; }
+
+/* ── Archive Bins ── */
+.archive-row {
+  display: flex; gap: 8px; margin-bottom: 20px;
+}
+.archive-bin {
+  flex: 1;
+  display: flex; align-items: center; justify-content: center; gap: 6px;
+  padding: 12px; border-radius: 8px;
+  background: #0D1117; border: 1px dashed #30363D;
+  color: #6E7681; font-size: 12px; font-weight: 500;
+  transition: all 0.15s;
+  min-height: 44px;
+  cursor: default;
+}
+.archive-icon { font-size: 14px; }
+.archive-label { font-size: 12px; }
+.archive-count {
+  background: #30363D; color: #8B949E;
+  font-size: 10px; font-weight: 600;
+  padding: 1px 6px; border-radius: 10px;
+  cursor: pointer;
+}
+.archive-count:hover { background: #58A6FF; color: #fff; }
+
+/* ── Move Button (on project cards) ── */
+.move-btn {
+  background: none; border: none; color: #6E7681;
+  font-size: 18px; line-height: 1; cursor: pointer;
+  padding: 2px 6px; border-radius: 4px;
+  -webkit-tap-highlight-color: transparent;
+  transition: all 0.12s;
+}
+.move-btn:hover { background: #30363D; color: #E6EDF3; }
+
+/* ── GBB Badge ── */
+.gbb-badge {
+  font-size: 9px; font-weight: 600;
+  padding: 1px 5px; border-radius: 3px;
+  display: inline-block;
+}
