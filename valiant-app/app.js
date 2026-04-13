@@ -61,7 +61,10 @@ const state = {
   bookedDates: JSON.parse(localStorage.getItem('vi_booked_dates') || '{}'),
   todos: JSON.parse(localStorage.getItem('vi_todos') || '{}'),
   tasks: JSON.parse(localStorage.getItem('vi_tasks') || '[]'),
-  widgetTab: 'todo'
+  widgetTab: 'todo',
+  widgetFilter: 'week',
+  widgetCollapsed: false,
+  expandedCols: {}
 };
 
 // ── Team Roster ──
@@ -646,14 +649,21 @@ function onReorderDrop(e, targetId, stage) {
   const sourceId = parseInt(e.dataTransfer.getData('text/plain'));
   const reorderStage = e.dataTransfer.getData('reorder-stage');
 
-  // Only reorder if same stage
-  if (reorderStage !== stage || sourceId === targetId) return;
+  if (!sourceId) return;
+
+  // Cross-column drop: move to this column's stage
+  if (reorderStage !== stage) {
+    moveProjectToStage(sourceId, stage);
+    return;
+  }
+
+  // Same-column reorder
+  if (sourceId === targetId) return;
 
   const stageProjects = state.projects.filter(p => !p.archived && p.stage === stage);
   const sorted = sortByColumnOrder(stageProjects, stage);
   const ids = sorted.map(p => p.id);
 
-  // Remove source and insert before target
   const fromIdx = ids.indexOf(sourceId);
   if (fromIdx >= 0) ids.splice(fromIdx, 1);
   const toIdx = ids.indexOf(targetId);
@@ -1242,6 +1252,21 @@ function switchWidgetTab(tab) {
   renderCurrentPage();
 }
 
+function switchWidgetFilter(filter) {
+  state.widgetFilter = filter;
+  renderCurrentPage();
+}
+
+function toggleWidgetCollapsed() {
+  state.widgetCollapsed = !state.widgetCollapsed;
+  renderCurrentPage();
+}
+
+function toggleColExpanded(stage) {
+  state.expandedCols[stage] = !state.expandedCols[stage];
+  renderCurrentPage();
+}
+
 function submitAddTask() {
   const text = document.getElementById('new-task-text')?.value?.trim();
   const dueDate = document.getElementById('new-task-date')?.value || '';
@@ -1256,6 +1281,9 @@ function renderTodoWidget(role) {
   const all = getTodos(role);
   const active = all.filter(t => !t.done);
   const done = all.filter(t => t.done);
+  const showAll = state._todoExpanded;
+  const visible = showAll ? active : active.slice(0, 5);
+  const hidden = active.length - 5;
 
   const roleLabel = DASHBOARD_ACCESS.find(d => d.key === role)?.label || role;
   const roleColor = DASHBOARD_ACCESS.find(d => d.key === role)?.color || '#8B949E';
@@ -1280,7 +1308,7 @@ function renderTodoWidget(role) {
       ` : ''}
 
       <div style="display:flex;flex-direction:column;gap:2px">
-        ${active.map(t => `
+        ${visible.map(t => `
           <div style="display:flex;align-items:center;gap:8px;padding:7px 6px;border-radius:6px;background:#0D1117;border:1px solid #1C2333;margin-bottom:2px">
             <div onclick="toggleTodo(${t.id})" style="width:16px;height:16px;border-radius:4px;border:1.5px solid #30363D;cursor:pointer;flex-shrink:0;display:flex;align-items:center;justify-content:center;-webkit-tap-highlight-color:transparent"></div>
             <span style="flex:1;font-size:13px;color:#C9D1D9;line-height:1.3">${esc(t.text)}</span>
@@ -1288,6 +1316,16 @@ function renderTodoWidget(role) {
           </div>
         `).join('')}
       </div>
+
+      ${!showAll && hidden > 0 ? `
+        <div onclick="state._todoExpanded=true;renderCurrentPage()" style="font-size:11px;color:#58A6FF;cursor:pointer;padding:6px 0;text-align:center;-webkit-tap-highlight-color:transparent">
+          +${hidden} more
+        </div>
+      ` : showAll && active.length > 5 ? `
+        <div onclick="state._todoExpanded=false;renderCurrentPage()" style="font-size:11px;color:#6E7681;cursor:pointer;padding:6px 0;text-align:center">
+          Show less
+        </div>
+      ` : ''}
 
       ${done.length > 0 ? `
         <details style="margin-top:8px">
@@ -1315,31 +1353,51 @@ function renderTodoWidget(role) {
 
 function renderTasksWidget(role) {
   const memberId = getActiveTeamMemberId();
-  const manualTasks = state.tasks.filter(t => t.memberId === memberId && !t.done);
+  const filter = state.widgetFilter;
+
+  const now = new Date(); now.setHours(0,0,0,0);
+  const weekOut = new Date(now); weekOut.setDate(weekOut.getDate() + 7);
+
+  function isThisWeek(dueDate) {
+    if (!dueDate) return false;
+    const d = new Date(dueDate); d.setHours(0,0,0,0);
+    return d <= weekOut; // overdue + today + next 7 days
+  }
+
+  const allManual = state.tasks.filter(t => t.memberId === memberId && !t.done);
   const completedTasks = state.tasks.filter(t => t.memberId === memberId && t.done);
   const derived = getDerivedTasks(role);
 
-  // Merge: derived first if no due date context, then manual sorted by date
-  const allActive = [
-    ...derived,
-    ...manualTasks.sort((a, b) => {
-      if (!a.dueDate && !b.dueDate) return 0;
-      if (!a.dueDate) return 1;
-      if (!b.dueDate) return -1;
-      return a.dueDate.localeCompare(b.dueDate);
-    })
-  ];
+  const manualFiltered = filter === 'week'
+    ? allManual.filter(t => !t.dueDate || isThisWeek(t.dueDate))
+    : allManual;
+
+  const manualSorted = [...manualFiltered].sort((a, b) => {
+    if (!a.dueDate && !b.dueDate) return 0;
+    if (!a.dueDate) return 1;
+    if (!b.dueDate) return -1;
+    return a.dueDate.localeCompare(b.dueDate);
+  });
+
+  const allActive = [...derived, ...manualSorted];
+  const hiddenCount = filter === 'week' ? allManual.filter(t => t.dueDate && !isThisWeek(t.dueDate)).length : 0;
 
   return `
     <div class="dashboard-card" style="height:100%">
-      <div class="dashboard-card-title" style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px">
-        <span>Tasks</span>
-        <button class="btn btn-sm" onclick="showAddTaskDialog()" style="font-size:11px;padding:4px 10px">+ Add</button>
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px">
+        <div class="dashboard-card-title" style="margin-bottom:0">Tasks</div>
+        <div style="display:flex;align-items:center;gap:6px">
+          <div style="display:flex;background:#0D1117;border:1px solid #30363D;border-radius:5px;overflow:hidden;font-size:11px">
+            <div onclick="switchWidgetFilter('week')" style="padding:4px 10px;cursor:pointer;-webkit-tap-highlight-color:transparent;${filter === 'week' ? 'background:#1565C0;color:#58A6FF;font-weight:500' : 'color:#6E7681'}">This Week</div>
+            <div onclick="switchWidgetFilter('all')" style="padding:4px 10px;cursor:pointer;-webkit-tap-highlight-color:transparent;${filter === 'all' ? 'background:#1565C0;color:#58A6FF;font-weight:500' : 'color:#6E7681'}">All</div>
+          </div>
+          <button class="btn btn-sm" onclick="showAddTaskDialog()" style="font-size:11px;padding:4px 10px">+ Add</button>
+        </div>
       </div>
 
-      ${allActive.length === 0 && completedTasks.length === 0 ? `
-        <div style="text-align:center;padding:20px 0;color:#6E7681;font-size:12px">
-          No tasks — derived tasks appear here as checklists are started
+      ${allActive.length === 0 ? `
+        <div style="text-align:center;padding:16px 0;color:#6E7681;font-size:12px">
+          ${filter === 'week' ? 'No tasks due this week' : 'No tasks yet'}
         </div>
       ` : ''}
 
@@ -1371,6 +1429,12 @@ function renderTasksWidget(role) {
           `;
         }).join('')}
       </div>
+
+      ${filter === 'week' && hiddenCount > 0 ? `
+        <div onclick="switchWidgetFilter('all')" style="font-size:11px;color:#58A6FF;cursor:pointer;padding:6px 0;text-align:center;-webkit-tap-highlight-color:transparent">
+          +${hiddenCount} more — view all
+        </div>
+      ` : ''}
 
       ${completedTasks.length > 0 ? `
         <details style="margin-top:10px">
@@ -1467,6 +1531,55 @@ function renderDashboard(c) {
       </div>
     </div>
 
+    ${(() => {
+      const isMobile = window.innerWidth <= 768;
+      const tab = state.widgetTab;
+      const collapsed = state.widgetCollapsed;
+
+      // Count badge for header
+      const role = activeView;
+      const activeTodos = (state.todos[role] || []).filter(t => !t.done).length;
+      const activeTasks = state.tasks.filter(t => t.memberId === getActiveTeamMemberId() && !t.done).length;
+      const total = activeTodos + activeTasks;
+
+      const tabBar = (!collapsed && isMobile) ? `
+        <div class="widget-tab-bar">
+          <div class="widget-tab ${tab === 'todo' ? 'widget-tab-active' : ''}" onclick="switchWidgetTab('todo')">
+            <svg width="13" height="13" viewBox="0 0 13 13" fill="none"><rect x="1" y="1" width="4" height="4" rx="1" stroke="currentColor" stroke-width="1.2"/><rect x="1" y="8" width="4" height="4" rx="1" stroke="currentColor" stroke-width="1.2"/><path d="M7 3h5M7 10h5" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/></svg>
+            To-Do
+          </div>
+          <div class="widget-tab ${tab === 'tasks' ? 'widget-tab-active' : ''}" onclick="switchWidgetTab('tasks')">
+            <svg width="13" height="13" viewBox="0 0 13 13" fill="none"><path d="M2 6.5l2.5 2.5L11 3" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/></svg>
+            Tasks
+          </div>
+        </div>
+      ` : '';
+
+      const showTodo  = !collapsed && (!isMobile || tab === 'todo');
+      const showTasks = !collapsed && (!isMobile || tab === 'tasks');
+
+      return `
+        <div style="border:1px solid #1C2333;border-radius:10px;margin-bottom:20px;overflow:hidden">
+          <div onclick="toggleWidgetCollapsed()" style="display:flex;align-items:center;justify-content:space-between;padding:10px 14px;background:#161B22;cursor:pointer;-webkit-tap-highlight-color:transparent;user-select:none">
+            <div style="display:flex;align-items:center;gap:8px">
+              <span style="font-size:13px;font-weight:500;color:#C9D1D9">To-Do & Tasks</span>
+              ${total > 0 ? `<span style="font-size:10px;font-weight:600;padding:1px 7px;border-radius:10px;background:#1565C022;color:#58A6FF;border:1px solid #1565C044">${total}</span>` : ''}
+            </div>
+            <svg width="14" height="14" viewBox="0 0 14 14" fill="none" style="color:#6E7681;transition:transform 0.2s;transform:${collapsed ? 'rotate(-90deg)' : 'rotate(0deg)'}"><path d="M3 5l4 4 4-4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          </div>
+          ${!collapsed ? `
+            <div style="padding:12px 12px 8px">
+              ${tabBar}
+              <div class="widget-grid" style="display:grid;grid-template-columns:1fr 1fr;gap:12px;align-items:start">
+                ${showTodo  ? `<div>${renderTodoWidget(activeView)}</div>` : ''}
+                ${showTasks ? `<div>${renderTasksWidget(activeView)}</div>` : ''}
+              </div>
+            </div>
+          ` : ''}
+        </div>
+      `;
+    })()}
+
     <div class="section-header">
       <div class="section-title">Pipeline</div>
       <div style="display:flex;align-items:center;gap:8px">
@@ -1478,13 +1591,19 @@ function renderDashboard(c) {
       </div>
     </div>
     <div class="pipeline-grid">
-      ${STAGES.map(s => `
+      ${STAGES.map(s => {
+        const col = byStage[s.key] || [];
+        const LIMIT = 10;
+        const expanded = !!state.expandedCols[s.key];
+        const visible = expanded ? col : col.slice(0, LIMIT);
+        const hiddenCount = col.length - LIMIT;
+        return `
         <div class="pipeline-col" ondragover="onDragOver(event)" ondragleave="onDragLeave(event)" ondrop="onDropStage(event, '${s.key}')">
           <div class="pipeline-col-header">
             <span class="pipeline-col-name">${s.label}</span>
-            <span class="pipeline-col-count">${(byStage[s.key] || []).length}</span>
+            <span class="pipeline-col-count">${col.length}</span>
           </div>
-          ${(byStage[s.key] || []).slice(0, 12).map(p => {
+          ${visible.map(p => {
             const gbbTier = getGBBTier(p.id);
             const gbbBadge = gbbTier ? '<span style="font-size:9px;font-weight:600;padding:1px 5px;border-radius:3px;background:' + (gbbTier === 'better' ? '#0D1626;color:#58A6FF;border:1px solid #1565C0' : gbbTier === 'best' ? '#0D1A0E;color:#3FB950;border:1px solid #238636' : '#161B22;color:#6E7681;border:1px solid #30363D') + '">' + gbbTier.toUpperCase() + '</span>' : '';
             const likely = isLikelyToClose(p.id);
@@ -1508,10 +1627,19 @@ function renderDashboard(c) {
               ' + (p.systems.length ? '<div style="margin-top:6px">' + p.systems.map(systemTagHTML).join('') + '</div>' : '') + '\
             </div>';
           }).join('')}
-          ${(byStage[s.key] || []).length === 0 ? '<div class="empty-state" style="padding:20px 10px;font-size:12px">No projects</div>' : ''}
-          ${(byStage[s.key] || []).length > 12 ? '<div style="text-align:center;padding:6px;font-size:11px;color:#6E7681">+' + ((byStage[s.key]).length - 12) + ' more</div>' : ''}
+          ${col.length === 0 ? '<div class="empty-state" style="padding:20px 10px;font-size:12px">No projects</div>' : ''}
+          ${!expanded && hiddenCount > 0 ? `
+            <div onclick="event.stopPropagation();toggleColExpanded('${s.key}')"
+              style="text-align:center;padding:8px 6px;font-size:11px;color:#58A6FF;cursor:pointer;border-top:1px solid #1C2333;margin-top:4px;-webkit-tap-highlight-color:transparent">
+              +${hiddenCount} more
+            </div>` : ''}
+          ${expanded && col.length > LIMIT ? `
+            <div onclick="event.stopPropagation();toggleColExpanded('${s.key}')"
+              style="text-align:center;padding:8px 6px;font-size:11px;color:#6E7681;cursor:pointer;border-top:1px solid #1C2333;margin-top:4px;-webkit-tap-highlight-color:transparent">
+              Show less ↑
+            </div>` : ''}
         </div>
-      `).join('')}
+      `}).join('')}
     </div>
 
     <div class="archive-row">
@@ -1526,32 +1654,6 @@ function renderDashboard(c) {
       }).join('')}
     </div>
     <div id="archive-expanded"></div>
-
-    ${(() => {
-      const isMobile = window.innerWidth <= 768;
-      const tab = state.widgetTab;
-      const tabBar = isMobile ? `
-        <div class="widget-tab-bar">
-          <div class="widget-tab ${tab === 'todo' ? 'widget-tab-active' : ''}" onclick="switchWidgetTab('todo')">
-            <svg width="13" height="13" viewBox="0 0 13 13" fill="none"><rect x="1" y="1" width="4" height="4" rx="1" stroke="currentColor" stroke-width="1.2"/><rect x="1" y="8" width="4" height="4" rx="1" stroke="currentColor" stroke-width="1.2"/><path d="M7 3h5M7 10h5" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/></svg>
-            To-Do
-          </div>
-          <div class="widget-tab ${tab === 'tasks' ? 'widget-tab-active' : ''}" onclick="switchWidgetTab('tasks')">
-            <svg width="13" height="13" viewBox="0 0 13 13" fill="none"><path d="M2 6.5l2.5 2.5L11 3" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/></svg>
-            Tasks
-          </div>
-        </div>
-      ` : '';
-      const showTodo  = !isMobile || tab === 'todo';
-      const showTasks = !isMobile || tab === 'tasks';
-      return `
-        ${tabBar}
-        <div class="widget-grid" style="display:grid;grid-template-columns:1fr 1fr;gap:14px;align-items:start">
-          ${showTodo  ? `<div>${renderTodoWidget(activeView)}</div>` : ''}
-          ${showTasks ? `<div>${renderTasksWidget(activeView)}</div>` : ''}
-        </div>
-      `;
-    })()}
 
     ${renderRecentActivity()}
   `;
