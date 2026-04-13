@@ -295,11 +295,85 @@ function enrichProject(p) {
   };
 }
 
+// ── Bottom Nav (injected for mobile) ──
+function injectBottomNav() {
+  if (document.getElementById('bottom-nav')) return;
+  const nav = document.createElement('div');
+  nav.id = 'bottom-nav';
+  nav.innerHTML = `<div class="bnav-inner">
+    <div class="bnav-item active" data-page="dashboard" onclick="navigate('dashboard')">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/></svg>
+      <span>Home</span>
+    </div>
+    <div class="bnav-item" data-page="projects" onclick="navigate('projects')">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M4 6h16M4 12h12M4 18h14"/></svg>
+      <span>Projects</span>
+    </div>
+    <div class="bnav-item bnav-intake" data-page="intake" onclick="navigate('intake')">
+      <div class="bnav-fab">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>
+      </div>
+      <span style="font-size:9px;margin-top:4px;color:#8B949E">Intake</span>
+    </div>
+    <div class="bnav-item" data-page="calendar" onclick="navigate('calendar')">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><rect x="3" y="5" width="18" height="16" rx="2"/><path d="M7 3v4M17 3v4M3 10h18"/></svg>
+      <span>Calendar</span>
+    </div>
+    <div class="bnav-item" data-page="more" onclick="toggleMoreMenu()">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><circle cx="12" cy="5" r="1.5"/><circle cx="12" cy="12" r="1.5"/><circle cx="12" cy="19" r="1.5"/></svg>
+      <span>More</span>
+    </div>
+  </div>`;
+  document.body.appendChild(nav);
+}
+
+// ── More Menu (mobile) ──
+function toggleMoreMenu() {
+  let menu = document.getElementById('more-menu');
+  if (menu) { menu.remove(); return; }
+  menu = document.createElement('div');
+  menu.id = 'more-menu';
+  menu.style.cssText = 'position:fixed;bottom:64px;right:12px;background:#161B22;border:1px solid #30363D;border-radius:12px;z-index:70;padding:8px 0;min-width:180px;box-shadow:0 8px 32px rgba(0,0,0,0.5)';
+  menu.innerHTML = `
+    <div onclick="navigate('vendors');document.getElementById('more-menu')?.remove()" style="padding:14px 20px;color:#C9D1D9;font-size:14px;cursor:pointer;display:flex;align-items:center;gap:10px;-webkit-tap-highlight-color:transparent">
+      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><circle cx="12" cy="7" r="4"/><path d="M4 21c0-4.418 3.582-7 8-7s8 2.582 8 7"/></svg>
+      Vendors
+    </div>
+    <div onclick="navigate('shopwork');document.getElementById('more-menu')?.remove()" style="padding:14px 20px;color:#C9D1D9;font-size:14px;cursor:pointer;display:flex;align-items:center;gap:10px;-webkit-tap-highlight-color:transparent">
+      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M5 5h14l1.5 12H3.5L5 5z"/><path d="M9 5V4a3 3 0 0 1 6 0v1"/></svg>
+      Shop Work
+    </div>
+    <div style="border-top:1px solid #30363D;margin:4px 0"></div>
+    <div onclick="syncJetbuilt();document.getElementById('more-menu')?.remove()" style="padding:14px 20px;color:#58A6FF;font-size:14px;cursor:pointer;display:flex;align-items:center;gap:10px;-webkit-tap-highlight-color:transparent">
+      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M20 12A8 8 0 1 1 12 4"/><path d="M12 4l3-3M12 4l3 3"/></svg>
+      Sync Jetbuilt
+    </div>
+  `;
+  document.body.appendChild(menu);
+  // Close on tap outside
+  setTimeout(() => {
+    document.addEventListener('click', function closer(e) {
+      if (!menu.contains(e.target) && !e.target.closest('[data-page="more"]')) {
+        menu.remove();
+        document.removeEventListener('click', closer);
+      }
+    });
+  }, 10);
+}
+
 // ── Navigation ──
 function navigate(page) {
   state.currentPage = page;
+  // Close more menu if open
+  document.getElementById('more-menu')?.remove();
+  // Update sidebar nav (desktop)
   document.querySelectorAll('.nav-item').forEach(el => {
     el.classList.toggle('active', el.dataset.page === page);
+  });
+  // Update bottom nav (mobile)
+  document.querySelectorAll('#bottom-nav .bnav-item').forEach(el => {
+    const p = el.dataset.page;
+    el.classList.toggle('active', p === page || (page === 'dashboard' && p === 'dashboard'));
   });
   const titles = {
     dashboard: 'Dashboard', calendar: 'Calendar', projects: 'Projects',
@@ -307,8 +381,6 @@ function navigate(page) {
   };
   document.getElementById('page-title').textContent = titles[page] || 'Dashboard';
   renderCurrentPage();
-  // Close mobile sidebar
-  document.getElementById('sidebar').classList.remove('open');
 }
 
 function toggleSidebar() {
@@ -473,8 +545,28 @@ function renderProjects(c) {
           ${sorted.map(p => projectRow(p)).join('')}
         </tbody>
       </table>
-      ${sorted.length === 0 ? '<div class="empty-state"><span class="empty-icon">📋</span>No projects yet. Sync with Jetbuilt or create a new intake.</div>' : ''}
     </div>
+    <div class="mobile-project-list" id="proj-mobile">
+      ${sorted.map(p => {
+        const stg = STAGES.find(s => s.key === p.stage) || STAGES[0];
+        return `
+          <div class="mobile-project-item" onclick="openProject(${p.id})" data-stage="${p.stage}" data-name="${esc(p.name).toLowerCase()}">
+            <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:6px">
+              <div>
+                <div style="font-size:14px;font-weight:500;color:#E6EDF3">${esc(p.name)}</div>
+                <div style="font-size:12px;color:#6E7681;margin-top:2px">${esc(p.client_name || 'No client')}</div>
+              </div>
+              <span class="status-pill status-${stg.color}">${stg.label}</span>
+            </div>
+            <div style="display:flex;align-items:center;justify-content:space-between">
+              <div>${p.systems.map(systemTagHTML).join('') || '<span style="color:#6E7681;font-size:11px">No tags</span>'}</div>
+              ${canSee('financials') ? `<span style="font-size:13px;font-weight:500;color:#58A6FF">${fmt(p.total)}</span>` : ''}
+            </div>
+          </div>
+        `;
+      }).join('')}
+    </div>
+    ${sorted.length === 0 ? '<div class="empty-state"><span class="empty-icon">📋</span>No projects yet. Sync with Jetbuilt or create a new intake.</div>' : ''}
   `;
 }
 
@@ -503,6 +595,13 @@ function filterProjects() {
     const matchSearch = !q || name.includes(q);
     const matchFilter = !window._projFilter || stage === window._projFilter;
     tr.style.display = matchSearch && matchFilter ? '' : 'none';
+  });
+  document.querySelectorAll('#proj-mobile .mobile-project-item').forEach(el => {
+    const name = el.dataset.name || '';
+    const stage = el.dataset.stage || '';
+    const matchSearch = !q || name.includes(q);
+    const matchFilter = !window._projFilter || stage === window._projFilter;
+    el.style.display = matchSearch && matchFilter ? '' : 'none';
   });
 }
 
@@ -1094,11 +1193,11 @@ function renderIntake(c) {
 
   // Nav buttons
   const nav = `
-    <div style="display:flex;justify-content:space-between;max-width:560px;margin:20px auto 0">
-      ${s > 1 ? `<button class="btn" onclick="intakeNav(-1)">← Back</button>` : '<div></div>'}
+    <div style="display:flex;justify-content:space-between;max-width:560px;margin:20px auto 0;gap:12px">
+      ${s > 1 ? `<button class="btn" onclick="intakeNav(-1)" style="flex:1;max-width:160px">← Back</button>` : '<div></div>'}
       ${s < 6
-        ? `<button class="btn-primary" onclick="intakeNav(1)">Next →</button>`
-        : `<button class="btn-primary" onclick="submitIntake()" style="background:#238636">Generate SOW ✓</button>`
+        ? `<button class="btn-primary" onclick="intakeNav(1)" style="flex:1;max-width:200px;padding:14px 20px;font-size:14px;border-radius:8px">Next →</button>`
+        : `<button class="btn-primary" onclick="submitIntake()" style="flex:1;max-width:200px;padding:14px 20px;font-size:14px;border-radius:8px;background:#238636">Generate SOW ✓</button>`
       }
     </div>
   `;
@@ -1437,6 +1536,9 @@ async function init() {
   const c = document.getElementById('content');
   const sel = document.getElementById('role-select');
   if (sel) sel.value = currentUserRole;
+
+  // Inject mobile bottom nav
+  injectBottomNav();
 
   try {
     renderCurrentPage();
