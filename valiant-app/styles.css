@@ -586,6 +586,9 @@ td.today .cal-day-num {
   /* Dashboard grid stacks */
   .dashboard-grid { grid-template-columns: 1fr; }
 
+  /* Todo + Tasks widget grid stacks on mobile */
+  .widget-grid { grid-template-columns: 1fr !important; }
+
   /* Forms stack */
   .form-row { grid-template-columns: 1fr; }
 
@@ -689,4 +692,40 @@ td.today .cal-day-num {
   font-size: 9px; font-weight: 600;
   padding: 1px 5px; border-radius: 3px;
   display: inline-block;
+}
+
+/* ── Widget Tab Bar (mobile only) ── */
+.widget-tab-bar {
+  display: none; /* hidden on desktop */
+  gap: 0;
+  background: #0D1117;
+  border: 1px solid #30363D;
+  border-radius: 8px;
+  overflow: hidden;
+  margin-top: 20px;
+  margin-bottom: 10px;
+}
+.widget-tab {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 11px 0;
+  font-size: 13px;
+  font-weight: 500;
+  color: #6E7681;
+  cursor: pointer;
+  border-radius: 0;
+  -webkit-tap-highlight-color: transparent;
+  transition: background 0.15s, color 0.15s;
+}
+.widget-tab-active {
+  background: #161B22;
+  color: #E6EDF3;
+  border-bottom: 2px solid #58A6FF;
+}
+@media (max-width: 768px) {
+  .widget-tab-bar { display: flex; }
+  .widget-grid { grid-template-columns: 1fr !important; margin-top: 0 !important; }
 }
