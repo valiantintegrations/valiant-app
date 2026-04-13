@@ -1438,7 +1438,26 @@ async function syncJetbuilt() {
         const stage = (p.stage || '').toLowerCase();
         return stage !== 'template';
       });
-      state.projects = projects.map(p => enrichProject(p));
+      // Merge: Jetbuilt data updates, but Valiant-only fields are preserved
+      const existingMap = {};
+      state.projects.forEach(p => { existingMap[p.id] = p; });
+
+      state.projects = projects.map(p => {
+        const enriched = enrichProject(p);
+        const existing = existingMap[enriched.id];
+        if (existing) {
+          // Preserve Valiant-only data that Jetbuilt doesn't hold
+          enriched.is_fizzled = existing.is_fizzled;
+        }
+        return enriched;
+      });
+
+      // Cache to localStorage for instant load next time
+      try {
+        localStorage.setItem('vi_projects_cache', JSON.stringify(state.projects));
+        localStorage.setItem('vi_projects_cache_time', new Date().toISOString());
+      } catch(e) { console.warn('Cache write failed:', e); }
+
       document.getElementById('proj-count').textContent = state.projects.length;
       renderCurrentPage();
       setTimeout(fetchClientNames, 500);
@@ -1511,6 +1530,11 @@ async function fetchClientNames() {
     }
   });
 
+  // Update cache with enriched client names
+  try {
+    localStorage.setItem('vi_projects_cache', JSON.stringify(state.projects));
+  } catch(e) {}
+
   renderCurrentPage();
 }
 
@@ -1539,6 +1563,17 @@ async function init() {
 
   // Inject mobile bottom nav
   injectBottomNav();
+
+  // Load cached projects from localStorage (Layer 1)
+  try {
+    const cached = localStorage.getItem('vi_projects_cache');
+    if (cached) {
+      state.projects = JSON.parse(cached);
+      document.getElementById('proj-count').textContent = state.projects.length;
+      const cacheTime = localStorage.getItem('vi_projects_cache_time');
+      console.log(`Loaded ${state.projects.length} projects from cache (${cacheTime || 'unknown'})`);
+    }
+  } catch(e) { console.warn('Cache load failed:', e); }
 
   try {
     renderCurrentPage();
