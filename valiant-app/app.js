@@ -66,6 +66,9 @@ const state = {
   widgetCollapsed: false,
   expandedCols: {},
   sidebarOpen: false,
+  rightPanel: null,
+  messages: JSON.parse(localStorage.getItem('vi_messages') || '[]'),
+  lastReadTime: parseInt(localStorage.getItem('vi_last_read') || '0'),
   noteSections: JSON.parse(localStorage.getItem('vi_note_sections') || '{}')
 };
 
@@ -1505,9 +1508,46 @@ function getCloseRate() {
 }
 
 // ── Notes Sidebar ──
-function toggleDashboardSidebar() {
-  state.sidebarOpen = !state.sidebarOpen;
+function toggleRightPanel(panel) {
+  state.rightPanel = state.rightPanel === panel ? null : panel;
+  if (state.rightPanel === 'messages') {
+    state.lastReadTime = Date.now();
+    localStorage.setItem('vi_last_read', state.lastReadTime);
+  }
   renderCurrentPage();
+  if (state.rightPanel === 'messages') {
+    setTimeout(() => { const el = document.getElementById('msg-list'); if (el) el.scrollTop = el.scrollHeight; }, 50);
+  }
+}
+
+function getUnreadCount() {
+  const myId = getActiveTeamMemberId();
+  return state.messages.filter(m => m.senderId !== myId && m.timestamp > state.lastReadTime).length;
+}
+
+function sendMessage() {
+  const input = document.getElementById('msg-input');
+  const text = input?.value?.trim();
+  if (!text) return;
+  const member = getTeamMember(getActiveTeamMemberId());
+  if (!member) return;
+  state.messages.push({
+    id: Date.now(),
+    senderId: member.id,
+    senderName: member.name,
+    senderInitials: member.initials || getInitials(member.name),
+    senderColor: DASHBOARD_ACCESS.find(d => d.key === member.primaryRole)?.color || '#6E7681',
+    text,
+    timestamp: Date.now()
+  });
+  save('vi_messages', state.messages);
+  if (input) input.value = '';
+  // Re-render just the messages panel to avoid losing scroll position
+  const msgList = document.getElementById('msg-list');
+  if (msgList) {
+    msgList.innerHTML = renderMessagesList();
+    msgList.scrollTop = msgList.scrollHeight;
+  }
 }
 
 function getNoteSections(role) {
@@ -1664,29 +1704,122 @@ function renderNotesSection(role, s) {
   `;
 }
 
-function renderSidebar(role) {
+function renderMessagesList() {
+  const myId = getActiveTeamMemberId();
+  if (state.messages.length === 0) {
+    return '<div style="text-align:center;padding:32px 12px;color:#6E7681;font-size:12px">No messages yet.<br>Say hi to the team 👋</div>';
+  }
+  let lastDate = '';
+  return state.messages.map(m => {
+    const isMe = m.senderId === myId;
+    const dt = new Date(m.timestamp);
+    const dateStr = dt.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+    const timeStr = dt.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' });
+    const dateDivider = dateStr !== lastDate
+      ? `<div style="text-align:center;font-size:10px;color:#6E7681;padding:8px 0;margin:4px 0">${dateStr}</div>`
+      : '';
+    lastDate = dateStr;
+    return `${dateDivider}
+      <div style="display:flex;flex-direction:${isMe ? 'row-reverse' : 'row'};align-items:flex-end;gap:6px;margin-bottom:8px">
+        ${!isMe ? `<div style="width:26px;height:26px;border-radius:50%;background:${m.senderColor}22;border:1px solid ${m.senderColor}66;display:flex;align-items:center;justify-content:center;font-size:9px;font-weight:600;color:${m.senderColor};flex-shrink:0">${esc(m.senderInitials)}</div>` : ''}
+        <div style="max-width:80%">
+          ${!isMe ? `<div style="font-size:10px;color:#6E7681;margin-bottom:2px;padding-left:2px">${esc(m.senderName)}</div>` : ''}
+          <div style="background:${isMe ? '#1565C0' : '#161B22'};border:1px solid ${isMe ? '#1565C066' : '#30363D'};border-radius:${isMe ? '10px 10px 2px 10px' : '10px 10px 10px 2px'};padding:7px 10px;font-size:12px;color:#E6EDF3;line-height:1.4;word-break:break-word">${esc(m.text)}</div>
+          <div style="font-size:9px;color:#6E7681;margin-top:2px;text-align:${isMe ? 'right' : 'left'};padding:0 2px">${timeStr}</div>
+        </div>
+      </div>`;
+  }).join('');
+}
+
+function renderRightPanel(role) {
   const sections = getNoteSections(role);
+  const unread = getUnreadCount();
+  const panel = state.rightPanel;
   const roleColor = DASHBOARD_ACCESS.find(d => d.key === role)?.color || '#8B949E';
-  const roleLabel = DASHBOARD_ACCESS.find(d => d.key === role)?.label || role;
+
+  // Icon strip
+  const iconStrip = `
+    <div class="rpanel-strip">
+      <div class="rpanel-icon ${panel === 'notes' ? 'rpanel-icon-active' : ''}" onclick="toggleRightPanel('notes')" title="Notes">
+        <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M3 2h7l3 3v9H3V2z" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round"/><path d="M9.5 2v3.5H13M5 6.5h4M5 9h6M5 11.5h4" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/></svg>
+        ${sections.length > 0 ? `<span class="rpanel-badge">${sections.length}</span>` : ''}
+      </div>
+      <div class="rpanel-icon ${panel === 'messages' ? 'rpanel-icon-active' : ''}" onclick="toggleRightPanel('messages')" title="Team Messages">
+        <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M2 3h12v8H9l-3 2v-2H2V3z" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round"/></svg>
+        ${unread > 0 ? `<span class="rpanel-badge rpanel-badge-alert">${unread}</span>` : ''}
+      </div>
+    </div>
+  `;
+
+  if (!panel) return `<div style="display:flex;align-self:flex-start;position:sticky;top:16px">${iconStrip}</div>`;
+
+  // Notes panel content
+  const notesContent = `
+    <div style="padding:12px 12px 8px;border-bottom:1px solid #1C2333;display:flex;align-items:center;justify-content:space-between">
+      <div>
+        <div style="font-size:13px;font-weight:600;color:#E6EDF3">Notes</div>
+        <div style="font-size:10px;color:${roleColor};margin-top:1px">${DASHBOARD_ACCESS.find(d=>d.key===role)?.label||role}</div>
+      </div>
+      <button class="btn btn-sm" onclick="showAddSectionDialog('${role}')" style="font-size:11px;padding:4px 10px">+ Section</button>
+    </div>
+    <div style="padding:10px;overflow-y:auto;flex:1">
+      ${sections.length === 0
+        ? '<div style="text-align:center;padding:24px 8px;color:#6E7681;font-size:12px">No sections yet.<br><span style="color:#C9D1D9">Tap + Section</span> to add notes or a checklist.</div>'
+        : `<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">${sections.map(s => {
+            const doneCount = s.type === 'checklist' ? (s.items||[]).filter(i=>i.done).length : 0;
+            const totalCount = s.type === 'checklist' ? (s.items||[]).length : 0;
+            const preview = s.type === 'text'
+              ? (s.content ? s.content.slice(0,40) + (s.content.length > 40 ? '…' : '') : '')
+              : (s.items||[]).slice(0,2).map(i=>(i.done?'✓ ':'○ ')+i.text.slice(0,12)).join('\n');
+            return `
+              <div onclick="toggleNoteSectionCollapsed('${role}',${s.id})"
+                style="background:#161B22;border:1px solid ${s.collapsed?'#1C2333':'#30363D'};border-radius:8px;padding:10px;cursor:pointer;-webkit-tap-highlight-color:transparent;position:relative">
+                <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:4px">
+                  <span style="font-size:10px;color:#6E7681">${s.type==='checklist'?'☑':'📝'}</span>
+                  <button onclick="event.stopPropagation();deleteNoteSection('${role}',${s.id})" style="background:none;border:none;color:#6E7681;cursor:pointer;font-size:12px;padding:0;line-height:1">×</button>
+                </div>
+                <div style="font-size:12px;font-weight:500;color:#E6EDF3;margin-bottom:3px;word-break:break-word">${esc(s.title)}</div>
+                ${s.type==='checklist'&&totalCount>0
+                  ? `<div style="font-size:10px;color:${doneCount===totalCount?'#3FB950':'#6E7681'}">${doneCount}/${totalCount} done</div>`
+                  : preview ? `<div style="font-size:10px;color:#6E7681;line-height:1.4;white-space:pre-line">${esc(preview)}</div>` : ''}
+              </div>`;
+          }).join('')}</div>
+          ${sections.some(s => !s.collapsed) ? `
+            <div style="margin-top:10px">
+              ${sections.filter(s => !s.collapsed).map(s => renderNotesSection(role, s)).join('')}
+            </div>` : ''}`}
+    </div>
+  `;
+
+  // Messages panel content
+  const messagesContent = `
+    <div style="padding:12px;border-bottom:1px solid #1C2333">
+      <div style="font-size:13px;font-weight:600;color:#E6EDF3">Team</div>
+      <div style="font-size:10px;color:#6E7681;margin-top:1px">${state.team.length} member${state.team.length!==1?'s':''}</div>
+    </div>
+    <div id="msg-list" style="flex:1;overflow-y:auto;padding:10px;display:flex;flex-direction:column">
+      ${renderMessagesList()}
+    </div>
+    <div style="padding:10px;border-top:1px solid #1C2333">
+      <div style="display:flex;gap:6px;align-items:flex-end">
+        <textarea id="msg-input" placeholder="Message the team…"
+          style="flex:1;background:#0D1117;border:1px solid #30363D;border-radius:8px;color:#E6EDF3;font-size:12px;font-family:'DM Sans',sans-serif;padding:8px 10px;resize:none;outline:none;line-height:1.4;max-height:80px;min-height:36px"
+          rows="1"
+          onkeydown="if(event.key==='Enter'&&!event.shiftKey){event.preventDefault();sendMessage()}"
+          oninput="this.style.height='auto';this.style.height=Math.min(this.scrollHeight,80)+'px'"></textarea>
+        <button onclick="sendMessage()" style="background:#1565C0;border:none;border-radius:8px;color:#fff;cursor:pointer;padding:8px 12px;font-size:12px;white-space:nowrap;-webkit-tap-highlight-color:transparent">
+          <svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M12 7L2 2l2.5 5L2 12l10-5z" fill="currentColor"/></svg>
+        </button>
+      </div>
+    </div>
+  `;
+
   return `
-    <div class="dash-sidebar">
-      <div style="display:flex;align-items:center;justify-content:space-between;padding:12px 14px;border-bottom:1px solid #1C2333">
-        <div>
-          <div style="font-size:13px;font-weight:600;color:#E6EDF3">Notes</div>
-          <div style="font-size:10px;color:${roleColor};margin-top:1px">${roleLabel}</div>
-        </div>
-        <div style="display:flex;align-items:center;gap:6px">
-          <button class="btn btn-sm" onclick="showAddSectionDialog('${role}')" style="font-size:11px;padding:4px 10px">+ Section</button>
-          <button onclick="toggleDashboardSidebar()" style="background:none;border:none;color:#6E7681;cursor:pointer;font-size:20px;line-height:1;padding:2px">×</button>
-        </div>
+    <div style="display:flex;align-self:flex-start;position:sticky;top:16px">
+      <div class="rpanel-content">
+        ${panel === 'notes' ? notesContent : messagesContent}
       </div>
-      <div style="padding:12px;overflow-y:auto;flex:1">
-        ${sections.length === 0 ? `
-          <div style="text-align:center;padding:24px 12px;color:#6E7681;font-size:12px">
-            No sections yet.<br>Tap <strong style="color:#C9D1D9">+ Section</strong> to add notes or a checklist.
-          </div>
-        ` : sections.map(s => renderNotesSection(role, s)).join('')}
-      </div>
+      ${iconStrip}
     </div>
   `;
 }
@@ -1738,13 +1871,6 @@ function renderDashboard(c) {
     <div style="display:flex;gap:0;align-items:flex-start">
       <div style="flex:1;min-width:0">
         ${viewTabs.replace('margin-bottom:16px', 'margin-bottom:12px')}
-
-        <div style="display:flex;align-items:center;justify-content:flex-end;margin-bottom:10px;gap:8px">
-          <button onclick="toggleDashboardSidebar()" style="display:flex;align-items:center;gap:6px;padding:6px 12px;background:${state.sidebarOpen ? '#0D1626' : '#161B22'};border:1px solid ${state.sidebarOpen ? '#1565C0' : '#30363D'};border-radius:6px;color:${state.sidebarOpen ? '#58A6FF' : '#8B949E'};font-size:12px;cursor:pointer;-webkit-tap-highlight-color:transparent">
-            <svg width="13" height="13" viewBox="0 0 13 13" fill="none"><path d="M2 3h9M2 6.5h6M2 10h8" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/></svg>
-            Notes
-          </button>
-        </div>
 
         <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-bottom:20px;align-items:start">
           <div class="metrics-grid" style="margin-bottom:0">
@@ -1842,7 +1968,7 @@ function renderDashboard(c) {
 
         ${renderRecentActivity()}
       </div>
-      ${state.sidebarOpen ? renderSidebar(activeView) : ''}
+      ${renderRightPanel(activeView)}
     </div>
   `;
 }
