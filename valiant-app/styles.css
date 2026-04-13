@@ -272,6 +272,7 @@ body {
 .tag-control { background: #1A0D1A; color: #BC8CFF; border: 1px solid #6E40C9; }
 .tag-led { background: #0D1A18; color: #39D353; border: 1px solid #26A641; }
 .tag-streaming { background: #1A0D12; color: #FF7B72; border: 1px solid #DA3633; }
+.tag-camera { background: #1A1208; color: #E3B341; border: 1px solid #9E6A03; }
 
 /* ── Project Dashboard ── */
 .project-dashboard { max-width: 960px; }
@@ -814,7 +815,7 @@ td.today .cal-day-num {
 }
 
 /* Push main content left of the icon strip */
-#main { padding-right: 44px; }
+#main { padding-right: 52px; transition: padding-right 0.2s ease; }
 
 @media (max-width: 768px) {
   #right-panel { display: none; }
