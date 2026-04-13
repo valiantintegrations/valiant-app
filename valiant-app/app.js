@@ -64,7 +64,9 @@ const state = {
   widgetTab: 'todo',
   widgetFilter: 'week',
   widgetCollapsed: false,
-  expandedCols: {}
+  expandedCols: {},
+  sidebarOpen: false,
+  noteSections: JSON.parse(localStorage.getItem('vi_note_sections') || '{}')
 };
 
 // ── Team Roster ──
@@ -1494,6 +1496,201 @@ function renderTasksWidget(role) {
   `;
 }
 
+// ── Close Rate ──
+function getCloseRate() {
+  const contracted = state.projects.filter(p => !p.archived && p.stage === 'contract').length;
+  const lost = Object.keys(state.archived).filter(id => state.archived[id] === 'lost').length;
+  const total = contracted + lost;
+  return total > 0 ? Math.round((contracted / total) * 100) : null;
+}
+
+// ── Notes Sidebar ──
+function toggleDashboardSidebar() {
+  state.sidebarOpen = !state.sidebarOpen;
+  renderCurrentPage();
+}
+
+function getNoteSections(role) {
+  return state.noteSections[role] || [];
+}
+
+function addNoteSection(role, title, type) {
+  if (!state.noteSections[role]) state.noteSections[role] = [];
+  state.noteSections[role].push({
+    id: Date.now(), title: title || 'Untitled',
+    type: type || 'text', content: '', items: [], collapsed: false
+  });
+  save('vi_note_sections', state.noteSections);
+  renderCurrentPage();
+}
+
+function deleteNoteSection(role, id) {
+  state.noteSections[role] = (state.noteSections[role] || []).filter(s => s.id !== id);
+  save('vi_note_sections', state.noteSections);
+  renderCurrentPage();
+}
+
+function toggleNoteSectionCollapsed(role, id) {
+  const s = (state.noteSections[role] || []).find(x => x.id === id);
+  if (s) { s.collapsed = !s.collapsed; save('vi_note_sections', state.noteSections); renderCurrentPage(); }
+}
+
+function updateNoteSectionText(role, id, content) {
+  const s = (state.noteSections[role] || []).find(x => x.id === id);
+  if (s) { s.content = content; save('vi_note_sections', state.noteSections); }
+}
+
+function addNoteChecklistItem(role, sectionId, text) {
+  const s = (state.noteSections[role] || []).find(x => x.id === sectionId);
+  if (!s || !text.trim()) return;
+  if (!s.items) s.items = [];
+  s.items.push({ id: Date.now(), text: text.trim(), done: false });
+  save('vi_note_sections', state.noteSections);
+  renderCurrentPage();
+}
+
+function toggleNoteChecklistItem(role, sectionId, itemId) {
+  const s = (state.noteSections[role] || []).find(x => x.id === sectionId);
+  if (!s) return;
+  const item = (s.items || []).find(i => i.id === itemId);
+  if (item) { item.done = !item.done; save('vi_note_sections', state.noteSections); renderCurrentPage(); }
+}
+
+function deleteNoteChecklistItem(role, sectionId, itemId) {
+  const s = (state.noteSections[role] || []).find(x => x.id === sectionId);
+  if (!s) return;
+  s.items = (s.items || []).filter(i => i.id !== itemId);
+  save('vi_note_sections', state.noteSections);
+  renderCurrentPage();
+}
+
+function showAddSectionDialog(role) {
+  let d = document.getElementById('add-section-dialog');
+  if (d) { d.remove(); return; }
+  d = document.createElement('div');
+  d.id = 'add-section-dialog';
+  d.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.7);z-index:120;display:flex;align-items:center;justify-content:center;padding:20px';
+  d.innerHTML = `
+    <div style="background:#161B22;border:1px solid #30363D;border-radius:12px;padding:20px;max-width:340px;width:100%">
+      <div style="font-size:15px;font-weight:600;color:#E6EDF3;margin-bottom:16px">Add Section</div>
+      <div class="form-group">
+        <label class="form-label">Heading</label>
+        <input class="form-input" id="ns-title" placeholder="e.g. Follow-ups, Weekly Goals…" autofocus>
+      </div>
+      <div class="form-group">
+        <label class="form-label">Type</label>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">
+          <div id="ns-type-text" onclick="document.getElementById('ns-type-text').style.borderColor='#58A6FF';document.getElementById('ns-type-checklist').style.borderColor='#1C2333';window._nsType='text'"
+            style="padding:10px;border-radius:8px;border:1px solid #58A6FF;background:#0D1626;cursor:pointer;text-align:center">
+            <div style="font-size:13px;font-weight:500;color:#58A6FF">📝 Text</div>
+            <div style="font-size:10px;color:#6E7681;margin-top:2px">Free-form notes</div>
+          </div>
+          <div id="ns-type-checklist" onclick="document.getElementById('ns-type-checklist').style.borderColor='#58A6FF';document.getElementById('ns-type-text').style.borderColor='#1C2333';window._nsType='checklist'"
+            style="padding:10px;border-radius:8px;border:1px solid #1C2333;background:#0D1117;cursor:pointer;text-align:center">
+            <div style="font-size:13px;font-weight:500;color:#C9D1D9">☑ Checklist</div>
+            <div style="font-size:10px;color:#6E7681;margin-top:2px">Check-off items</div>
+          </div>
+        </div>
+      </div>
+      <div style="display:flex;gap:8px;margin-top:4px">
+        <button class="btn-primary" onclick="submitAddSection('${role}')" style="flex:1;padding:11px">Add</button>
+        <button class="btn" onclick="document.getElementById('add-section-dialog')?.remove()">Cancel</button>
+      </div>
+    </div>
+  `;
+  window._nsType = 'text';
+  document.body.appendChild(d);
+  d.addEventListener('click', e => { if (e.target === d) d.remove(); });
+  document.getElementById('ns-title')?.focus();
+  document.getElementById('ns-title')?.addEventListener('keydown', e => { if (e.key === 'Enter') submitAddSection(role); });
+}
+
+function submitAddSection(role) {
+  const title = document.getElementById('ns-title')?.value?.trim();
+  if (!title) { document.getElementById('ns-title')?.focus(); return; }
+  addNoteSection(role, title, window._nsType || 'text');
+  document.getElementById('add-section-dialog')?.remove();
+}
+
+function renderNotesSection(role, s) {
+  const doneCount = s.type === 'checklist' ? (s.items || []).filter(i => i.done).length : 0;
+  const totalCount = s.type === 'checklist' ? (s.items || []).length : 0;
+  return `
+    <div style="border:1px solid #1C2333;border-radius:8px;margin-bottom:8px;overflow:hidden">
+      <div style="display:flex;align-items:center;justify-content:space-between;padding:9px 12px;background:#161B22;cursor:pointer;-webkit-tap-highlight-color:transparent"
+        onclick="toggleNoteSectionCollapsed('${role}', ${s.id})">
+        <div style="display:flex;align-items:center;gap:8px;min-width:0">
+          <span style="font-size:11px;color:#6E7681">${s.type === 'checklist' ? '☑' : '📝'}</span>
+          <span style="font-size:13px;font-weight:500;color:#E6EDF3;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${esc(s.title)}</span>
+          ${s.type === 'checklist' && totalCount > 0 ? `<span style="font-size:10px;color:${doneCount === totalCount ? '#3FB950' : '#6E7681'}">${doneCount}/${totalCount}</span>` : ''}
+        </div>
+        <div style="display:flex;align-items:center;gap:6px;flex-shrink:0">
+          <svg width="12" height="12" viewBox="0 0 12 12" fill="none" style="color:#6E7681;transform:${s.collapsed ? 'rotate(-90deg)' : 'rotate(0)'};transition:transform 0.15s"><path d="M2 4l4 4 4-4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          <button onclick="event.stopPropagation();deleteNoteSection('${role}',${s.id})" style="background:none;border:none;color:#6E7681;cursor:pointer;font-size:14px;padding:0;line-height:1">×</button>
+        </div>
+      </div>
+      ${!s.collapsed ? `
+        <div style="padding:10px 12px;background:#0D1117">
+          ${s.type === 'text' ? `
+            <textarea
+              style="width:100%;background:transparent;border:none;color:#C9D1D9;font-size:12px;line-height:1.6;resize:none;outline:none;font-family:'DM Sans',sans-serif;min-height:60px"
+              placeholder="Start typing…"
+              oninput="updateNoteSectionText('${role}',${s.id},this.value)"
+            >${esc(s.content || '')}</textarea>
+          ` : `
+            <div style="display:flex;flex-direction:column;gap:4px;margin-bottom:8px">
+              ${(s.items || []).map(item => `
+                <div style="display:flex;align-items:center;gap:8px">
+                  <div onclick="toggleNoteChecklistItem('${role}',${s.id},${item.id})"
+                    style="width:15px;height:15px;border-radius:3px;border:1.5px solid ${item.done ? '#3FB950' : '#30363D'};background:${item.done ? '#3FB95022' : 'transparent'};cursor:pointer;flex-shrink:0;display:flex;align-items:center;justify-content:center">
+                    ${item.done ? `<svg width="9" height="9" viewBox="0 0 9 9" fill="none"><path d="M1.5 4.5l2 2L7.5 2" stroke="#3FB950" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>` : ''}
+                  </div>
+                  <span style="flex:1;font-size:12px;color:${item.done ? '#6E7681' : '#C9D1D9'};text-decoration:${item.done ? 'line-through' : 'none'}">${esc(item.text)}</span>
+                  <button onclick="deleteNoteChecklistItem('${role}',${s.id},${item.id})" style="background:none;border:none;color:#6E7681;cursor:pointer;font-size:13px;padding:0">×</button>
+                </div>
+              `).join('')}
+            </div>
+            <div style="display:flex;gap:6px">
+              <input class="form-input" id="cl-input-${s.id}" placeholder="Add item…"
+                style="flex:1;padding:6px 8px;font-size:12px"
+                onkeydown="if(event.key==='Enter'){const v=this.value.trim();if(v){addNoteChecklistItem('${role}',${s.id},v);}}">
+              <button class="btn btn-sm" onclick="const v=document.getElementById('cl-input-${s.id}')?.value?.trim();if(v)addNoteChecklistItem('${role}',${s.id},v)"
+                style="padding:5px 10px;font-size:12px">+</button>
+            </div>
+          `}
+        </div>
+      ` : ''}
+    </div>
+  `;
+}
+
+function renderSidebar(role) {
+  const sections = getNoteSections(role);
+  const roleColor = DASHBOARD_ACCESS.find(d => d.key === role)?.color || '#8B949E';
+  const roleLabel = DASHBOARD_ACCESS.find(d => d.key === role)?.label || role;
+  return `
+    <div class="dash-sidebar">
+      <div style="display:flex;align-items:center;justify-content:space-between;padding:12px 14px;border-bottom:1px solid #1C2333">
+        <div>
+          <div style="font-size:13px;font-weight:600;color:#E6EDF3">Notes</div>
+          <div style="font-size:10px;color:${roleColor};margin-top:1px">${roleLabel}</div>
+        </div>
+        <div style="display:flex;align-items:center;gap:6px">
+          <button class="btn btn-sm" onclick="showAddSectionDialog('${role}')" style="font-size:11px;padding:4px 10px">+ Section</button>
+          <button onclick="toggleDashboardSidebar()" style="background:none;border:none;color:#6E7681;cursor:pointer;font-size:20px;line-height:1;padding:2px">×</button>
+        </div>
+      </div>
+      <div style="padding:12px;overflow-y:auto;flex:1">
+        ${sections.length === 0 ? `
+          <div style="text-align:center;padding:24px 12px;color:#6E7681;font-size:12px">
+            No sections yet.<br>Tap <strong style="color:#C9D1D9">+ Section</strong> to add notes or a checklist.
+          </div>
+        ` : sections.map(s => renderNotesSection(role, s)).join('')}
+      </div>
+    </div>
+  `;
+}
+
 // ── Dashboard ──
 function renderDashboard(c) {
   const projects = state.projects.filter(p => !p.archived);
@@ -1535,156 +1732,118 @@ function renderDashboard(c) {
     </div>
   ` : '';
 
+  const closeRate = getCloseRate();
+
   c.innerHTML = `
-    ${viewTabs}
-    <div class="metrics-grid">
-      <div class="metric-card">
-        <div class="metric-label">Pipeline Value</div>
-        <div class="metric-value">${fmt(totalValue)}</div>
-        <div class="metric-sub">${projects.length} projects${archivedCount > 0 ? ', ' + archivedCount + ' archived' : ''}</div>
-      </div>
-      <div class="metric-card" style="${likelyCount > 0 ? 'border-color:#238636' : ''}">
-        <div class="metric-label">Likely to Close</div>
-        <div class="metric-value" style="${likelyCount > 0 ? 'color:#3FB950' : ''}">${fmt(likelyValue)}</div>
-        <div class="metric-sub">${likelyCount} project${likelyCount !== 1 ? 's' : ''} flagged</div>
-      </div>
-      <div class="metric-card">
-        <div class="metric-label">Contracted</div>
-        <div class="metric-value">${activeCount}</div>
-        <div class="metric-sub">${reviewCount > 0 ? '<span style="color:#F85149;font-weight:500">' + reviewCount + ' needs review</span>' : 'All reviewed'}</div>
-      </div>
-      <div class="metric-card">
-        <div class="metric-label">Open Proposals</div>
-        <div class="metric-value">${proposalCount}</div>
-        <div class="metric-sub">Proposal + Sent</div>
-      </div>
-    </div>
+    <div style="display:flex;gap:0;align-items:flex-start">
+      <div style="flex:1;min-width:0">
+        ${viewTabs.replace('margin-bottom:16px', 'margin-bottom:12px')}
 
-    ${(() => {
-      const isMobile = window.innerWidth <= 768;
-      const tab = state.widgetTab;
-      const collapsed = state.widgetCollapsed;
+        <div style="display:flex;align-items:center;justify-content:flex-end;margin-bottom:10px;gap:8px">
+          <button onclick="toggleDashboardSidebar()" style="display:flex;align-items:center;gap:6px;padding:6px 12px;background:${state.sidebarOpen ? '#0D1626' : '#161B22'};border:1px solid ${state.sidebarOpen ? '#1565C0' : '#30363D'};border-radius:6px;color:${state.sidebarOpen ? '#58A6FF' : '#8B949E'};font-size:12px;cursor:pointer;-webkit-tap-highlight-color:transparent">
+            <svg width="13" height="13" viewBox="0 0 13 13" fill="none"><path d="M2 3h9M2 6.5h6M2 10h8" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/></svg>
+            Notes
+          </button>
+        </div>
 
-      // Count badge for header
-      const role = activeView;
-      const activeTodos = (state.todos[role] || []).filter(t => !t.done).length;
-      const activeTasks = state.tasks.filter(t => t.memberId === getActiveTeamMemberId() && !t.done).length;
-      const total = activeTodos + activeTasks;
-
-      const tabBar = (!collapsed && isMobile) ? `
-        <div class="widget-tab-bar">
-          <div class="widget-tab ${tab === 'todo' ? 'widget-tab-active' : ''}" onclick="switchWidgetTab('todo')">
-            <svg width="13" height="13" viewBox="0 0 13 13" fill="none"><rect x="1" y="1" width="4" height="4" rx="1" stroke="currentColor" stroke-width="1.2"/><rect x="1" y="8" width="4" height="4" rx="1" stroke="currentColor" stroke-width="1.2"/><path d="M7 3h5M7 10h5" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/></svg>
-            To-Do
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-bottom:20px;align-items:start">
+          <div class="metrics-grid" style="margin-bottom:0">
+            <div class="metric-card">
+              <div class="metric-label">Pipeline Value</div>
+              <div class="metric-value">${fmt(totalValue)}</div>
+              <div class="metric-sub">${projects.length} projects${archivedCount > 0 ? ', ' + archivedCount + ' archived' : ''}</div>
+            </div>
+            <div class="metric-card" style="${likelyCount > 0 ? 'border-color:#238636' : ''}">
+              <div class="metric-label">Likely to Close</div>
+              <div class="metric-value" style="${likelyCount > 0 ? 'color:#3FB950' : ''}">${fmt(likelyValue)}</div>
+              <div class="metric-sub">${likelyCount} project${likelyCount !== 1 ? 's' : ''} flagged</div>
+            </div>
+            <div class="metric-card">
+              <div class="metric-label">Contracted</div>
+              <div class="metric-value">${activeCount}</div>
+              <div class="metric-sub">${reviewCount > 0 ? '<span style="color:#F85149;font-weight:500">' + reviewCount + ' needs review</span>' : 'All reviewed'}</div>
+            </div>
+            <div class="metric-card" style="${closeRate !== null && closeRate >= 50 ? 'border-color:#238636' : ''}">
+              <div class="metric-label">Close Rate</div>
+              <div class="metric-value" style="${closeRate !== null && closeRate >= 50 ? 'color:#3FB950' : ''}">${closeRate !== null ? closeRate + '%' : '—'}</div>
+              <div class="metric-sub">${closeRate !== null ? activeCount + ' won · ' + Object.values(state.archived).filter(v => v === 'lost').length + ' lost' : 'No closed deals yet'}</div>
+            </div>
           </div>
-          <div class="widget-tab ${tab === 'tasks' ? 'widget-tab-active' : ''}" onclick="switchWidgetTab('tasks')">
-            <svg width="13" height="13" viewBox="0 0 13 13" fill="none"><path d="M2 6.5l2.5 2.5L11 3" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/></svg>
-            Tasks
+          <div>${renderTasksWidget(activeView)}</div>
+        </div>
+
+        <div class="section-header">
+          <div class="section-title">Pipeline</div>
+          <div style="display:flex;align-items:center;gap:8px">
+            <div style="display:flex;background:#0D1117;border:1px solid #30363D;border-radius:6px;overflow:hidden;font-size:11px">
+              <div onclick="if(state.timelineMode!=='estimated')toggleTimelineMode()" style="padding:5px 12px;cursor:pointer;transition:all 0.15s;${state.timelineMode === 'estimated' ? 'background:#1565C0;color:#58A6FF;font-weight:500' : 'color:#6E7681'}">Estimated</div>
+              <div onclick="if(state.timelineMode!=='booked')toggleTimelineMode()" style="padding:5px 12px;cursor:pointer;transition:all 0.15s;${state.timelineMode === 'booked' ? 'background:#1565C0;color:#58A6FF;font-weight:500' : 'color:#6E7681'}">Booked</div>
+            </div>
+            <button class="section-action" onclick="navigate('projects')">View All</button>
           </div>
         </div>
-      ` : '';
-
-      const showTodo  = !collapsed && (!isMobile || tab === 'todo');
-      const showTasks = !collapsed && (!isMobile || tab === 'tasks');
-
-      return `
-        <div style="border:1px solid #1C2333;border-radius:10px;margin-bottom:20px;overflow:hidden">
-          <div onclick="toggleWidgetCollapsed()" style="display:flex;align-items:center;justify-content:space-between;padding:10px 14px;background:#161B22;cursor:pointer;-webkit-tap-highlight-color:transparent;user-select:none">
-            <div style="display:flex;align-items:center;gap:8px">
-              <span style="font-size:13px;font-weight:500;color:#C9D1D9">To-Do & Tasks</span>
-              ${total > 0 ? `<span style="font-size:10px;font-weight:600;padding:1px 7px;border-radius:10px;background:#1565C022;color:#58A6FF;border:1px solid #1565C044">${total}</span>` : ''}
-            </div>
-            <svg width="14" height="14" viewBox="0 0 14 14" fill="none" style="color:#6E7681;transition:transform 0.2s;transform:${collapsed ? 'rotate(-90deg)' : 'rotate(0deg)'}"><path d="M3 5l4 4 4-4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
-          </div>
-          ${!collapsed ? `
-            <div style="padding:12px 12px 8px">
-              ${tabBar}
-              <div class="widget-grid" style="display:grid;grid-template-columns:1fr 1fr;gap:12px;align-items:start">
-                ${showTodo  ? `<div>${renderTodoWidget(activeView)}</div>` : ''}
-                ${showTasks ? `<div>${renderTasksWidget(activeView)}</div>` : ''}
+        <div class="pipeline-grid">
+          ${STAGES.map(s => {
+            const col = byStage[s.key] || [];
+            const LIMIT = 10;
+            const expanded = !!state.expandedCols[s.key];
+            const visible = expanded ? col : col.slice(0, LIMIT);
+            const hiddenCount = col.length - LIMIT;
+            return `
+            <div class="pipeline-col" ondragover="onDragOver(event)" ondragleave="onDragLeave(event)" ondrop="onDropStage(event, '${s.key}')">
+              <div class="pipeline-col-header">
+                <span class="pipeline-col-name">${s.label}</span>
+                <span class="pipeline-col-count">${col.length}</span>
               </div>
+              ${visible.map(p => {
+                const gbbTier = getGBBTier(p.id);
+                const gbbBadge = gbbTier ? '<span style="font-size:9px;font-weight:600;padding:1px 5px;border-radius:3px;background:' + (gbbTier === 'better' ? '#0D1626;color:#58A6FF;border:1px solid #1565C0' : gbbTier === 'best' ? '#0D1A0E;color:#3FB950;border:1px solid #238636' : '#161B22;color:#6E7681;border:1px solid #30363D') + '">' + gbbTier.toUpperCase() + '</span>' : '';
+                const likely = isLikelyToClose(p.id);
+                return '\
+                <div class="project-card' + (likely ? ' likely-card' : '') + '" draggable="true" ondragstart="onReorderDragStart(event, ' + p.id + ', \'' + s.key + '\')" ondragend="onDragEnd(event)" ondragover="event.preventDefault()" ondrop="onReorderDrop(event, ' + p.id + ', \'' + s.key + '\')" onclick="openProject(' + p.id + ')" style="' + (isContractNeedsReview(p) ? 'border-color:#DA3633' : likely ? 'border-color:#238636' : '') + '">\
+                  ' + (likely ? '<div class="likely-badge">LIKELY TO CLOSE</div>' : '') + '\
+                  ' + (isContractNeedsReview(p) ? '<div style="background:#DA3633;color:#fff;font-size:10px;font-weight:600;padding:4px 8px;border-radius:4px;margin-bottom:8px;text-align:center;letter-spacing:0.03em">REVIEW — SEND TO DESIGN & INSTALL</div>' : '') + '\
+                  <div style="display:flex;justify-content:space-between;align-items:flex-start">\
+                    <div class="project-card-name">' + esc(p.name) + '</div>\
+                    <div style="display:flex;gap:3px;align-items:center">' + gbbBadge + '</div>\
+                  </div>\
+                  <div class="project-card-client">' + esc(p.client_name || 'No client') + (p.city ? ' · ' + esc(p.city) + (p.state_abbr ? ', ' + esc(p.state_abbr) : '') : '') + '</div>\
+                  ' + (() => { const dt = getInstallDateDisplay(p); return '<div style="font-size:10px;color:' + dt.color + ';margin-top:3px"><span style="opacity:0.7">' + dt.label + ':</span> ' + dt.value + '</div>'; })() + '\
+                  <div class="project-card-footer">\
+                    ' + (canSee('financials') ? '<span class="project-card-value">' + fmt(p.total) + '</span>' : '<span></span>') + '\
+                    <div style="display:flex;align-items:center;gap:4px">\
+                      <span class="status-pill status-' + s.color + '">' + s.label + '</span>\
+                      <button class="move-btn" onclick="event.stopPropagation();showMoveMenu(' + p.id + ', event)" title="Move">\u22EE</button>\
+                    </div>\
+                  </div>\
+                  ' + (p.systems.length ? '<div style="margin-top:6px">' + p.systems.map(systemTagHTML).join('') + '</div>' : '') + '\
+                </div>';
+              }).join('')}
+              ${col.length === 0 ? '<div class="empty-state" style="padding:20px 10px;font-size:12px">No projects</div>' : ''}
+              ${!expanded && hiddenCount > 0 ? `<div onclick="event.stopPropagation();toggleColExpanded('${s.key}')" style="text-align:center;padding:8px 6px;font-size:11px;color:#58A6FF;cursor:pointer;border-top:1px solid #1C2333;margin-top:4px;-webkit-tap-highlight-color:transparent">+${hiddenCount} more</div>` : ''}
+              ${expanded && col.length > LIMIT ? `<div onclick="event.stopPropagation();toggleColExpanded('${s.key}')" style="text-align:center;padding:8px 6px;font-size:11px;color:#6E7681;cursor:pointer;border-top:1px solid #1C2333;margin-top:4px;-webkit-tap-highlight-color:transparent">Show less ↑</div>` : ''}
             </div>
-          ` : ''}
+            `;
+          }).join('')}
         </div>
-      `;
-    })()}
 
-    <div class="section-header">
-      <div class="section-title">Pipeline</div>
-      <div style="display:flex;align-items:center;gap:8px">
-        <div style="display:flex;background:#0D1117;border:1px solid #30363D;border-radius:6px;overflow:hidden;font-size:11px">
-          <div onclick="if(state.timelineMode!=='estimated')toggleTimelineMode()" style="padding:5px 12px;cursor:pointer;transition:all 0.15s;${state.timelineMode === 'estimated' ? 'background:#1565C0;color:#58A6FF;font-weight:500' : 'color:#6E7681'}">Estimated</div>
-          <div onclick="if(state.timelineMode!=='booked')toggleTimelineMode()" style="padding:5px 12px;cursor:pointer;transition:all 0.15s;${state.timelineMode === 'booked' ? 'background:#1565C0;color:#58A6FF;font-weight:500' : 'color:#6E7681'}">Booked</div>
-        </div>
-        <button class="section-action" onclick="navigate('projects')">View All</button>
-      </div>
-    </div>
-    <div class="pipeline-grid">
-      ${STAGES.map(s => {
-        const col = byStage[s.key] || [];
-        const LIMIT = 10;
-        const expanded = !!state.expandedCols[s.key];
-        const visible = expanded ? col : col.slice(0, LIMIT);
-        const hiddenCount = col.length - LIMIT;
-        return `
-        <div class="pipeline-col" ondragover="onDragOver(event)" ondragleave="onDragLeave(event)" ondrop="onDropStage(event, '${s.key}')">
-          <div class="pipeline-col-header">
-            <span class="pipeline-col-name">${s.label}</span>
-            <span class="pipeline-col-count">${col.length}</span>
-          </div>
-          ${visible.map(p => {
-            const gbbTier = getGBBTier(p.id);
-            const gbbBadge = gbbTier ? '<span style="font-size:9px;font-weight:600;padding:1px 5px;border-radius:3px;background:' + (gbbTier === 'better' ? '#0D1626;color:#58A6FF;border:1px solid #1565C0' : gbbTier === 'best' ? '#0D1A0E;color:#3FB950;border:1px solid #238636' : '#161B22;color:#6E7681;border:1px solid #30363D') + '">' + gbbTier.toUpperCase() + '</span>' : '';
-            const likely = isLikelyToClose(p.id);
+        <div class="archive-row">
+          ${ARCHIVE_BINS.map(b => {
+            const count = getArchivedProjects(b.key).length;
             return '\
-            <div class="project-card' + (likely ? ' likely-card' : '') + '" draggable="true" ondragstart="onReorderDragStart(event, ' + p.id + ', \'' + s.key + '\')" ondragend="onDragEnd(event)" ondragover="event.preventDefault()" ondrop="onReorderDrop(event, ' + p.id + ', \'' + s.key + '\')" onclick="openProject(' + p.id + ')" style="' + (isContractNeedsReview(p) ? 'border-color:#DA3633' : likely ? 'border-color:#238636' : '') + '">\
-              ' + (likely ? '<div class="likely-badge">LIKELY TO CLOSE</div>' : '') + '\
-              ' + (isContractNeedsReview(p) ? '<div style="background:#DA3633;color:#fff;font-size:10px;font-weight:600;padding:4px 8px;border-radius:4px;margin-bottom:8px;text-align:center;letter-spacing:0.03em">REVIEW — SEND TO DESIGN & INSTALL</div>' : '') + '\
-              <div style="display:flex;justify-content:space-between;align-items:flex-start">\
-                <div class="project-card-name">' + esc(p.name) + '</div>\
-                <div style="display:flex;gap:3px;align-items:center">' + gbbBadge + '</div>\
-              </div>\
-              <div class="project-card-client">' + esc(p.client_name || 'No client') + (p.city ? ' · ' + esc(p.city) + (p.state_abbr ? ', ' + esc(p.state_abbr) : '') : '') + '</div>\
-              ' + (() => { const dt = getInstallDateDisplay(p); return '<div style="font-size:10px;color:' + dt.color + ';margin-top:3px"><span style="opacity:0.7">' + dt.label + ':</span> ' + dt.value + '</div>'; })() + '\
-              <div class="project-card-footer">\
-                ' + (canSee('financials') ? '<span class="project-card-value">' + fmt(p.total) + '</span>' : '<span></span>') + '\
-                <div style="display:flex;align-items:center;gap:4px">\
-                  <span class="status-pill status-' + s.color + '">' + s.label + '</span>\
-                  <button class="move-btn" onclick="event.stopPropagation();showMoveMenu(' + p.id + ', event)" title="Move">\u22EE</button>\
-                </div>\
-              </div>\
-              ' + (p.systems.length ? '<div style="margin-top:6px">' + p.systems.map(systemTagHTML).join('') + '</div>' : '') + '\
+            <div class="archive-bin" ondragover="onDragOver(event)" ondragleave="onDragLeave(event)" ondrop="onDropArchive(event, \'' + b.key + '\')">\
+              <span class="archive-icon">' + b.icon + '</span>\
+              <span class="archive-label">' + b.label + '</span>\
+              ' + (count > 0 ? '<span class="archive-count" onclick="toggleArchiveExpand(\'' + b.key + '\')">' + count + '</span>' : '') + '\
             </div>';
           }).join('')}
-          ${col.length === 0 ? '<div class="empty-state" style="padding:20px 10px;font-size:12px">No projects</div>' : ''}
-          ${!expanded && hiddenCount > 0 ? `
-            <div onclick="event.stopPropagation();toggleColExpanded('${s.key}')"
-              style="text-align:center;padding:8px 6px;font-size:11px;color:#58A6FF;cursor:pointer;border-top:1px solid #1C2333;margin-top:4px;-webkit-tap-highlight-color:transparent">
-              +${hiddenCount} more
-            </div>` : ''}
-          ${expanded && col.length > LIMIT ? `
-            <div onclick="event.stopPropagation();toggleColExpanded('${s.key}')"
-              style="text-align:center;padding:8px 6px;font-size:11px;color:#6E7681;cursor:pointer;border-top:1px solid #1C2333;margin-top:4px;-webkit-tap-highlight-color:transparent">
-              Show less ↑
-            </div>` : ''}
         </div>
-      `}).join('')}
-    </div>
+        <div id="archive-expanded"></div>
 
-    <div class="archive-row">
-      ${ARCHIVE_BINS.map(b => {
-        const count = getArchivedProjects(b.key).length;
-        return '\
-        <div class="archive-bin" ondragover="onDragOver(event)" ondragleave="onDragLeave(event)" ondrop="onDropArchive(event, \'' + b.key + '\')">\
-          <span class="archive-icon">' + b.icon + '</span>\
-          <span class="archive-label">' + b.label + '</span>\
-          ' + (count > 0 ? '<span class="archive-count" onclick="toggleArchiveExpand(\'' + b.key + '\')">' + count + '</span>' : '') + '\
-        </div>';
-      }).join('')}
+        ${renderRecentActivity()}
+      </div>
+      ${state.sidebarOpen ? renderSidebar(activeView) : ''}
     </div>
-    <div id="archive-expanded"></div>
-
-    ${renderRecentActivity()}
   `;
 }
 
