@@ -54,6 +54,7 @@ const state = {
   currentPage: 'dashboard',
   dashboardView: null,
   currentProject: null,
+  projectTab: 'overview',
   calendarDate: new Date(),
   calendarView: 'month',
   syncing: false,
@@ -76,9 +77,6 @@ const state = {
 };
 
 // ── Team Roster ──
-// Members have access[] array — checked off during setup
-// status: 'active' = using the app, 'pending' = account created, awaiting invite claim
-// When Layer 2 lands: pending users get invite email to claim their account
 if (state.team.length === 0) {
   state.team = [
     { id: 1, name: 'Jacob', access: ['admin','sales','design','project_manager','installer'], primaryRole: 'admin', email: '', phone: '', initials: 'JA', status: 'active' }
@@ -86,7 +84,6 @@ if (state.team.length === 0) {
   save('vi_team', state.team);
 }
 
-// Migrate old team members that don't have access[] yet
 state.team.forEach(m => {
   if (!m.access) {
     m.access = m.role ? [m.role] : ['installer'];
@@ -142,7 +139,6 @@ function switchUser(memberId) {
   localStorage.setItem('vi_role', currentUserRole);
   localStorage.setItem('vi_active_member', memberId);
 
-  // Update sidebar user area
   const userAvatar = document.querySelector('.user-avatar');
   const userName = document.querySelector('.user-name');
   const userRole = document.querySelector('.user-role');
@@ -153,11 +149,9 @@ function switchUser(memberId) {
     userRole.textContent = da?.label || currentUserRole;
   }
 
-  // Update topbar dropdown
   const sel = document.getElementById('role-select');
   if (sel) sel.value = memberId;
 
-  // Reset dashboard view to new user's primary
   state.dashboardView = member.primaryRole || member.access[0];
 
   renderCurrentPage();
@@ -189,7 +183,6 @@ function mapStage(raw) {
 }
 
 // ── Contract Review Tracking ──
-// Projects in "contract" stage need review before handoff to design & install
 const contractReviewed = JSON.parse(localStorage.getItem('vi_contract_reviewed') || '{}');
 
 function isContractNeedsReview(project) {
@@ -200,10 +193,6 @@ function markContractReviewed(projectId) {
   contractReviewed[projectId] = new Date().toISOString();
   localStorage.setItem('vi_contract_reviewed', JSON.stringify(contractReviewed));
   renderCurrentPage();
-  // Also re-render modal if open
-  if (state.currentProject && state.currentProject.id === projectId) {
-    openProject(projectId);
-  }
 }
 
 // ── Design & Install Checklist Templates ──
@@ -519,6 +508,13 @@ function save(key, val) {
   localStorage.setItem(key, JSON.stringify(val));
 }
 
+function esc(s) {
+  if (!s) return '';
+  const d = document.createElement('div');
+  d.textContent = s;
+  return d.innerHTML;
+}
+
 // ── Timeline Helpers (Estimated vs. Booked) ──
 function getProjectDates(project) {
   if (state.timelineMode === 'booked') {
@@ -541,7 +537,6 @@ function toggleTimelineMode() {
   state.timelineMode = state.timelineMode === 'estimated' ? 'booked' : 'estimated';
   localStorage.setItem('vi_timeline_mode', state.timelineMode);
   renderCurrentPage();
-  if (state.currentProject) openProject(state.currentProject.id);
 }
 
 function hasBookedDates(projectId) {
@@ -555,13 +550,11 @@ function fmtDateRange(start, end) {
   return e ? `${s} – ${e}` : s;
 }
 
-// Returns booked dates object { start, end } or null
 function getBookedTimeline(projectId) {
   const b = state.bookedDates[projectId];
   return (b && b.start) ? b : null;
 }
 
-// Returns { label, value, color } for display in project cards based on current timeline mode
 function getInstallDateDisplay(project) {
   const booked = getBookedTimeline(project.id);
   if (state.timelineMode === 'booked') {
@@ -569,13 +562,11 @@ function getInstallDateDisplay(project) {
       const end = booked.end && booked.end !== booked.start ? ' – ' + shortDate(booked.end) : '';
       return { label: 'Booked', value: shortDate(booked.start) + end, color: '#3FB950' };
     }
-    // Booked mode but no booked dates — fall back to estimated with indicator
     if (project.start_date) {
       return { label: 'Est.', value: shortDate(project.start_date), color: '#6E7681' };
     }
     return { label: 'Booked', value: 'Not set', color: '#6E7681' };
   }
-  // Estimated mode
   if (project.start_date) {
     const end = project.end_date ? ' – ' + shortDate(project.end_date) : '';
     return { label: 'Est.', value: shortDate(project.start_date) + end, color: '#8B949E' };
@@ -583,7 +574,6 @@ function getInstallDateDisplay(project) {
   return { label: 'Est.', value: 'Not set', color: '#6E7681' };
 }
 
-// Dialog to set or edit booked install dates for a project
 function showSetBookedDatesDialog(projectId) {
   const p = state.projects.find(x => x.id === projectId);
   if (!p) return;
@@ -615,7 +605,7 @@ function showSetBookedDatesDialog(projectId) {
 
       <div style="display:flex;gap:8px;margin-top:16px">
         <button class="btn-primary" onclick="saveBookedDatesDialog(${projectId})" style="flex:1;padding:11px">Save</button>
-        ${existing ? `<button class="btn btn-danger" onclick="setBookedDates(${projectId},'','');document.getElementById('booked-dates-dialog')?.remove();openProject(${projectId})">Clear</button>` : ''}
+        ${existing ? `<button class="btn btn-danger" onclick="setBookedDates(${projectId},'','');document.getElementById('booked-dates-dialog')?.remove();renderCurrentPage()">Clear</button>` : ''}
         <button class="btn" onclick="document.getElementById('booked-dates-dialog')?.remove()">Cancel</button>
       </div>
     </div>
@@ -631,8 +621,6 @@ function saveBookedDatesDialog(projectId) {
   if (!start) { alert('Please set a start date.'); return; }
   setBookedDates(projectId, start, end);
   document.getElementById('booked-dates-dialog')?.remove();
-  // Re-render the modal and current page
-  openProject(projectId);
   renderCurrentPage();
 }
 
@@ -676,7 +664,7 @@ function enrichProject(p) {
   };
 }
 
-// ── Archive System (Icebox / Lost / Trash) ──
+// ── Archive System ──
 const ARCHIVE_BINS = [
   { key: 'icebox', label: 'Icebox', icon: '❄️', color: '#58A6FF' },
   { key: 'lost', label: 'Lost', icon: '✕', color: '#F85149' },
@@ -704,7 +692,6 @@ function getArchivedProjects(bin) {
 }
 
 // ── Likely to Close ──
-// Sales indicator — marked projects pin to top of column and count toward cash flow projections
 function isLikelyToClose(projectId) {
   return !!state.likelyToClose[projectId];
 }
@@ -717,10 +704,6 @@ function toggleLikelyToClose(projectId) {
   }
   save('vi_likely', state.likelyToClose);
   renderCurrentPage();
-  // Re-render modal if open
-  if (state.currentProject && state.currentProject.id === projectId) {
-    openProject(projectId);
-  }
 }
 
 function getLikelyToCloseTotal() {
@@ -729,7 +712,6 @@ function getLikelyToCloseTotal() {
 }
 
 // ── Column Ordering ──
-// Custom drag-to-reorder within columns, stored per stage
 function getColumnOrder(stage) {
   return state.columnOrder[stage] || [];
 }
@@ -741,7 +723,6 @@ function setColumnOrder(stage, orderedIds) {
 
 function sortByColumnOrder(projects, stage) {
   const order = getColumnOrder(stage);
-  // Likely to close always pins to top, then custom order, then the rest
   const likely = [];
   const ordered = [];
   const rest = [];
@@ -756,7 +737,6 @@ function sortByColumnOrder(projects, stage) {
     }
   });
 
-  // Sort likely by custom order if any
   likely.sort((a, b) => {
     const ai = order.indexOf(a.id);
     const bi = order.indexOf(b.id);
@@ -764,7 +744,6 @@ function sortByColumnOrder(projects, stage) {
     return 0;
   });
 
-  // Sort ordered by their position in the order array
   ordered.sort((a, b) => order.indexOf(a.id) - order.indexOf(b.id));
 
   return [...likely, ...ordered, ...rest];
@@ -784,13 +763,11 @@ function onReorderDrop(e, targetId, stage) {
 
   if (!sourceId) return;
 
-  // Cross-column drop: move to this column's stage
   if (reorderStage !== stage) {
     moveProjectToStage(sourceId, stage);
     return;
   }
 
-  // Same-column reorder
   if (sourceId === targetId) return;
 
   const stageProjects = state.projects.filter(p => !p.archived && p.stage === stage);
@@ -807,8 +784,7 @@ function onReorderDrop(e, targetId, stage) {
   renderCurrentPage();
 }
 
-// ── GBB (Good/Better/Best) Linking ──
-// Structure: { groupId: { good: projectId, better: projectId, best: projectId } }
+// ── GBB ──
 function getGBBGroup(projectId) {
   for (const [gid, group] of Object.entries(state.gbbLinks)) {
     if (group.good === projectId || group.better === projectId || group.best === projectId) {
@@ -863,7 +839,7 @@ function showGBBLinkDialog(projectId) {
         <div>🥇 <strong>Best:</strong> ${esc(bestP?.name || 'Unknown')}</div>
       </div>
       <div style="display:flex;gap:8px;margin-top:16px">
-        <button class="btn btn-danger" onclick="unlinkGBB(${projectId});document.getElementById('gbb-dialog')?.remove();openProject(${projectId})">Unlink Group</button>
+        <button class="btn btn-danger" onclick="unlinkGBB(${projectId});document.getElementById('gbb-dialog')?.remove();renderCurrentPage()">Unlink Group</button>
         <button class="btn" onclick="document.getElementById('gbb-dialog')?.remove()">Close</button>
       </div>
     </div>`;
@@ -901,7 +877,6 @@ function showGBBLinkDialog(projectId) {
   document.body.appendChild(modal);
   modal.addEventListener('click', e => { if (e.target === modal) modal.remove(); });
 
-  // Auto-hide the field for the current project's tier
   if (!existing) {
     const tierSel = document.getElementById('gbb-tier');
     function updateGBBFields() {
@@ -924,10 +899,9 @@ function submitGBBLink(projectId) {
   if (new Set([goodId, betterId, bestId]).size !== 3) { alert('Each project must be different.'); return; }
   linkGBB(goodId, betterId, bestId);
   document.getElementById('gbb-dialog')?.remove();
-  openProject(projectId);
+  renderCurrentPage();
 }
 
-// ── Pipeline Value (GBB-aware) ──
 function getPipelineValue(projects) {
   let total = 0;
   const counted = new Set();
@@ -935,7 +909,6 @@ function getPipelineValue(projects) {
     if (counted.has(p.id)) return;
     const group = getGBBGroup(p.id);
     if (group) {
-      // Only count the "better" tier for GBB groups
       if (!counted.has(group.good) && !counted.has(group.better) && !counted.has(group.best)) {
         const betterProject = state.projects.find(x => x.id === group.better);
         if (betterProject) total += betterProject.total;
@@ -951,7 +924,6 @@ function getPipelineValue(projects) {
   return total;
 }
 
-// ── Dashboard Title ──
 function getDashboardTitle() {
   const view = state.dashboardView || currentUserRole;
   const roleLabels = {
@@ -969,7 +941,7 @@ function switchDashboardView(view) {
   renderDashboard(document.getElementById('content'));
 }
 
-// ── Drag & Drop (pipeline) ──
+// ── Drag & Drop ──
 function onDragStart(e, projectId) {
   e.dataTransfer.setData('text/plain', projectId);
   e.dataTransfer.effectAllowed = 'move';
@@ -1010,23 +982,16 @@ function onDropArchive(e, bin) {
 function moveProjectToStage(projectId, newStage) {
   const p = state.projects.find(x => x.id === projectId);
   if (!p) return;
-  // If coming from archive, unarchive first
   if (p.archived) {
     delete state.archived[projectId];
     save('vi_archived', state.archived);
     p.archived = null;
   }
   p.stage = newStage;
-  // Update cache
   try { localStorage.setItem('vi_projects_cache', JSON.stringify(state.projects)); } catch(e) {}
-  // If moved to contract, it needs review
-  if (newStage === 'contract' && !contractReviewed[projectId]) {
-    // Already handled by isContractNeedsReview
-  }
   renderCurrentPage();
 }
 
-// ── Mobile Move-To (for projects on mobile) ──
 function showMoveMenu(projectId, event) {
   event.stopPropagation();
   const existing = document.getElementById('move-menu');
@@ -1070,7 +1035,7 @@ function showMoveMenu(projectId, event) {
   }, 10);
 }
 
-// ── Bottom Nav (injected for mobile) ──
+// ── Bottom Nav (mobile) ──
 function injectBottomNav() {
   if (document.getElementById('bottom-nav')) return;
   const nav = document.createElement('div');
@@ -1102,7 +1067,6 @@ function injectBottomNav() {
   document.body.appendChild(nav);
 }
 
-// ── More Menu (mobile) ──
 function toggleMoreMenu() {
   let menu = document.getElementById('more-menu');
   if (menu) { menu.remove(); return; }
@@ -1129,7 +1093,6 @@ function toggleMoreMenu() {
     </div>
   `;
   document.body.appendChild(menu);
-  // Close on tap outside
   setTimeout(() => {
     document.addEventListener('click', function closer(e) {
       if (!menu.contains(e.target) && !e.target.closest('[data-page="more"]')) {
@@ -1143,13 +1106,11 @@ function toggleMoreMenu() {
 // ── Navigation ──
 function navigate(page) {
   state.currentPage = page;
-  // Close more menu if open
+  state.currentProject = null;
   document.getElementById('more-menu')?.remove();
-  // Update sidebar nav (desktop)
   document.querySelectorAll('.nav-item').forEach(el => {
     el.classList.toggle('active', el.dataset.page === page);
   });
-  // Update bottom nav (mobile)
   document.querySelectorAll('#bottom-nav .bnav-item').forEach(el => {
     const p = el.dataset.page;
     el.classList.toggle('active', p === page || (page === 'dashboard' && p === 'dashboard'));
@@ -1178,6 +1139,7 @@ function renderCurrentPage() {
       case 'vendors': renderVendors(c); break;
       case 'intake': renderIntake(c); break;
       case 'team': renderTeam(c); break;
+      case 'project': renderProjectPage(c); break;
       default: renderDashboard(c);
     }
   } catch (e) {
@@ -1187,9 +1149,42 @@ function renderCurrentPage() {
   updateRightPanel();
 }
 
-// ── To-Do List (per-role) ──
-// Storage: vi_todos = { role: [{id, text, done, doneAt}] }
+// ── Project Page Navigation ──
+// v1.16: project detail is a full page, not a modal
+function openProject(id) {
+  const p = state.projects.find(x => x.id === id);
+  if (!p) return;
+  state.currentProject = p;
+  state.projectTab = getDefaultProjectTab();
+  state.currentPage = 'project';
+  // Clear active highlighting on nav (project is not in nav)
+  document.querySelectorAll('.nav-item').forEach(el => el.classList.remove('active'));
+  document.querySelectorAll('#bottom-nav .bnav-item').forEach(el => el.classList.remove('active'));
+  const titleEl = document.getElementById('page-title');
+  if (titleEl) titleEl.textContent = p.name;
+  renderCurrentPage();
+  const c = document.getElementById('content');
+  if (c) c.scrollTop = 0;
+}
 
+function getDefaultProjectTab() {
+  const view = state.dashboardView || currentUserRole;
+  if (view === 'design') return 'design';
+  if (view === 'installer' || view === 'project_manager') return 'install';
+  return 'overview';
+}
+
+function closeProjectPage() {
+  state.currentProject = null;
+  navigate('dashboard');
+}
+
+function switchProjectTab(tab) {
+  state.projectTab = tab;
+  renderProjectPage(document.getElementById('content'));
+}
+
+// ── To-Do List (per-role) ──
 function getTodos(role) {
   return (state.todos[role] || []);
 }
@@ -1226,10 +1221,7 @@ function clearCompletedTodos() {
   renderCurrentPage();
 }
 
-// ── Time-Sensitive Tasks ──
-// Stored tasks: vi_tasks = [{id, text, dueDate, projectId, memberId, done, doneAt}]
-// Derived tasks come from incomplete project checklists for the current role (not stored)
-
+// ── Tasks ──
 function getTaskUrgency(dueDate) {
   if (!dueDate) return { label: '', color: '#6E7681', bg: 'transparent', border: '#1C2333' };
   const now = new Date(); now.setHours(0,0,0,0);
@@ -1253,7 +1245,6 @@ function addTask(text, dueDate, projectId) {
     done: false,
     doneAt: null
   });
-  // Sort by due date ascending, undated at end
   state.tasks.sort((a, b) => {
     if (!a.dueDate && !b.dueDate) return 0;
     if (!a.dueDate) return 1;
@@ -1279,10 +1270,7 @@ function deleteTask(id) {
   renderCurrentPage();
 }
 
-// Derive tasks from project checklists for the current role
 // ── Project Assignments ──
-// Structure: state.assignments = { [projectId]: { design: [memberId], install: [memberId] } }
-
 function getProjectAssignment(projectId) {
   return state.assignments[projectId] || { design: [], install: [] };
 }
@@ -1300,8 +1288,9 @@ function toggleProjectAssignment(projectId, phase, memberId) {
   else list.push(memberId);
   state.assignments[projectId][phase] = list;
   save('vi_assignments', state.assignments);
-  // Re-render modal if open
-  if (state.currentProject?.id === projectId) openProject(projectId);
+  if (state.currentPage === 'project' && state.currentProject?.id === projectId) {
+    renderCurrentPage();
+  }
 }
 
 function getDerivedTasks(role) {
@@ -1312,7 +1301,6 @@ function getDerivedTasks(role) {
   if (role === 'design' || role === 'admin') {
     activeProjects.forEach(p => {
       if (!['proposal','sent','contract'].includes(p.stage)) return;
-      // Only show if this member is assigned to design on this project (admin sees all)
       if (role !== 'admin' && !isAssignedTo(p.id, 'design', memberId)) return;
       p.systems.forEach(sys => {
         const template = TEMPLATES.design[sys];
@@ -1337,7 +1325,6 @@ function getDerivedTasks(role) {
 
   if (role === 'installer' || role === 'project_manager' || role === 'admin') {
     activeProjects.filter(p => p.stage === 'contract').forEach(p => {
-      // Only show if this member is assigned to install on this project (admin sees all)
       if (role !== 'admin' && !isAssignedTo(p.id, 'install', memberId)) return;
       p.systems.forEach(sys => {
         const template = TEMPLATES.install[sys];
@@ -1438,7 +1425,6 @@ function submitAddTask() {
   addTask(text, dueDate, projectId);
   document.getElementById('add-task-dialog')?.remove();
 }
-
 // ── Dashboard Widgets ──
 function renderTodoWidget(role) {
   const all = getTodos(role);
@@ -1524,7 +1510,7 @@ function renderTasksWidget(role) {
   function isThisWeek(dueDate) {
     if (!dueDate) return false;
     const d = new Date(dueDate); d.setHours(0,0,0,0);
-    return d <= weekOut; // overdue + today + next 7 days
+    return d <= weekOut;
   }
 
   const allManual = state.tasks.filter(t => t.memberId === memberId && !t.done);
@@ -1628,7 +1614,6 @@ function renderTasksWidget(role) {
   `;
 }
 
-// ── Close Rate ──
 function getCloseRate() {
   const contracted = state.projects.filter(p => !p.archived && p.stage === 'contract').length;
   const lost = Object.keys(state.archived).filter(id => state.archived[id] === 'lost').length;
@@ -1636,7 +1621,7 @@ function getCloseRate() {
   return total > 0 ? Math.round((contracted / total) * 100) : null;
 }
 
-// ── Notes Sidebar ──
+// ── Right Panel ──
 function toggleRightPanel(panel) {
   state.rightPanel = state.rightPanel === panel ? null : panel;
   if (state.rightPanel !== 'messages') state.activeConversation = null;
@@ -1898,8 +1883,6 @@ function renderMessagesList(channelId) {
   }).join('');
 }
 
-// ── Global Right Command Panel ──
-
 function injectRightPanel() {
   if (document.getElementById('right-panel')) return;
   const el = document.createElement('div');
@@ -1912,7 +1895,6 @@ function updateRightPanel() {
   const el = document.getElementById('right-panel');
   if (!el) return;
   el.innerHTML = renderRightPanelHTML();
-  // Push main content so panel never overlaps
   const main = document.getElementById('main');
   if (main && window.innerWidth > 768) {
     main.style.paddingRight = state.rightPanel ? '336px' : '52px';
@@ -1923,7 +1905,6 @@ function updateRightPanel() {
   }
 }
 
-// ── Meetings ──
 function getUpcomingMeetings() {
   const today = new Date().toISOString().slice(0, 10);
   return state.meetings
@@ -1948,7 +1929,6 @@ function scheduleMeeting() {
     attendees, notes, createdBy: getActiveTeamMemberId(), createdAt: Date.now()
   });
   save('vi_meetings', state.meetings);
-  // Reset form
   ['mtg-title','mtg-date','mtg-time','mtg-notes'].forEach(id => {
     const f = document.getElementById(id); if (f) f.value = '';
   });
@@ -1961,7 +1941,6 @@ function deleteMeeting(id) {
   updateRightPanel();
 }
 
-// ── Right Panel HTML ──
 function renderRightPanelHTML() {
   const role = currentUserRole;
   const panel = state.rightPanel;
@@ -1993,7 +1972,6 @@ function renderRightPanelHTML() {
 
   if (!panel) return strip;
 
-  // ── Notes Panel ──
   const notesPanel = `
     <div class="rpanel-header">
       <div>
@@ -2027,7 +2005,6 @@ function renderRightPanelHTML() {
           ${sections.filter(s=>!s.collapsed).map(s=>renderNotesSection(role,s)).join('')}`}
     </div>`;
 
-  // ── Quick Add Task Panel ──
   const projectOptions = state.projects.filter(p=>!p.archived)
     .map(p=>`<option value="${p.id}">${esc(p.name)}</option>`).join('');
   const taskPanel = `
@@ -2062,12 +2039,10 @@ function renderRightPanelHTML() {
       </div>` : ''}
     </div>`;
 
-  // ── Messages Panel ──
   const myId = getActiveTeamMemberId();
   let messagesPanel;
 
   if (!state.activeConversation) {
-    // Conversation list
     const teamUnread = getChannelUnread('team');
     const teamLast = getChannelMessages('team').slice(-1)[0];
     const teamPreview = teamLast
@@ -2116,7 +2091,6 @@ function renderRightPanelHTML() {
           `).join('')}
       </div>`;
   } else {
-    // Active conversation thread
     const isTeam = state.activeConversation === 'team';
     let headerName, headerSub, headerColor;
     if (isTeam) {
@@ -2159,7 +2133,6 @@ function renderRightPanelHTML() {
       </div>`;
   }
 
-  // ── Schedule Panel ──
   const schedulePanel = `
     <div class="rpanel-header"><div class="rpanel-header-title">Schedule Meeting</div></div>
     <div class="rpanel-body">
@@ -2237,7 +2210,6 @@ function quickAddTask() {
   if (inp) inp.value = '';
   updateRightPanel();
 }
-
 // ── Dashboard ──
 function renderDashboard(c) {
   const projects = state.projects.filter(p => !p.archived);
@@ -2248,7 +2220,6 @@ function renderDashboard(c) {
     else byStage.lead.push(p);
   });
 
-  // Sort each column: likely-to-close pinned top, then custom order
   STAGES.forEach(s => {
     byStage[s.key] = sortByColumnOrder(byStage[s.key], s.key);
   });
@@ -2256,20 +2227,17 @@ function renderDashboard(c) {
   const totalValue = getPipelineValue(projects);
   const activeCount = projects.filter(p => p.stage === 'contract').length;
   const reviewCount = projects.filter(p => isContractNeedsReview(p)).length;
-  const proposalCount = byStage.proposal.length + byStage.sent.length;
   const archivedCount = state.projects.filter(p => p.archived).length;
   const likelyValue = getLikelyToCloseTotal();
   const likelyCount = projects.filter(p => isLikelyToClose(p.id)).length;
 
-  // Update page title for role
   const activeView = state.dashboardView || currentUserRole;
   const activeMember = getTeamMember(getActiveTeamMemberId());
   const userAccess = activeMember?.access || ['admin'];
   document.getElementById('page-title').textContent = getDashboardTitle();
 
-  // Dashboard view tabs
   const viewTabs = userAccess.length > 1 ? `
-    <div style="display:flex;gap:4px;margin-bottom:16px;overflow-x:auto;-webkit-overflow-scrolling:touch;padding-bottom:2px">
+    <div style="display:flex;gap:4px;margin-bottom:12px;overflow-x:auto;-webkit-overflow-scrolling:touch;padding-bottom:2px">
       ${userAccess.map(a => {
         const da = DASHBOARD_ACCESS.find(d => d.key === a);
         if (!da) return '';
@@ -2282,103 +2250,77 @@ function renderDashboard(c) {
   const closeRate = getCloseRate();
 
   c.innerHTML = `
-    ${viewTabs.replace('margin-bottom:16px', 'margin-bottom:12px')}
+    ${viewTabs}
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-bottom:20px;align-items:start">
+      <div class="metrics-grid" style="margin-bottom:0">
+        <div class="metric-card">
+          <div class="metric-label">Pipeline Value</div>
+          <div class="metric-value">${fmt(totalValue)}</div>
+          <div class="metric-sub">${projects.length} projects${archivedCount > 0 ? ', ' + archivedCount + ' archived' : ''}</div>
+        </div>
+        <div class="metric-card" style="${likelyCount > 0 ? 'border-color:#238636' : ''}">
+          <div class="metric-label">Likely to Close</div>
+          <div class="metric-value" style="${likelyCount > 0 ? 'color:#3FB950' : ''}">${fmt(likelyValue)}</div>
+          <div class="metric-sub">${likelyCount} project${likelyCount !== 1 ? 's' : ''} flagged</div>
+        </div>
+        <div class="metric-card">
+          <div class="metric-label">Contracted</div>
+          <div class="metric-value">${activeCount}</div>
+          <div class="metric-sub">${reviewCount > 0 ? '<span style="color:#F85149;font-weight:500">' + reviewCount + ' needs review</span>' : 'All reviewed'}</div>
+        </div>
+        <div class="metric-card" style="${closeRate !== null && closeRate >= 50 ? 'border-color:#238636' : ''}">
+          <div class="metric-label">Close Rate</div>
+          <div class="metric-value" style="${closeRate !== null && closeRate >= 50 ? 'color:#3FB950' : ''}">${closeRate !== null ? closeRate + '%' : '—'}</div>
+          <div class="metric-sub">${closeRate !== null ? activeCount + ' won · ' + Object.values(state.archived).filter(v => v === 'lost').length + ' lost' : 'No closed deals yet'}</div>
+        </div>
+      </div>
+      <div>${renderTasksWidget(activeView)}</div>
+    </div>
 
-        <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-bottom:20px;align-items:start">
-          <div class="metrics-grid" style="margin-bottom:0">
-            <div class="metric-card">
-              <div class="metric-label">Pipeline Value</div>
-              <div class="metric-value">${fmt(totalValue)}</div>
-              <div class="metric-sub">${projects.length} projects${archivedCount > 0 ? ', ' + archivedCount + ' archived' : ''}</div>
-            </div>
-            <div class="metric-card" style="${likelyCount > 0 ? 'border-color:#238636' : ''}">
-              <div class="metric-label">Likely to Close</div>
-              <div class="metric-value" style="${likelyCount > 0 ? 'color:#3FB950' : ''}">${fmt(likelyValue)}</div>
-              <div class="metric-sub">${likelyCount} project${likelyCount !== 1 ? 's' : ''} flagged</div>
-            </div>
-            <div class="metric-card">
-              <div class="metric-label">Contracted</div>
-              <div class="metric-value">${activeCount}</div>
-              <div class="metric-sub">${reviewCount > 0 ? '<span style="color:#F85149;font-weight:500">' + reviewCount + ' needs review</span>' : 'All reviewed'}</div>
-            </div>
-            <div class="metric-card" style="${closeRate !== null && closeRate >= 50 ? 'border-color:#238636' : ''}">
-              <div class="metric-label">Close Rate</div>
-              <div class="metric-value" style="${closeRate !== null && closeRate >= 50 ? 'color:#3FB950' : ''}">${closeRate !== null ? closeRate + '%' : '—'}</div>
-              <div class="metric-sub">${closeRate !== null ? activeCount + ' won · ' + Object.values(state.archived).filter(v => v === 'lost').length + ' lost' : 'No closed deals yet'}</div>
-            </div>
+    <div class="section-header">
+      <div class="section-title">Pipeline</div>
+      <div style="display:flex;align-items:center;gap:8px">
+        <div style="display:flex;background:#0D1117;border:1px solid #30363D;border-radius:6px;overflow:hidden;font-size:11px">
+          <div onclick="if(state.timelineMode!=='estimated')toggleTimelineMode()" style="padding:5px 12px;cursor:pointer;transition:all 0.15s;${state.timelineMode === 'estimated' ? 'background:#1565C0;color:#58A6FF;font-weight:500' : 'color:#6E7681'}">Estimated</div>
+          <div onclick="if(state.timelineMode!=='booked')toggleTimelineMode()" style="padding:5px 12px;cursor:pointer;transition:all 0.15s;${state.timelineMode === 'booked' ? 'background:#1565C0;color:#58A6FF;font-weight:500' : 'color:#6E7681'}">Booked</div>
+        </div>
+        <button class="section-action" onclick="navigate('projects')">View All</button>
+      </div>
+    </div>
+    <div class="pipeline-grid">
+      ${STAGES.map(s => {
+        const col = byStage[s.key] || [];
+        const LIMIT = 10;
+        const expanded = !!state.expandedCols[s.key];
+        const visible = expanded ? col : col.slice(0, LIMIT);
+        const hiddenCount = col.length - LIMIT;
+        return `
+        <div class="pipeline-col" ondragover="onDragOver(event)" ondragleave="onDragLeave(event)" ondrop="onDropStage(event, '${s.key}')">
+          <div class="pipeline-col-header">
+            <span class="pipeline-col-name">${s.label}</span>
+            <span class="pipeline-col-count">${col.length}</span>
           </div>
-          <div>${renderTasksWidget(activeView)}</div>
-        </div>
-
-        <div class="section-header">
-          <div class="section-title">Pipeline</div>
-          <div style="display:flex;align-items:center;gap:8px">
-            <div style="display:flex;background:#0D1117;border:1px solid #30363D;border-radius:6px;overflow:hidden;font-size:11px">
-              <div onclick="if(state.timelineMode!=='estimated')toggleTimelineMode()" style="padding:5px 12px;cursor:pointer;transition:all 0.15s;${state.timelineMode === 'estimated' ? 'background:#1565C0;color:#58A6FF;font-weight:500' : 'color:#6E7681'}">Estimated</div>
-              <div onclick="if(state.timelineMode!=='booked')toggleTimelineMode()" style="padding:5px 12px;cursor:pointer;transition:all 0.15s;${state.timelineMode === 'booked' ? 'background:#1565C0;color:#58A6FF;font-weight:500' : 'color:#6E7681'}">Booked</div>
-            </div>
-            <button class="section-action" onclick="navigate('projects')">View All</button>
-          </div>
-        </div>
-        <div class="pipeline-grid">
-          ${STAGES.map(s => {
-            const col = byStage[s.key] || [];
-            const LIMIT = 10;
-            const expanded = !!state.expandedCols[s.key];
-            const visible = expanded ? col : col.slice(0, LIMIT);
-            const hiddenCount = col.length - LIMIT;
-            return `
-            <div class="pipeline-col" ondragover="onDragOver(event)" ondragleave="onDragLeave(event)" ondrop="onDropStage(event, '${s.key}')">
-              <div class="pipeline-col-header">
-                <span class="pipeline-col-name">${s.label}</span>
-                <span class="pipeline-col-count">${col.length}</span>
-              </div>
-              ${visible.map(p => {
-                const gbbTier = getGBBTier(p.id);
-                const gbbBadge = gbbTier ? '<span style="font-size:9px;font-weight:600;padding:1px 5px;border-radius:3px;background:' + (gbbTier === 'better' ? '#0D1626;color:#58A6FF;border:1px solid #1565C0' : gbbTier === 'best' ? '#0D1A0E;color:#3FB950;border:1px solid #238636' : '#161B22;color:#6E7681;border:1px solid #30363D') + '">' + gbbTier.toUpperCase() + '</span>' : '';
-                const likely = isLikelyToClose(p.id);
-                return '\
-                <div class="project-card' + (likely ? ' likely-card' : '') + '" draggable="true" ondragstart="onReorderDragStart(event, ' + p.id + ', \'' + s.key + '\')" ondragend="onDragEnd(event)" ondragover="event.preventDefault()" ondrop="onReorderDrop(event, ' + p.id + ', \'' + s.key + '\')" onclick="openProject(' + p.id + ')" style="' + (isContractNeedsReview(p) ? 'border-color:#DA3633' : likely ? 'border-color:#238636' : '') + '">\
-                  ' + (likely ? '<div class="likely-badge">LIKELY TO CLOSE</div>' : '') + '\
-                  ' + (isContractNeedsReview(p) ? '<div style="background:#DA3633;color:#fff;font-size:10px;font-weight:600;padding:4px 8px;border-radius:4px;margin-bottom:8px;text-align:center;letter-spacing:0.03em">REVIEW — SEND TO DESIGN & INSTALL</div>' : '') + '\
-                  <div style="display:flex;justify-content:space-between;align-items:flex-start">\
-                    <div class="project-card-name">' + esc(p.name) + '</div>\
-                    <div style="display:flex;gap:3px;align-items:center">' + gbbBadge + '</div>\
-                  </div>\
-                  <div class="project-card-client">' + esc(p.client_name || 'No client') + (p.city ? ' · ' + esc(p.city) + (p.state_abbr ? ', ' + esc(p.state_abbr) : '') : '') + '</div>\
-                  ' + (() => { const dt = getInstallDateDisplay(p); return '<div style="font-size:10px;color:' + dt.color + ';margin-top:3px"><span style="opacity:0.7">' + dt.label + ':</span> ' + dt.value + '</div>'; })() + '\
-                  <div class="project-card-footer">\
-                    ' + (canSee('financials') ? '<span class="project-card-value">' + fmt(p.total) + '</span>' : '<span></span>') + '\
-                    <div style="display:flex;align-items:center;gap:4px">\
-                      <span class="status-pill status-' + s.color + '">' + s.label + '</span>\
-                      <button class="move-btn" onclick="event.stopPropagation();showMoveMenu(' + p.id + ', event)" title="Move">\u22EE</button>\
-                    </div>\
-                  </div>\
-                  ' + (p.systems.length ? '<div style="margin-top:6px">' + p.systems.map(systemTagHTML).join('') + '</div>' : '') + '\
-                </div>';
-              }).join('')}
-              ${col.length === 0 ? '<div class="empty-state" style="padding:20px 10px;font-size:12px">No projects</div>' : ''}
-              ${!expanded && hiddenCount > 0 ? `<div onclick="event.stopPropagation();toggleColExpanded('${s.key}')" style="text-align:center;padding:8px 6px;font-size:11px;color:#58A6FF;cursor:pointer;border-top:1px solid #1C2333;margin-top:4px;-webkit-tap-highlight-color:transparent">+${hiddenCount} more</div>` : ''}
-              ${expanded && col.length > LIMIT ? `<div onclick="event.stopPropagation();toggleColExpanded('${s.key}')" style="text-align:center;padding:8px 6px;font-size:11px;color:#6E7681;cursor:pointer;border-top:1px solid #1C2333;margin-top:4px;-webkit-tap-highlight-color:transparent">Show less ↑</div>` : ''}
-            </div>
-            `;
+          ${visible.map(p => {
+            const gbbTier = getGBBTier(p.id);
+            const gbbBadge = gbbTier ? '<span style="font-size:9px;font-weight:600;padding:1px 5px;border-radius:3px;background:' + (gbbTier === 'better' ? '#0D1626;color:#58A6FF;border:1px solid #1565C0' : gbbTier === 'best' ? '#0D1A0E;color:#3FB950;border:1px solid #238636' : '#161B22;color:#6E7681;border:1px solid #30363D') + '">' + gbbTier.toUpperCase() + '</span>' : '';
+            const likely = isLikelyToClose(p.id);
+            return '<div class="project-card' + (likely ? ' likely-card' : '') + '" draggable="true" ondragstart="onReorderDragStart(event, ' + p.id + ', \'' + s.key + '\')" ondragend="onDragEnd(event)" ondragover="event.preventDefault()" ondrop="onReorderDrop(event, ' + p.id + ', \'' + s.key + '\')" onclick="openProject(' + p.id + ')" style="' + (isContractNeedsReview(p) ? 'border-color:#DA3633' : likely ? 'border-color:#238636' : '') + '">' + (likely ? '<div class="likely-badge">LIKELY TO CLOSE</div>' : '') + (isContractNeedsReview(p) ? '<div style="background:#DA3633;color:#fff;font-size:10px;font-weight:600;padding:4px 8px;border-radius:4px;margin-bottom:8px;text-align:center;letter-spacing:0.03em">REVIEW — SEND TO DESIGN & INSTALL</div>' : '') + '<div style="display:flex;justify-content:space-between;align-items:flex-start"><div class="project-card-name">' + esc(p.name) + '</div><div style="display:flex;gap:3px;align-items:center">' + gbbBadge + '</div></div><div class="project-card-client">' + esc(p.client_name || 'No client') + (p.city ? ' · ' + esc(p.city) + (p.state_abbr ? ', ' + esc(p.state_abbr) : '') : '') + '</div>' + (() => { const dt = getInstallDateDisplay(p); return '<div style="font-size:10px;color:' + dt.color + ';margin-top:3px"><span style="opacity:0.7">' + dt.label + ':</span> ' + dt.value + '</div>'; })() + '<div class="project-card-footer">' + (canSee('financials') ? '<span class="project-card-value">' + fmt(p.total) + '</span>' : '<span></span>') + '<div style="display:flex;align-items:center;gap:4px"><span class="status-pill status-' + s.color + '">' + s.label + '</span><button class="move-btn" onclick="event.stopPropagation();showMoveMenu(' + p.id + ', event)" title="Move">\u22EE</button></div></div>' + (p.systems.length ? '<div style="margin-top:6px">' + p.systems.map(systemTagHTML).join('') + '</div>' : '') + '</div>';
           }).join('')}
-        </div>
+          ${col.length === 0 ? '<div class="empty-state" style="padding:20px 10px;font-size:12px">No projects</div>' : ''}
+          ${!expanded && hiddenCount > 0 ? `<div onclick="event.stopPropagation();toggleColExpanded('${s.key}')" style="text-align:center;padding:8px 6px;font-size:11px;color:#58A6FF;cursor:pointer;border-top:1px solid #1C2333;margin-top:4px;-webkit-tap-highlight-color:transparent">+${hiddenCount} more</div>` : ''}
+          ${expanded && col.length > LIMIT ? `<div onclick="event.stopPropagation();toggleColExpanded('${s.key}')" style="text-align:center;padding:8px 6px;font-size:11px;color:#6E7681;cursor:pointer;border-top:1px solid #1C2333;margin-top:4px;-webkit-tap-highlight-color:transparent">Show less ↑</div>` : ''}
+        </div>`;
+      }).join('')}
+    </div>
 
-        <div class="archive-row">
-          ${ARCHIVE_BINS.map(b => {
-            const count = getArchivedProjects(b.key).length;
-            return '\
-            <div class="archive-bin" ondragover="onDragOver(event)" ondragleave="onDragLeave(event)" ondrop="onDropArchive(event, \'' + b.key + '\')">\
-              <span class="archive-icon">' + b.icon + '</span>\
-              <span class="archive-label">' + b.label + '</span>\
-              ' + (count > 0 ? '<span class="archive-count" onclick="toggleArchiveExpand(\'' + b.key + '\')">' + count + '</span>' : '') + '\
-            </div>';
-          }).join('')}
-        </div>
-        <div id="archive-expanded"></div>
-
-        ${renderRecentActivity()}
+    <div class="archive-row">
+      ${ARCHIVE_BINS.map(b => {
+        const count = getArchivedProjects(b.key).length;
+        return '<div class="archive-bin" ondragover="onDragOver(event)" ondragleave="onDragLeave(event)" ondrop="onDropArchive(event, \'' + b.key + '\')"><span class="archive-icon">' + b.icon + '</span><span class="archive-label">' + b.label + '</span>' + (count > 0 ? '<span class="archive-count" onclick="toggleArchiveExpand(\'' + b.key + '\')">' + count + '</span>' : '') + '</div>';
+      }).join('')}
+    </div>
+    <div id="archive-expanded"></div>
+    ${renderRecentActivity()}
   `;
 }
 
@@ -2410,13 +2352,9 @@ function renderRecentActivity() {
     .filter(p => p.updated_at)
     .sort((a, b) => new Date(b.updated_at) - new Date(a.updated_at))
     .slice(0, 6);
-
   if (recent.length === 0) return '';
-
   return `
-    <div class="section-header">
-      <div class="section-title">Recently Updated</div>
-    </div>
+    <div class="section-header"><div class="section-title">Recently Updated</div></div>
     <div class="card">
       ${recent.map(p => `
         <div style="display:flex;align-items:center;justify-content:space-between;padding:8px 0;border-bottom:1px solid #0D1117;cursor:pointer" onclick="openProject(${p.id})">
@@ -2432,13 +2370,6 @@ function renderRecentActivity() {
       `).join('')}
     </div>
   `;
-}
-
-function esc(s) {
-  if (!s) return '';
-  const d = document.createElement('div');
-  d.textContent = s;
-  return d.innerHTML;
 }
 
 // ── Projects Table ──
@@ -2462,12 +2393,9 @@ function renderProjects(c) {
       <table class="projects-table">
         <thead>
           <tr>
-            <th>Project</th>
-            <th>Client</th>
-            <th>Stage</th>
+            <th>Project</th><th>Client</th><th>Stage</th>
             ${canSee('financials') ? '<th>Value</th>' : ''}
-            <th>Systems</th>
-            <th>Updated</th>
+            <th>Systems</th><th>Updated</th>
           </tr>
         </thead>
         <tbody id="proj-tbody">
@@ -2505,10 +2433,7 @@ function projectRow(p) {
   const stg = STAGES.find(s => s.key === p.stage) || STAGES[0];
   return `
     <tr onclick="openProject(${p.id})" data-stage="${p.stage}" data-name="${esc(p.name).toLowerCase()}">
-      <td>
-        <div class="proj-name">${esc(p.name)}</div>
-        <div class="proj-id">#${p.id}</div>
-      </td>
+      <td><div class="proj-name">${esc(p.name)}</div><div class="proj-id">#${p.id}</div></td>
       <td>${esc(p.client_name || '—')}</td>
       <td><span class="status-pill status-${stg.color}">${stg.label}</span></td>
       ${canSee('financials') ? `<td>${fmt(p.total)}</td>` : ''}
@@ -2523,16 +2448,12 @@ function filterProjects() {
   document.querySelectorAll('#proj-tbody tr').forEach(tr => {
     const name = tr.dataset.name || '';
     const stage = tr.dataset.stage || '';
-    const matchSearch = !q || name.includes(q);
-    const matchFilter = !window._projFilter || stage === window._projFilter;
-    tr.style.display = matchSearch && matchFilter ? '' : 'none';
+    tr.style.display = (!q || name.includes(q)) && (!window._projFilter || stage === window._projFilter) ? '' : 'none';
   });
   document.querySelectorAll('#proj-mobile .mobile-project-item').forEach(el => {
     const name = el.dataset.name || '';
     const stage = el.dataset.stage || '';
-    const matchSearch = !q || name.includes(q);
-    const matchFilter = !window._projFilter || stage === window._projFilter;
-    el.style.display = matchSearch && matchFilter ? '' : 'none';
+    el.style.display = (!q || name.includes(q)) && (!window._projFilter || stage === window._projFilter) ? '' : 'none';
   });
 }
 
@@ -2541,212 +2462,85 @@ function setProjectFilter(stage) {
   renderProjects(document.getElementById('content'));
 }
 
-// ── Project Detail Modal ──
-function openProject(id) {
-  const p = state.projects.find(x => x.id === id);
-  if (!p) return;
-  state.currentProject = p;
-
-  document.getElementById('modal-title').textContent = p.name;
-  document.getElementById('modal-sub').textContent = `#${p.id} · ${p.client_name || 'No client'} · ${p.raw_stage || p.stage}`;
-
-  const systems = p.systems;
-  const designChecks = getChecklistState(p.id, 'design');
-  const installChecks = getChecklistState(p.id, 'install');
-
-  const body = document.getElementById('modal-body');
+// ── Project Page (v1.16: full-page) ──
+function renderProjectPage(c) {
+  const p = state.currentProject;
+  if (!p) { navigate('dashboard'); return; }
+  const tab = state.projectTab || 'overview';
   const needsReview = isContractNeedsReview(p);
-  body.innerHTML = `
-    ${needsReview ? `
-      <div style="background:#1A0D0D;border:1px solid #DA3633;border-radius:10px;padding:14px 16px;margin-bottom:16px">
-        <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px">
-          <div style="width:10px;height:10px;border-radius:50%;background:#DA3633;animation:pulse 1.5s infinite"></div>
-          <span style="font-size:13px;font-weight:600;color:#F85149">REVIEW REQUIRED — SEND TO DESIGN & INSTALL</span>
-        </div>
-        <div style="font-size:12px;color:#8B949E;margin-bottom:12px">This project has moved to contract. Review the details and send to the Design and Install teams to begin the handoff.</div>
-        <button class="btn-primary" onclick="markContractReviewed(${p.id})" style="background:#238636;padding:10px 20px;font-size:13px">
-          ✓ Mark Reviewed & Send to Design/Install
-        </button>
-      </div>
-    ` : ''}
-    <div class="tabs" id="modal-tabs">
-      <div class="tab active" onclick="switchModalTab('overview')">Overview</div>
-      <div class="tab" onclick="switchModalTab('design')">Design</div>
-      <div class="tab" onclick="switchModalTab('install')">Install</div>
-      <div class="tab" onclick="switchModalTab('notes')">Notes</div>
-    </div>
-    <div id="modal-tab-content"></div>
-  `;
+  const stg = STAGES.find(s => s.key === p.stage) || STAGES[0];
+  const likely = isLikelyToClose(p.id);
+  const gbbTier = getGBBTier(p.id);
 
-  switchModalTab('overview');
-  document.getElementById('project-modal').style.display = 'flex';
+  const titleEl = document.getElementById('page-title');
+  if (titleEl) titleEl.textContent = p.name;
+
+  const gbbBadgeStyle = gbbTier === 'better' ? 'background:#0D1626;color:#58A6FF;border:1px solid #1565C0'
+    : gbbTier === 'best' ? 'background:#0D1A0E;color:#3FB950;border:1px solid #238636'
+    : 'background:#161B22;color:#6E7681;border:1px solid #30363D';
+
+  c.innerHTML = `
+    <div class="project-page">
+      <div class="project-page-header">
+        <div class="project-page-top">
+          <button class="project-back-btn" onclick="closeProjectPage()">
+            <svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M9 2L4 7l5 5" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>
+            <span>Back</span>
+          </button>
+          <div class="project-page-title-block">
+            <div class="project-page-name">${esc(p.name)}</div>
+            <div class="project-page-sub">#${p.id} · ${esc(p.client_name || 'No client')}${p.city ? ' · ' + esc(p.city) + (p.state_abbr ? ', ' + esc(p.state_abbr) : '') : ''}</div>
+          </div>
+          <div class="project-page-actions">
+            <span class="status-pill status-${stg.color}">${stg.label}</span>
+            ${gbbTier ? `<span style="font-size:10px;font-weight:600;padding:3px 8px;border-radius:3px;${gbbBadgeStyle}">${gbbTier.toUpperCase()}</span>` : ''}
+            <button class="btn btn-sm" onclick="toggleLikelyToClose(${p.id})" title="${likely ? 'Remove Likely to Close' : 'Mark Likely to Close'}" style="${likely ? 'background:#0D1A0E;border-color:#238636;color:#3FB950' : ''};min-height:32px;padding:4px 10px"><span style="font-size:14px">★</span></button>
+          </div>
+        </div>
+        ${p.systems.length ? `<div class="project-page-tags">${p.systems.map(systemTagHTML).join('')}</div>` : ''}
+        ${needsReview ? `
+          <div class="project-page-review-banner">
+            <div style="display:flex;align-items:center;gap:8px;flex:1">
+              <div style="width:8px;height:8px;border-radius:50%;background:#DA3633;animation:pulse 1.5s infinite;flex-shrink:0"></div>
+              <span style="font-size:12px;font-weight:600;color:#F85149">REVIEW REQUIRED &mdash; SEND TO DESIGN &amp; INSTALL</span>
+            </div>
+            <button class="btn-primary" onclick="markContractReviewed(${p.id})" style="background:#238636;padding:6px 12px;font-size:12px;min-height:32px">&#10003; Mark Reviewed</button>
+          </div>
+        ` : ''}
+        <div class="project-page-tabs">
+          <div class="ppt ${tab === 'overview' ? 'active' : ''}" onclick="switchProjectTab('overview')">Overview</div>
+          <div class="ppt ${tab === 'design' ? 'active' : ''}" onclick="switchProjectTab('design')">Design</div>
+          <div class="ppt ${tab === 'install' ? 'active' : ''}" onclick="switchProjectTab('install')">Install</div>
+          <div class="ppt ${tab === 'notes' ? 'active' : ''}" onclick="switchProjectTab('notes')">Notes</div>
+        </div>
+      </div>
+      <div class="project-page-body" id="project-page-body"></div>
+    </div>
+  `;
+  renderProjectTabContent();
 }
 
-function switchModalTab(tab) {
-  document.querySelectorAll('#modal-tabs .tab').forEach((el, i) => {
-    el.classList.toggle('active', ['overview','design','install','notes'][i] === tab);
-  });
-
+function renderProjectTabContent() {
+  const body = document.getElementById('project-page-body');
   const p = state.currentProject;
-  if (!p) return;
-  const tc = document.getElementById('modal-tab-content');
+  if (!body || !p) return;
+  const tab = state.projectTab;
 
   if (tab === 'overview') {
-    tc.innerHTML = `
-      <div class="dashboard-grid">
-        <div class="dashboard-card">
-          <div class="dashboard-card-title">Project Info</div>
-          <div style="font-size:13px;color:#C9D1D9;line-height:1.8">
-            <div><strong style="color:#8B949E">Stage:</strong> ${esc(p.raw_stage || p.stage)}</div>
-            ${canSee('financials') ? `
-              <div><strong style="color:#8B949E">Total Value:</strong> ${fmt(p.total)}</div>
-              <div><strong style="color:#8B949E">Equipment:</strong> ${fmt(p.equipment)}</div>
-              <div><strong style="color:#8B949E">Labor:</strong> ${fmt(p.labor)}</div>
-            ` : ''}
-            <div><strong style="color:#8B949E">Created:</strong> ${fmtDate(p.created_at)}</div>
-            <div><strong style="color:#8B949E">Updated:</strong> ${fmtDate(p.updated_at)}</div>
-          </div>
-        </div>
-        <div class="dashboard-card">
-          <div class="dashboard-card-title">Client</div>
-          <div style="font-size:13px;color:#C9D1D9;line-height:1.9">
-            <div style="font-size:14px;font-weight:500;color:#E6EDF3;margin-bottom:4px">${esc(p.client_name || '—')}</div>
-            ${canSee('client_contact') ? `
-              ${p.primary_contact_name ? `<div style="color:#8B949E">${esc(p.primary_contact_name)}</div>` : ''}
-              ${p.primary_contact_email ? `<div><a href="mailto:${esc(p.primary_contact_email)}" style="color:#58A6FF;text-decoration:none">${esc(p.primary_contact_email)}</a></div>` : ''}
-              ${p.primary_contact_phone ? `<div><a href="tel:${esc(p.primary_contact_phone)}" style="color:#58A6FF;text-decoration:none">${esc(p.primary_contact_phone)}</a></div>` : ''}
-            ` : ''}
-            ${p.address || p.city ? `<div style="font-size:12px;color:#6E7681;margin-top:4px">${[p.address, p.city, p.state_abbr].filter(Boolean).join(', ')}</div>` : ''}
-          </div>
-        </div>
-      </div>
-      <div class="dashboard-card" style="margin-top:14px">
-        <div class="dashboard-card-title" style="display:flex;align-items:center;justify-content:space-between">
-          <span>Install Timeline</span>
-          <button class="btn btn-sm" onclick="showSetBookedDatesDialog(${p.id})" style="font-size:11px">
-            ${getBookedTimeline(p.id) ? 'Edit Booked Dates' : 'Set Booked Dates'}
-          </button>
-        </div>
-        <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:6px">
-          <div style="padding:10px 12px;background:#0D1117;border-radius:8px;border:1px solid #1C2333">
-            <div style="font-size:10px;color:#6E7681;text-transform:uppercase;letter-spacing:0.06em;margin-bottom:4px">Estimated (Jetbuilt)</div>
-            <div style="font-size:13px;color:${p.start_date ? '#C9D1D9' : '#6E7681'}">${p.start_date ? fmtDate(p.start_date) : '— Not set'}</div>
-          </div>
-          <div style="padding:10px 12px;background:${getBookedTimeline(p.id) ? '#0D1A0E' : '#0D1117'};border-radius:8px;border:1px solid ${getBookedTimeline(p.id) ? '#238636' : '#1C2333'}">
-            <div style="font-size:10px;color:#6E7681;text-transform:uppercase;letter-spacing:0.06em;margin-bottom:4px">Booked Install</div>
-            ${(() => {
-              const b = getBookedTimeline(p.id);
-              if (!b) return '<div style="font-size:13px;color:#6E7681">— Not booked</div>';
-              const end = b.end && b.end !== b.start ? ' – ' + fmtDate(b.end) : '';
-              return `<div style="font-size:13px;color:#3FB950">${fmtDate(b.start)}${end}</div>`;
-            })()}
-          </div>
-        </div>
-      </div>
-      ${p.systems.length ? `
-        <div class="dashboard-card" style="margin-top:14px">
-          <div class="dashboard-card-title">Scope Tags</div>
-          <div>${p.systems.map(systemTagHTML).join(' ')}</div>
-        </div>
-      ` : ''}
-      <div class="dashboard-card" style="margin-top:14px">
-        <div class="dashboard-card-title">Project Team</div>
-        ${['design', 'install'].map(phase => {
-          const assigned = getProjectAssignment(p.id)[phase] || [];
-          const eligible = state.team.filter(m =>
-            phase === 'design'
-              ? m.access.includes('design') || m.access.includes('admin')
-              : m.access.includes('installer') || m.access.includes('project_manager') || m.access.includes('admin')
-          );
-          const phaseColor = phase === 'design' ? '#D29922' : '#58A6FF';
-          const phaseLabel = phase === 'design' ? 'Design' : 'Install';
-          return `
-            <div style="margin-bottom:10px">
-              <div style="font-size:11px;font-weight:600;color:${phaseColor};text-transform:uppercase;letter-spacing:0.06em;margin-bottom:6px">${phaseLabel}</div>
-              <div style="display:flex;flex-wrap:wrap;gap:6px">
-                ${eligible.map(m => {
-                  const active = assigned.includes(m.id);
-                  const color = DASHBOARD_ACCESS.find(d => d.key === m.primaryRole)?.color || '#6E7681';
-                  return `
-                    <div onclick="toggleProjectAssignment(${p.id},'${phase}',${m.id})"
-                      style="display:flex;align-items:center;gap:6px;padding:5px 10px;border-radius:20px;cursor:pointer;border:1px solid ${active ? color + '66' : '#1C2333'};background:${active ? color + '18' : '#0D1117'};-webkit-tap-highlight-color:transparent">
-                      <div style="width:20px;height:20px;border-radius:50%;background:${color}22;border:1px solid ${color}66;display:flex;align-items:center;justify-content:center;font-size:9px;font-weight:600;color:${color}">${esc(m.initials || m.name.slice(0,2).toUpperCase())}</div>
-                      <span style="font-size:12px;color:${active ? '#E6EDF3' : '#6E7681'};font-weight:${active ? '500' : '400'}">${esc(m.name)}</span>
-                      ${active ? `<svg width="10" height="10" viewBox="0 0 10 10" fill="none"><path d="M2 5l2.5 2.5L8 3" stroke="${color}" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>` : ''}
-                    </div>`;
-                }).join('')}
-                ${eligible.length === 0 ? `<span style="font-size:12px;color:#6E7681">No ${phaseLabel.toLowerCase()} team members yet</span>` : ''}
-              </div>
-            </div>
-          `;
-        }).join('')}
-      </div>
-      <div class="dashboard-card" style="margin-top:14px">
-        <div class="dashboard-card-title">Sales Indicators</div>
-        <div onclick="toggleLikelyToClose(${p.id})" style="display:flex;align-items:center;justify-content:space-between;padding:10px 12px;border-radius:8px;cursor:pointer;background:${isLikelyToClose(p.id) ? '#0D1A0E;border:1px solid #238636' : '#0D1117;border:1px solid #1C2333'};-webkit-tap-highlight-color:transparent">
-          <div>
-            <div style="font-size:13px;font-weight:500;color:${isLikelyToClose(p.id) ? '#3FB950' : '#C9D1D9'}">★ Likely to Close</div>
-            <div style="font-size:11px;color:#6E7681;margin-top:2px">${isLikelyToClose(p.id) ? 'Flagged — pinned to top of column, counted in cash flow' : 'Tap to flag this project as likely to close'}</div>
-          </div>
-          <div style="width:40px;height:22px;border-radius:11px;background:${isLikelyToClose(p.id) ? '#238636' : '#30363D'};position:relative;transition:background 0.2s">
-            <div style="width:18px;height:18px;border-radius:50%;background:#fff;position:absolute;top:2px;${isLikelyToClose(p.id) ? 'right:2px' : 'left:2px'};transition:all 0.2s"></div>
-          </div>
-        </div>
-      </div>
-      ${p.description ? `
-        <div class="dashboard-card" style="margin-top:14px">
-          <div class="dashboard-card-title">Description</div>
-          <div style="font-size:13px;color:#C9D1D9;line-height:1.6">${esc(p.description)}</div>
-        </div>
-      ` : ''}
-      ${(() => {
-        const gbbGroup = getGBBGroup(p.id);
-        const gbbTier = getGBBTier(p.id);
-        if (gbbGroup) {
-          const goodP = state.projects.find(x => x.id === gbbGroup.good);
-          const betterP = state.projects.find(x => x.id === gbbGroup.better);
-          const bestP = state.projects.find(x => x.id === gbbGroup.best);
-          return `
-            <div class="dashboard-card" style="margin-top:14px">
-              <div class="dashboard-card-title">
-                <span>Good / Better / Best Group</span>
-                <span style="font-size:12px;font-weight:500;padding:2px 8px;border-radius:4px;background:${gbbTier === 'better' ? '#0D1626;color:#58A6FF' : gbbTier === 'best' ? '#0D1A0E;color:#3FB950' : '#161B22;color:#6E7681'}">${gbbTier ? gbbTier.toUpperCase() : ''}</span>
-              </div>
-              <div style="display:flex;flex-direction:column;gap:6px">
-                ${[{label:'Good', proj:goodP, id:gbbGroup.good}, {label:'Better', proj:betterP, id:gbbGroup.better}, {label:'Best', proj:bestP, id:gbbGroup.best}].map(t => `
-                  <div style="display:flex;align-items:center;justify-content:space-between;padding:8px 10px;border-radius:6px;background:${t.id === p.id ? '#0D1626;border:1px solid #1565C0' : '#0D1117;border:1px solid #1C2333'};cursor:${t.id !== p.id ? 'pointer' : 'default'}" ${t.id !== p.id ? `onclick="openProject(${t.id})"` : ''}>
-                    <div>
-                      <span style="font-size:11px;font-weight:600;color:#6E7681;text-transform:uppercase">${t.label}</span>
-                      <div style="font-size:13px;color:#E6EDF3;margin-top:2px">${t.proj ? esc(t.proj.name) : 'Unknown'}</div>
-                    </div>
-                    ${canSee('financials') && t.proj ? `<span style="font-size:13px;font-weight:500;color:${t.label === 'Better' ? '#58A6FF' : '#6E7681'}">${fmt(t.proj.total)}${t.label === 'Better' ? ' ★' : ''}</span>` : ''}
-                  </div>
-                `).join('')}
-              </div>
-              <div style="margin-top:10px;font-size:11px;color:#6E7681">★ Pipeline value uses the Better amount</div>
-              <button class="btn btn-sm btn-danger" onclick="showGBBLinkDialog(${p.id})" style="margin-top:8px">Manage GBB Link</button>
-            </div>`;
-        } else {
-          return `
-            <div class="dashboard-card" style="margin-top:14px">
-              <div class="dashboard-card-title">Good / Better / Best</div>
-              <div style="font-size:12px;color:#6E7681;margin-bottom:10px">Link this project to a Good/Better/Best group to track related bids together.</div>
-              <button class="btn btn-sm" onclick="showGBBLinkDialog(${p.id})">Link to GBB Group</button>
-            </div>`;
-        }
-      })()}
-    `;
+    body.innerHTML = renderProjectOverviewHTML(p);
   } else if (tab === 'design') {
-    renderChecklistTab(tc, p, 'design');
+    body.innerHTML = '';
+    renderChecklistTab(body, p, 'design');
   } else if (tab === 'install') {
-    renderChecklistTab(tc, p, 'install');
+    body.innerHTML = '';
+    renderChecklistTab(body, p, 'install');
   } else if (tab === 'notes') {
     const noteKey = `vi_notes_${p.id}`;
     const existing = localStorage.getItem(noteKey) || '';
-    tc.innerHTML = `
+    body.innerHTML = `
       <div class="dashboard-card">
         <div class="dashboard-card-title">Project Notes</div>
-        <textarea class="form-textarea" id="project-notes" rows="8" placeholder="Add notes about this project…"
+        <textarea class="form-textarea" id="project-notes" rows="12" placeholder="Add notes about this project…"
           oninput="localStorage.setItem('${noteKey}', this.value)">${esc(existing)}</textarea>
         <div style="margin-top:8px;font-size:11px;color:#6E7681">Notes save automatically</div>
       </div>
@@ -2754,14 +2548,146 @@ function switchModalTab(tab) {
   }
 }
 
+function renderProjectOverviewHTML(p) {
+  const gbbGroup = getGBBGroup(p.id);
+  const gbbTier = getGBBTier(p.id);
+  return `
+    <div class="dashboard-grid">
+      <div class="dashboard-card">
+        <div class="dashboard-card-title">Project Info</div>
+        <div style="font-size:13px;color:#C9D1D9;line-height:1.8">
+          <div><strong style="color:#8B949E">Stage:</strong> ${esc(p.raw_stage || p.stage)}</div>
+          ${canSee('financials') ? `
+            <div><strong style="color:#8B949E">Total Value:</strong> ${fmt(p.total)}</div>
+            <div><strong style="color:#8B949E">Equipment:</strong> ${fmt(p.equipment)}</div>
+            <div><strong style="color:#8B949E">Labor:</strong> ${fmt(p.labor)}</div>
+          ` : ''}
+          <div><strong style="color:#8B949E">Created:</strong> ${fmtDate(p.created_at)}</div>
+          <div><strong style="color:#8B949E">Updated:</strong> ${fmtDate(p.updated_at)}</div>
+        </div>
+      </div>
+      <div class="dashboard-card">
+        <div class="dashboard-card-title">Client</div>
+        <div style="font-size:13px;color:#C9D1D9;line-height:1.9">
+          <div style="font-size:14px;font-weight:500;color:#E6EDF3;margin-bottom:4px">${esc(p.client_name || '—')}</div>
+          ${canSee('client_contact') ? `
+            ${p.primary_contact_name ? `<div style="color:#8B949E">${esc(p.primary_contact_name)}</div>` : ''}
+            ${p.primary_contact_email ? `<div><a href="mailto:${esc(p.primary_contact_email)}" style="color:#58A6FF;text-decoration:none">${esc(p.primary_contact_email)}</a></div>` : ''}
+            ${p.primary_contact_phone ? `<div><a href="tel:${esc(p.primary_contact_phone)}" style="color:#58A6FF;text-decoration:none">${esc(p.primary_contact_phone)}</a></div>` : ''}
+          ` : ''}
+          ${p.address || p.city ? `<div style="font-size:12px;color:#6E7681;margin-top:4px">${[p.address, p.city, p.state_abbr].filter(Boolean).join(', ')}</div>` : ''}
+        </div>
+      </div>
+    </div>
+    <div class="dashboard-card" style="margin-top:14px">
+      <div class="dashboard-card-title" style="display:flex;align-items:center;justify-content:space-between">
+        <span>Install Timeline</span>
+        <button class="btn btn-sm" onclick="showSetBookedDatesDialog(${p.id})" style="font-size:11px">
+          ${getBookedTimeline(p.id) ? 'Edit Booked Dates' : 'Set Booked Dates'}
+        </button>
+      </div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:6px">
+        <div style="padding:10px 12px;background:#0D1117;border-radius:8px;border:1px solid #1C2333">
+          <div style="font-size:10px;color:#6E7681;text-transform:uppercase;letter-spacing:0.06em;margin-bottom:4px">Estimated (Jetbuilt)</div>
+          <div style="font-size:13px;color:${p.start_date ? '#C9D1D9' : '#6E7681'}">${p.start_date ? fmtDate(p.start_date) : '— Not set'}</div>
+        </div>
+        <div style="padding:10px 12px;background:${getBookedTimeline(p.id) ? '#0D1A0E' : '#0D1117'};border-radius:8px;border:1px solid ${getBookedTimeline(p.id) ? '#238636' : '#1C2333'}">
+          <div style="font-size:10px;color:#6E7681;text-transform:uppercase;letter-spacing:0.06em;margin-bottom:4px">Booked Install</div>
+          ${(() => {
+            const b = getBookedTimeline(p.id);
+            if (!b) return '<div style="font-size:13px;color:#6E7681">— Not booked</div>';
+            const end = b.end && b.end !== b.start ? ' – ' + fmtDate(b.end) : '';
+            return `<div style="font-size:13px;color:#3FB950">${fmtDate(b.start)}${end}</div>`;
+          })()}
+        </div>
+      </div>
+    </div>
+    ${p.systems.length ? `
+      <div class="dashboard-card" style="margin-top:14px">
+        <div class="dashboard-card-title">Scope Tags</div>
+        <div>${p.systems.map(systemTagHTML).join(' ')}</div>
+      </div>
+    ` : ''}
+    <div class="dashboard-card" style="margin-top:14px">
+      <div class="dashboard-card-title">Project Team</div>
+      ${['design', 'install'].map(phase => {
+        const assigned = getProjectAssignment(p.id)[phase] || [];
+        const eligible = state.team.filter(m =>
+          phase === 'design' ? m.access.includes('design') || m.access.includes('admin')
+          : m.access.includes('installer') || m.access.includes('project_manager') || m.access.includes('admin')
+        );
+        const phaseColor = phase === 'design' ? '#D29922' : '#58A6FF';
+        const phaseLabel = phase === 'design' ? 'Design' : 'Install';
+        return `
+          <div style="margin-bottom:10px">
+            <div style="font-size:11px;font-weight:600;color:${phaseColor};text-transform:uppercase;letter-spacing:0.06em;margin-bottom:6px">${phaseLabel}</div>
+            <div style="display:flex;flex-wrap:wrap;gap:6px">
+              ${eligible.map(m => {
+                const active = assigned.includes(m.id);
+                const color = DASHBOARD_ACCESS.find(d => d.key === m.primaryRole)?.color || '#6E7681';
+                return `
+                  <div onclick="toggleProjectAssignment(${p.id},'${phase}',${m.id})"
+                    style="display:flex;align-items:center;gap:6px;padding:5px 10px;border-radius:20px;cursor:pointer;border:1px solid ${active ? color + '66' : '#1C2333'};background:${active ? color + '18' : '#0D1117'};-webkit-tap-highlight-color:transparent">
+                    <div style="width:20px;height:20px;border-radius:50%;background:${color}22;border:1px solid ${color}66;display:flex;align-items:center;justify-content:center;font-size:9px;font-weight:600;color:${color}">${esc(m.initials || m.name.slice(0,2).toUpperCase())}</div>
+                    <span style="font-size:12px;color:${active ? '#E6EDF3' : '#6E7681'};font-weight:${active ? '500' : '400'}">${esc(m.name)}</span>
+                    ${active ? `<svg width="10" height="10" viewBox="0 0 10 10" fill="none"><path d="M2 5l2.5 2.5L8 3" stroke="${color}" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>` : ''}
+                  </div>`;
+              }).join('')}
+              ${eligible.length === 0 ? `<span style="font-size:12px;color:#6E7681">No ${phaseLabel.toLowerCase()} team members yet</span>` : ''}
+            </div>
+          </div>
+        `;
+      }).join('')}
+    </div>
+    ${p.description ? `
+      <div class="dashboard-card" style="margin-top:14px">
+        <div class="dashboard-card-title">Description</div>
+        <div style="font-size:13px;color:#C9D1D9;line-height:1.6">${esc(p.description)}</div>
+      </div>
+    ` : ''}
+    ${(() => {
+      if (gbbGroup) {
+        const goodP = state.projects.find(x => x.id === gbbGroup.good);
+        const betterP = state.projects.find(x => x.id === gbbGroup.better);
+        const bestP = state.projects.find(x => x.id === gbbGroup.best);
+        return `
+          <div class="dashboard-card" style="margin-top:14px">
+            <div class="dashboard-card-title">
+              <span>Good / Better / Best Group</span>
+              <span style="font-size:12px;font-weight:500;padding:2px 8px;border-radius:4px;background:${gbbTier === 'better' ? '#0D1626;color:#58A6FF' : gbbTier === 'best' ? '#0D1A0E;color:#3FB950' : '#161B22;color:#6E7681'}">${gbbTier ? gbbTier.toUpperCase() : ''}</span>
+            </div>
+            <div style="display:flex;flex-direction:column;gap:6px">
+              ${[{label:'Good', proj:goodP, id:gbbGroup.good}, {label:'Better', proj:betterP, id:gbbGroup.better}, {label:'Best', proj:bestP, id:gbbGroup.best}].map(t => `
+                <div style="display:flex;align-items:center;justify-content:space-between;padding:8px 10px;border-radius:6px;background:${t.id === p.id ? '#0D1626;border:1px solid #1565C0' : '#0D1117;border:1px solid #1C2333'};cursor:${t.id !== p.id ? 'pointer' : 'default'}" ${t.id !== p.id ? `onclick="openProject(${t.id})"` : ''}>
+                  <div>
+                    <span style="font-size:11px;font-weight:600;color:#6E7681;text-transform:uppercase">${t.label}</span>
+                    <div style="font-size:13px;color:#E6EDF3;margin-top:2px">${t.proj ? esc(t.proj.name) : 'Unknown'}</div>
+                  </div>
+                  ${canSee('financials') && t.proj ? `<span style="font-size:13px;font-weight:500;color:${t.label === 'Better' ? '#58A6FF' : '#6E7681'}">${fmt(t.proj.total)}${t.label === 'Better' ? ' ★' : ''}</span>` : ''}
+                </div>
+              `).join('')}
+            </div>
+            <div style="margin-top:10px;font-size:11px;color:#6E7681">★ Pipeline value uses the Better amount</div>
+            <button class="btn btn-sm btn-danger" onclick="showGBBLinkDialog(${p.id})" style="margin-top:8px">Manage GBB Link</button>
+          </div>`;
+      } else {
+        return `
+          <div class="dashboard-card" style="margin-top:14px">
+            <div class="dashboard-card-title">Good / Better / Best</div>
+            <div style="font-size:12px;color:#6E7681;margin-bottom:10px">Link this project to a Good/Better/Best group to track related bids together.</div>
+            <button class="btn btn-sm" onclick="showGBBLinkDialog(${p.id})">Link to GBB Group</button>
+          </div>`;
+      }
+    })()}
+  `;
+}
+
 function renderChecklistTab(container, project, phase) {
   const systems = project.systems.filter(s => TEMPLATES[phase]?.[s]);
-
   if (systems.length === 0) {
-    container.innerHTML = `<div class="empty-state"><span class="empty-icon">${phase === 'design' ? '📐' : '🔧'}</span>No ${phase} checklists — scope tags haven't been detected for this project.<br><br><span style="font-size:11px;color:#6E7681">Checklists auto-generate from scope tags: LED Wall, PA/Audio, Lighting</span></div>`;
+    container.innerHTML = `<div class="empty-state"><span class="empty-icon">${phase === 'design' ? '📐' : '🔧'}</span>No ${phase} checklists — scope tags haven't been detected for this project.<br><br><span style="font-size:11px;color:#6E7681">Checklists auto-generate from scope tags: LED Wall, PA/Audio, Lighting, Control, Streaming, Camera</span></div>`;
     return;
   }
-
   container.innerHTML = systems.map(sys => {
     const template = TEMPLATES[phase][sys];
     const checkKey = `${project.id}_${phase}_${sys}`;
@@ -2769,7 +2695,6 @@ function renderChecklistTab(container, project, phase) {
     const total = template.items.length;
     const done = Object.values(checks).filter(Boolean).length;
     const pct = total > 0 ? Math.round((done / total) * 100) : 0;
-
     return `
       <div class="dashboard-card" style="margin-bottom:14px">
         <div class="dashboard-card-title">
@@ -2799,15 +2724,10 @@ function toggleCheck(projectId, phase, sys, idx) {
   if (!state.checklists[checkKey]) state.checklists[checkKey] = {};
   state.checklists[checkKey][idx] = !state.checklists[checkKey][idx];
   save('vi_checklists', state.checklists);
-
-  // Re-render checklist tab
-  const tc = document.getElementById('modal-tab-content');
   const p = state.currentProject;
-  if (tc && p) {
-    const activeTab = document.querySelector('#modal-tabs .tab.active');
-    if (activeTab && activeTab.textContent.toLowerCase().includes(phase)) {
-      renderChecklistTab(tc, p, phase);
-    }
+  if (p && state.projectTab === phase) {
+    const body = document.getElementById('project-page-body');
+    if (body) { body.innerHTML = ''; renderChecklistTab(body, p, phase); }
   }
 }
 
@@ -2824,12 +2744,12 @@ function getChecklistState(projectId, phase) {
   return result;
 }
 
+// Legacy no-op (project-modal no longer used but kept for safety)
 function closeModal() {
-  document.getElementById('project-modal').style.display = 'none';
+  const m = document.getElementById('project-modal');
+  if (m) m.style.display = 'none';
   state.currentProject = null;
 }
-
-// Close modal on overlay click
 document.getElementById('project-modal')?.addEventListener('click', function(e) {
   if (e.target === this) closeModal();
 });
@@ -2840,12 +2760,9 @@ function renderCalendar(c) {
   const month = d.getMonth();
   const year = d.getFullYear();
   const months = ['January','February','March','April','May','June','July','August','September','October','November','December'];
-
   const firstDay = new Date(year, month, 1).getDay();
   const daysInMonth = new Date(year, month + 1, 0).getDate();
   const today = new Date();
-
-  // Build calendar grid
   const days = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];
   let cells = '';
   let dayCount = 1;
@@ -2881,13 +2798,9 @@ function renderCalendar(c) {
     <div class="calendar-container">
       <div class="calendar-controls">
         <div class="calendar-nav">
-          <button class="cal-btn" onclick="calNav(-1)">
-            <svg width="12" height="12" viewBox="0 0 12 12" fill="none"><path d="M8 2L4 6l4 4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
-          </button>
+          <button class="cal-btn" onclick="calNav(-1)"><svg width="12" height="12" viewBox="0 0 12 12" fill="none"><path d="M8 2L4 6l4 4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg></button>
           <span class="cal-month">${months[month]} ${year}</span>
-          <button class="cal-btn" onclick="calNav(1)">
-            <svg width="12" height="12" viewBox="0 0 12 12" fill="none"><path d="M4 2l4 4-4 4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
-          </button>
+          <button class="cal-btn" onclick="calNav(1)"><svg width="12" height="12" viewBox="0 0 12 12" fill="none"><path d="M4 2l4 4-4 4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg></button>
         </div>
         <div style="display:flex;align-items:center;gap:6px">
           <div style="display:flex;background:#0D1117;border:1px solid #30363D;border-radius:6px;overflow:hidden;font-size:11px">
@@ -2912,7 +2825,6 @@ function getEventsForDate(dateStr) {
       if (!dates.start) return false;
       const sd = dates.start.substring(0, 10);
       if (sd === dateStr) return true;
-      // Show multi-day booked ranges
       if (dates.end) {
         const start = new Date(dates.start);
         const end = new Date(dates.end);
@@ -2923,10 +2835,8 @@ function getEventsForDate(dateStr) {
     })
     .map(p => {
       const dates = getProjectDates(p);
-      const stg = STAGES.find(s => s.key === p.stage);
       const colorMap = { lead: 'gray', proposal: 'blue', sent: 'amber', contract: 'green' };
-      const isBooked = dates.source === 'booked';
-      return { id: p.id, name: p.name, color: colorMap[p.stage] || 'gray', booked: isBooked };
+      return { id: p.id, name: p.name, color: colorMap[p.stage] || 'gray', booked: dates.source === 'booked' };
     });
 }
 
@@ -2939,11 +2849,9 @@ function calToday() {
   state.calendarDate = new Date();
   renderCalendar(document.getElementById('content'));
 }
-
 // ── Shop Work ──
 function renderShopWork(c) {
   const tasks = state.shopwork;
-
   c.innerHTML = `
     <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:16px">
       <div class="section-title">Shop Work Queue</div>
@@ -2994,8 +2902,6 @@ function removeShopWork(i) {
 // ── Vendors ──
 function renderVendors(c) {
   const vendors = state.vendors;
-  const cats = ['Audio', 'Video', 'Lighting', 'LED/Display', 'Control/DSP', 'Infrastructure'];
-
   c.innerHTML = `
     <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:16px;flex-wrap:wrap;gap:8px">
       <input type="text" class="form-input" placeholder="Search vendors…" id="vendor-search"
@@ -3034,7 +2940,6 @@ function addVendor() {
   const catStr = prompt('Categories (comma-separated: Audio, Video, Lighting, LED/Display, Control/DSP, Infrastructure):') || '';
   const categories = catStr.split(',').map(s => s.trim()).filter(Boolean);
   const registration = confirm('Registration discount available?');
-
   state.vendors.push({ company, rep, email, phone, categories, registration });
   save('vi_vendors', state.vendors);
   renderVendors(document.getElementById('content'));
@@ -3055,11 +2960,10 @@ function filterVendors() {
 }
 
 // ── Team ──
-const ROLE_OPTIONS = DASHBOARD_ACCESS; // alias for backward compat
+const ROLE_OPTIONS = DASHBOARD_ACCESS;
 
 function renderTeam(c) {
   const activeMemberId = getActiveTeamMemberId();
-
   c.innerHTML = `
     <div style="max-width:640px;margin:0 auto">
       <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:20px">
@@ -3069,7 +2973,6 @@ function renderTeam(c) {
         </div>
         <button class="btn-primary" onclick="showAddMemberDialog()" style="padding:10px 20px;font-size:13px">+ Add Member</button>
       </div>
-
       <div class="card" style="margin-bottom:16px;padding:12px 16px;background:#0D1626;border-color:#1565C0">
         <div style="font-size:11px;color:#58A6FF;font-weight:600;text-transform:uppercase;letter-spacing:0.06em;margin-bottom:4px">Active User</div>
         <div style="font-size:14px;color:#E6EDF3;font-weight:500">${esc(currentUserName)}</div>
@@ -3080,12 +2983,10 @@ function renderTeam(c) {
           }).join('')}
         </div>
       </div>
-
       <div class="alert alert-info" style="margin-bottom:16px">
         <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><circle cx="8" cy="8" r="6" stroke="currentColor" stroke-width="1.2"/><path d="M8 5v3M8 10v.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
         <span>Set up team accounts now. When the database is ready, each pending member will receive an invite email to claim their account.</span>
       </div>
-
       <div style="display:flex;flex-direction:column;gap:8px">
         ${state.team.map(m => {
           const isActive = m.id === activeMemberId;
@@ -3122,19 +3023,13 @@ function renderTeam(c) {
   `;
 }
 
-function showAddMemberDialog() {
-  showMemberDialog(null);
-}
-
-function showEditMemberDialog(id) {
-  showMemberDialog(id);
-}
+function showAddMemberDialog() { showMemberDialog(null); }
+function showEditMemberDialog(id) { showMemberDialog(id); }
 
 function showMemberDialog(memberId) {
   const existing = memberId ? getTeamMember(memberId) : null;
   const title = existing ? 'Edit Team Member' : 'Add Team Member';
   const existingAccess = existing?.access || [];
-
   let modal = document.getElementById('team-dialog');
   if (modal) modal.remove();
   modal = document.createElement('div');
@@ -3164,7 +3059,6 @@ function showMemberDialog(memberId) {
             <input class="form-input" id="tm-phone" value="${existing ? esc(existing.phone || '') : ''}" placeholder="(555) 123-4567">
           </div>
         </div>
-
         <div class="form-group">
           <label class="form-label">Dashboard Access</label>
           <div style="font-size:11px;color:#6E7681;margin-bottom:8px">Check all dashboards this person should have access to</div>
@@ -3187,7 +3081,6 @@ function showMemberDialog(memberId) {
             }).join('')}
           </div>
         </div>
-
         <div class="form-group">
           <label class="form-label">Primary Dashboard</label>
           <select class="form-select" id="tm-primary">
@@ -3195,7 +3088,6 @@ function showMemberDialog(memberId) {
           </select>
           <div style="font-size:11px;color:#6E7681;margin-top:4px">The default view when this person opens the app</div>
         </div>
-
         <div style="display:flex;gap:8px;margin-top:16px">
           <button class="btn-primary" onclick="saveMemberDialog(${memberId || 'null'})" style="flex:1;padding:12px">Save</button>
           <button class="btn" onclick="document.getElementById('team-dialog')?.remove()">Cancel</button>
@@ -3207,7 +3099,6 @@ function showMemberDialog(memberId) {
   modal.addEventListener('click', e => { if (e.target === modal) modal.remove(); });
 }
 
-// Toggle access checkbox in member dialog
 function toggleAccessCheck(key) {
   const el = document.querySelector(`[data-access="${key}"]`);
   if (!el) return;
@@ -3227,16 +3118,12 @@ function saveMemberDialog(memberId) {
   const email = document.getElementById('tm-email')?.value?.trim() || '';
   const phone = document.getElementById('tm-phone')?.value?.trim() || '';
   const primaryRole = document.getElementById('tm-primary')?.value || 'installer';
-
-  // Gather checked access
   const access = [];
   document.querySelectorAll('#team-dialog [data-access]').forEach(el => {
     if (el.classList.contains('checked')) access.push(el.dataset.access);
   });
-
   if (!name) { alert('Please enter a name.'); return; }
   if (access.length === 0) { alert('Please select at least one dashboard access.'); return; }
-
   if (memberId) {
     const member = getTeamMember(memberId);
     if (member) {
@@ -3256,7 +3143,6 @@ function saveMemberDialog(memberId) {
   } else {
     addTeamMember(name, access, primaryRole, email, phone);
   }
-
   save('vi_team', state.team);
   document.getElementById('team-dialog')?.remove();
   renderTeam(document.getElementById('content'));
@@ -3277,16 +3163,10 @@ const intakeState = { step: 1, data: {} };
 function renderIntake(c) {
   const s = intakeState.step;
   const d = intakeState.data;
-
   const steps = [
-    { num: 1, label: 'Client' },
-    { num: 2, label: 'Venue' },
-    { num: 3, label: 'Scope' },
-    { num: 4, label: 'Details' },
-    { num: 5, label: 'Quote' },
-    { num: 6, label: 'Notes' }
+    { num: 1, label: 'Client' }, { num: 2, label: 'Venue' }, { num: 3, label: 'Scope' },
+    { num: 4, label: 'Details' }, { num: 5, label: 'Quote' }, { num: 6, label: 'Notes' }
   ];
-
   const progress = `
     <div style="display:flex;gap:4px;margin-bottom:24px">
       ${steps.map(st => `
@@ -3297,35 +3177,23 @@ function renderIntake(c) {
       `).join('')}
     </div>
   `;
-
   let content = '';
-
   if (s === 1) {
     content = `
       <div class="card" style="max-width:560px;margin:0 auto">
         <h3 style="font-size:16px;font-weight:600;color:#E6EDF3;margin-bottom:16px">Client Information</h3>
-        <div class="form-group">
-          <label class="form-label">Company / Client Name</label>
-          <input class="form-input" id="int-client" value="${esc(d.client || '')}" placeholder="Search or type client name…">
-        </div>
-        <div class="form-group">
-          <label class="form-label">Contact Name</label>
-          <input class="form-input" id="int-contact" value="${esc(d.contact || '')}" placeholder="Primary contact">
-        </div>
+        <div class="form-group"><label class="form-label">Company / Client Name</label>
+          <input class="form-input" id="int-client" value="${esc(d.client || '')}" placeholder="Search or type client name…"></div>
+        <div class="form-group"><label class="form-label">Contact Name</label>
+          <input class="form-input" id="int-contact" value="${esc(d.contact || '')}" placeholder="Primary contact"></div>
         <div class="form-row">
-          <div class="form-group">
-            <label class="form-label">Email</label>
-            <input class="form-input" id="int-email" type="email" value="${esc(d.email || '')}" placeholder="email@example.com">
-          </div>
-          <div class="form-group">
-            <label class="form-label">Phone</label>
-            <input class="form-input" id="int-phone" value="${esc(d.phone || '')}" placeholder="(555) 123-4567">
-          </div>
+          <div class="form-group"><label class="form-label">Email</label>
+            <input class="form-input" id="int-email" type="email" value="${esc(d.email || '')}" placeholder="email@example.com"></div>
+          <div class="form-group"><label class="form-label">Phone</label>
+            <input class="form-input" id="int-phone" value="${esc(d.phone || '')}" placeholder="(555) 123-4567"></div>
         </div>
-        <div class="form-group">
-          <label class="form-label">Address</label>
-          <input class="form-input" id="int-address" value="${esc(d.address || '')}" placeholder="Street address, city, state">
-        </div>
+        <div class="form-group"><label class="form-label">Address</label>
+          <input class="form-input" id="int-address" value="${esc(d.address || '')}" placeholder="Street address, city, state"></div>
       </div>
     `;
   } else if (s === 2) {
@@ -3335,8 +3203,7 @@ function renderIntake(c) {
         <h3 style="font-size:16px;font-weight:600;color:#E6EDF3;margin-bottom:16px">Venue Type</h3>
         <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">
           ${venues.map(v => `
-            <div onclick="selectVenue(this, '${v}')"
-              class="card card-sm" style="cursor:pointer;text-align:center;border-color:${d.venue === v ? '#1565C0' : '#1C2333'};background:${d.venue === v ? '#0D1626' : '#161B22'}">
+            <div onclick="selectVenue(this, '${v}')" class="card card-sm" style="cursor:pointer;text-align:center;border-color:${d.venue === v ? '#1565C0' : '#1C2333'};background:${d.venue === v ? '#0D1626' : '#161B22'}">
               <div style="font-size:13px;font-weight:500;color:${d.venue === v ? '#58A6FF' : '#C9D1D9'}">${v}</div>
             </div>
           `).join('')}
@@ -3345,14 +3212,10 @@ function renderIntake(c) {
     `;
   } else if (s === 3) {
     const scopes = [
-      { key: 'audio', label: 'Audio / PA', tag: 'tag-audio' },
-      { key: 'video', label: 'Video / Display', tag: 'tag-video' },
-      { key: 'lighting', label: 'Lighting', tag: 'tag-lighting' },
-      { key: 'led', label: 'LED Wall', tag: 'tag-led' },
-      { key: 'control', label: 'Control System', tag: 'tag-control' },
-      { key: 'streaming', label: 'Streaming / Broadcast', tag: 'tag-streaming' },
-      { key: 'camera', label: 'Camera System', tag: 'tag-streaming' },
-      { key: 'infrastructure', label: 'Infrastructure', tag: 'tag-audio' }
+      { key: 'audio', label: 'Audio / PA' }, { key: 'video', label: 'Video / Display' },
+      { key: 'lighting', label: 'Lighting' }, { key: 'led', label: 'LED Wall' },
+      { key: 'control', label: 'Control System' }, { key: 'streaming', label: 'Streaming / Broadcast' },
+      { key: 'camera', label: 'Camera System' }, { key: 'infrastructure', label: 'Infrastructure' }
     ];
     const sel = d.scope || [];
     content = `
@@ -3362,8 +3225,7 @@ function renderIntake(c) {
         <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">
           ${scopes.map(sc => {
             const active = sel.includes(sc.key);
-            return `<div onclick="toggleScope('${sc.key}')"
-              class="card card-sm" style="cursor:pointer;display:flex;align-items:center;gap:8px;border-color:${active ? '#1565C0' : '#1C2333'};background:${active ? '#0D1626' : '#161B22'}">
+            return `<div onclick="toggleScope('${sc.key}')" class="card card-sm" style="cursor:pointer;display:flex;align-items:center;gap:8px;border-color:${active ? '#1565C0' : '#1C2333'};background:${active ? '#0D1626' : '#161B22'}">
               <div class="checklist-box" style="${active ? 'background:#1565C0;border-color:#1565C0' : ''}">
                 ${active ? '<svg width="10" height="10" viewBox="0 0 10 10" fill="none"><path d="M2 5l2.5 2.5L8 3" stroke="#fff" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>' : ''}
               </div>
@@ -3377,38 +3239,28 @@ function renderIntake(c) {
     content = `
       <div class="card" style="max-width:560px;margin:0 auto">
         <h3 style="font-size:16px;font-weight:600;color:#E6EDF3;margin-bottom:16px">Project Details</h3>
-        <div class="form-group">
-          <label class="form-label">Use Case / Description</label>
-          <textarea class="form-textarea" id="int-usecase" placeholder="Describe how the system will be used…">${esc(d.usecase || '')}</textarea>
-        </div>
+        <div class="form-group"><label class="form-label">Use Case / Description</label>
+          <textarea class="form-textarea" id="int-usecase" placeholder="Describe how the system will be used…">${esc(d.usecase || '')}</textarea></div>
         <div class="form-row">
-          <div class="form-group">
-            <label class="form-label">Project Type</label>
+          <div class="form-group"><label class="form-label">Project Type</label>
             <select class="form-select" id="int-type">
               <option value="">Select…</option>
               <option value="new" ${d.type === 'new' ? 'selected' : ''}>New Construction</option>
               <option value="retrofit" ${d.type === 'retrofit' ? 'selected' : ''}>Retrofit / Upgrade</option>
-            </select>
-          </div>
-          <div class="form-group">
-            <label class="form-label">Timeline</label>
+            </select></div>
+          <div class="form-group"><label class="form-label">Timeline</label>
             <select class="form-select" id="int-timeline">
               <option value="">Select…</option>
               <option value="asap" ${d.timeline === 'asap' ? 'selected' : ''}>ASAP</option>
               <option value="1-3months" ${d.timeline === '1-3months' ? 'selected' : ''}>1–3 Months</option>
               <option value="3-6months" ${d.timeline === '3-6months' ? 'selected' : ''}>3–6 Months</option>
               <option value="6plus" ${d.timeline === '6plus' ? 'selected' : ''}>6+ Months</option>
-            </select>
-          </div>
+            </select></div>
         </div>
-        <div class="form-group">
-          <label class="form-label">Budget Range (optional)</label>
-          <input class="form-input" id="int-budget" value="${esc(d.budget || '')}" placeholder="e.g. $50,000 – $75,000">
-        </div>
-        <div class="form-group">
-          <label class="form-label">Owner-Furnished Equipment (OFE)</label>
-          <textarea class="form-textarea" id="int-ofe" rows="3" placeholder="Any existing equipment client wants to keep/reuse?">${esc(d.ofe || '')}</textarea>
-        </div>
+        <div class="form-group"><label class="form-label">Budget Range (optional)</label>
+          <input class="form-input" id="int-budget" value="${esc(d.budget || '')}" placeholder="e.g. $50,000 – $75,000"></div>
+        <div class="form-group"><label class="form-label">Owner-Furnished Equipment (OFE)</label>
+          <textarea class="form-textarea" id="int-ofe" rows="3" placeholder="Any existing equipment client wants to keep/reuse?">${esc(d.ofe || '')}</textarea></div>
       </div>
     `;
   } else if (s === 5) {
@@ -3426,8 +3278,7 @@ function renderIntake(c) {
           </div>
         </div>
         ${d.quoteType === 'gbb' ? `
-          <div class="form-group">
-            <label class="form-label">Differentiator</label>
+          <div class="form-group"><label class="form-label">Differentiator</label>
             <select class="form-select" id="int-differentiator">
               <option value="">Select what varies between tiers…</option>
               <option value="manufacturer" ${d.differentiator === 'manufacturer' ? 'selected' : ''}>Manufacturer Quality / Tier</option>
@@ -3435,43 +3286,32 @@ function renderIntake(c) {
               <option value="features" ${d.differentiator === 'features' ? 'selected' : ''}>Feature Set (Core / Standard / Full)</option>
               <option value="dotpitch" ${d.differentiator === 'dotpitch' ? 'selected' : ''}>LED Dot Pitch / Resolution</option>
               <option value="custom" ${d.differentiator === 'custom' ? 'selected' : ''}>Custom</option>
-            </select>
-          </div>
+            </select></div>
         ` : ''}
-        <div class="form-group" style="margin-top:16px">
-          <label class="form-label">Payment Approach</label>
+        <div class="form-group" style="margin-top:16px"><label class="form-label">Payment Approach</label>
           <select class="form-select" id="int-payment">
             <option value="prepay" ${(d.payment || 'prepay') === 'prepay' ? 'selected' : ''}>Prepay Discount (90% upfront = 7% off equipment + 2% off labor)</option>
             <option value="standard" ${d.payment === 'standard' ? 'selected' : ''}>Standard (100% equipment upfront, labor on completion)</option>
             <option value="progress" ${d.payment === 'progress' ? 'selected' : ''}>Progress Billing (multi-month project)</option>
-          </select>
-        </div>
+          </select></div>
       </div>
     `;
   } else if (s === 6) {
     content = `
       <div class="card" style="max-width:560px;margin:0 auto">
         <h3 style="font-size:16px;font-weight:600;color:#E6EDF3;margin-bottom:16px">Notes & Walkthrough</h3>
-        <div class="form-group">
-          <label class="form-label">Walkthrough Notes</label>
-          <textarea class="form-textarea" id="int-notes" rows="4" placeholder="Observations from the site walkthrough…">${esc(d.notes || '')}</textarea>
-        </div>
-        <div class="form-group">
-          <label class="form-label">Registration Opportunity</label>
+        <div class="form-group"><label class="form-label">Walkthrough Notes</label>
+          <textarea class="form-textarea" id="int-notes" rows="4" placeholder="Observations from the site walkthrough…">${esc(d.notes || '')}</textarea></div>
+        <div class="form-group"><label class="form-label">Registration Opportunity</label>
           <select class="form-select" id="int-registration">
             <option value="no" ${(d.registration || 'no') === 'no' ? 'selected' : ''}>No</option>
             <option value="yes" ${d.registration === 'yes' ? 'selected' : ''}>Yes — register with vendors</option>
-          </select>
-        </div>
-        <div class="form-group">
-          <label class="form-label">Additional Notes</label>
-          <textarea class="form-textarea" id="int-addnotes" rows="3" placeholder="Anything else…">${esc(d.addnotes || '')}</textarea>
-        </div>
+          </select></div>
+        <div class="form-group"><label class="form-label">Additional Notes</label>
+          <textarea class="form-textarea" id="int-addnotes" rows="3" placeholder="Anything else…">${esc(d.addnotes || '')}</textarea></div>
       </div>
     `;
   }
-
-  // Nav buttons
   const nav = `
     <div style="display:flex;justify-content:space-between;max-width:560px;margin:20px auto 0;gap:12px">
       ${s > 1 ? `<button class="btn" onclick="intakeNav(-1)" style="flex:1;max-width:160px">← Back</button>` : '<div></div>'}
@@ -3481,7 +3321,6 @@ function renderIntake(c) {
       }
     </div>
   `;
-
   c.innerHTML = progress + content + nav;
 }
 
@@ -3504,7 +3343,6 @@ function selectQuoteType(type) {
 }
 
 function intakeNav(dir) {
-  // Save current step data
   saveIntakeStep();
   intakeState.step = Math.max(1, Math.min(6, intakeState.step + dir));
   renderIntake(document.getElementById('content'));
@@ -3540,10 +3378,7 @@ function submitIntake() {
   saveIntakeStep();
   const d = intakeState.data;
   if (!d.client) { alert('Please enter a client name.'); return; }
-
-  // Generate SOW
   const sow = generateSOW(d);
-
   const c = document.getElementById('content');
   c.innerHTML = `
     <div style="max-width:700px;margin:0 auto">
@@ -3551,13 +3386,11 @@ function submitIntake() {
         <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><circle cx="8" cy="8" r="6" stroke="currentColor" stroke-width="1.2"/><path d="M5.5 8l2 2 3.5-3.5" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/></svg>
         <span>Intake complete — SOW generated for <strong>${esc(d.client)}</strong></span>
       </div>
-
       <div class="section-header" style="margin-top:20px">
         <div class="section-title">Scope of Work Preview</div>
         <button class="btn btn-sm" onclick="copySOW()">Copy to Clipboard</button>
       </div>
       <div class="card" id="sow-output" style="font-size:13px;color:#C9D1D9;line-height:1.7;white-space:pre-wrap">${esc(sow)}</div>
-
       <div style="display:flex;gap:8px;margin-top:16px;flex-wrap:wrap">
         <button class="btn-primary" onclick="startNewIntake()">+ New Intake</button>
         <button class="btn" onclick="navigate('dashboard')">Back to Dashboard</button>
@@ -3578,7 +3411,6 @@ function copySOW() {
     navigator.clipboard.writeText(el.textContent).then(() => {
       alert('SOW copied to clipboard!');
     }).catch(() => {
-      // Fallback
       const range = document.createRange();
       range.selectNode(el);
       window.getSelection().removeAllRanges();
@@ -3589,7 +3421,6 @@ function copySOW() {
   }
 }
 
-// ── SOW Generator ──
 function generateSOW(d) {
   const scopeLabels = {
     audio: 'audio/PA system', video: 'video/display system', lighting: 'stage lighting system',
@@ -3600,13 +3431,11 @@ function generateSOW(d) {
   const scopeStr = scopeList.length > 1
     ? scopeList.slice(0, -1).join(', ') + ', and ' + scopeList[scopeList.length - 1]
     : scopeList[0] || 'AVL system';
-
   const paymentTerms = {
     prepay: `Prepay Option (Default): 90% of project total due upon approval. This includes a 7% discount on equipment and 2% discount on labor. Remaining 10% due upon project completion.\n\nIf declined: 100% of equipment cost due upon approval. Labor billed upon completion.`,
     standard: `100% of equipment cost due upon project approval. Labor billed upon project completion.`,
     progress: `100% of equipment cost due upon project approval. Labor progress-billed monthly based on work completed.`
   };
-
   return `SCOPE OF WORK
 ${d.client}
 ${d.venue || ''} ${d.type === 'new' ? '— New Construction' : d.type === 'retrofit' ? '— Retrofit / Upgrade' : ''}
@@ -3678,22 +3507,18 @@ async function syncJetbuilt() {
   state.syncing = true;
   const btn = document.getElementById('sync-btn');
   const content_el = document.getElementById('content');
-
   if (btn) {
     btn.classList.add('syncing');
     btn.innerHTML = '<svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M12 7A5 5 0 1 1 7 2" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/><path d="M7 2l2-2M7 2l2 2" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/></svg> Syncing…';
   }
-
   if (content_el && state.projects.length === 0) {
     content_el.innerHTML = '<div style="text-align:center;padding:60px 20px;color:#6E7681"><div class="spinner" style="margin:0 auto 12px"></div><div style="font-size:13px">Loading projects from Jetbuilt…</div></div>';
   }
-
   try {
     let allProjects = [];
     let page = 1;
     let hasMore = true;
     let errorMsg = null;
-
     while (hasMore && page <= 25) {
       try {
         const data = await fetchJetbuilt(`/projects?page=${page}`);
@@ -3712,32 +3537,20 @@ async function syncJetbuilt() {
         hasMore = false;
       }
     }
-
     if (allProjects.length > 0) {
-      const projects = allProjects.filter(p => {
-        const stage = (p.stage || '').toLowerCase();
-        return stage !== 'template';
-      });
-      // Merge: Jetbuilt data updates, but Valiant-only fields are preserved
+      const projects = allProjects.filter(p => (p.stage || '').toLowerCase() !== 'template');
       const existingMap = {};
       state.projects.forEach(p => { existingMap[p.id] = p; });
-
       state.projects = projects.map(p => {
         const enriched = enrichProject(p);
         const existing = existingMap[enriched.id];
-        if (existing) {
-          // Preserve Valiant-only data that Jetbuilt doesn't hold
-          enriched.archived = existing.archived;
-        }
+        if (existing) enriched.archived = existing.archived;
         return enriched;
       });
-
-      // Cache to localStorage for instant load next time
       try {
         localStorage.setItem('vi_projects_cache', JSON.stringify(state.projects));
         localStorage.setItem('vi_projects_cache_time', new Date().toISOString());
       } catch(e) { console.warn('Cache write failed:', e); }
-
       document.getElementById('proj-count').textContent = state.projects.length;
       renderCurrentPage();
       setTimeout(fetchClientNames, 500);
@@ -3776,9 +3589,7 @@ async function fetchClientNames() {
       })
       .map(p => p.client?.id || p.client_id)
   )].slice(0, 50);
-
   if (clientIds.length === 0) return;
-
   for (let i = 0; i < clientIds.length; i += 5) {
     const batch = clientIds.slice(i, i + 5);
     await Promise.all(batch.map(async (id) => {
@@ -3800,7 +3611,6 @@ async function fetchClientNames() {
     }));
     if (i + 5 < clientIds.length) await new Promise(r => setTimeout(r, 300));
   }
-
   state.projects.forEach(p => {
     const clientId = p.client?.id || p.client_id;
     if (clientId && clientNameCache[clientId]) {
@@ -3815,16 +3625,10 @@ async function fetchClientNames() {
       if (!p.zip && cl.zip) p.zip = cl.zip;
     }
   });
-
-  // Update cache with enriched client names
-  try {
-    localStorage.setItem('vi_projects_cache', JSON.stringify(state.projects));
-  } catch(e) {}
-
+  try { localStorage.setItem('vi_projects_cache', JSON.stringify(state.projects)); } catch(e) {}
   renderCurrentPage();
 }
 
-// ── Full Project Detail Fetcher ──
 const projectDetailCache = {};
 
 async function fetchProjectDetail(projectId) {
@@ -3844,8 +3648,6 @@ async function fetchProjectDetail(projectId) {
 // ── Init ──
 async function init() {
   const c = document.getElementById('content');
-
-  // Replace role dropdown with user switcher
   const sel = document.getElementById('role-select');
   if (sel) {
     sel.innerHTML = state.team.map(m => {
@@ -3854,8 +3656,6 @@ async function init() {
     }).join('');
     sel.onchange = function() { switchUser(parseInt(this.value)); };
   }
-
-  // Update sidebar user area
   const userAvatar = document.querySelector('.user-avatar');
   const userName = document.querySelector('.user-name');
   const userRole = document.querySelector('.user-role');
@@ -3865,13 +3665,8 @@ async function init() {
     const da = DASHBOARD_ACCESS.find(d => d.key === currentUserRole);
     userRole.textContent = da?.label || currentUserRole;
   }
-
-  // Inject mobile bottom nav
   injectBottomNav();
-  // Inject global right command panel
   injectRightPanel();
-
-  // Inject Team nav item into sidebar for admin
   const activeMemberInit = getTeamMember(getActiveTeamMemberId());
   if (activeMemberInit && activeMemberInit.access.includes('admin')) {
     const toolsSection = document.querySelectorAll('.nav-section')[1];
@@ -3884,8 +3679,6 @@ async function init() {
       toolsSection.appendChild(teamLink);
     }
   }
-
-  // Load cached projects from localStorage (Layer 1)
   try {
     const cached = localStorage.getItem('vi_projects_cache');
     if (cached) {
@@ -3895,14 +3688,12 @@ async function init() {
       console.log(`Loaded ${state.projects.length} projects from cache (${cacheTime || 'unknown'})`);
     }
   } catch(e) { console.warn('Cache load failed:', e); }
-
   try {
     renderCurrentPage();
   } catch (e) {
     if (c) c.innerHTML = '<div style="padding:24px;color:#F85149;font-size:12px">Render error: ' + e.message + '</div>';
     return;
   }
-
   if (state.projects.length === 0) {
     const c2 = document.getElementById('content');
     if (c2) {
