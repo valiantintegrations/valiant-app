@@ -77,7 +77,9 @@ const state = {
   projectDrive: JSON.parse(localStorage.getItem('vi_project_drive') || '{}'),
   projectFiles: JSON.parse(localStorage.getItem('vi_project_files') || '{}'),
   contractDates: JSON.parse(localStorage.getItem('vi_contract_dates') || '{}'),
-  projectType: JSON.parse(localStorage.getItem('vi_project_type') || '{}')
+  projectType: JSON.parse(localStorage.getItem('vi_project_type') || '{}'),
+  milestones: JSON.parse(localStorage.getItem('vi_milestones') || '{}'),
+  readyForInstall: JSON.parse(localStorage.getItem('vi_ready_install') || '{}')
 };
 
 // ── Team Roster ──
@@ -2506,6 +2508,7 @@ function renderProjectPage(c) {
 
   const railItems = [
     { key: 'overview', label: 'Overview' },
+    { key: 'progress', label: 'Progress' },
     { key: 'details',  label: 'Details'  },
     { key: 'design',   label: 'Design'   },
     { key: 'install',  label: 'Install'  },
@@ -2565,6 +2568,8 @@ function renderProjectTabContent() {
 
   if (tab === 'overview') {
     body.innerHTML = renderProjectOverviewHTML(p);
+  } else if (tab === 'progress') {
+    body.innerHTML = renderProjectProgressHTML(p);
   } else if (tab === 'details') {
     body.innerHTML = renderProjectDetailsHTML(p);
   } else if (tab === 'design') {
@@ -2596,26 +2601,101 @@ function renderProjectOverviewHTML(p) {
   const contractDate = getContractDate(p.id);
   const installWin = getInstallWindow(p);
   const stg = STAGES.find(s => s.key === p.stage) || STAGES[0];
-  const STAGE_SEQ = ['lead', 'proposal', 'contract', 'install', 'completed'];
-  const seqIdx = STAGE_SEQ.indexOf(p.stage);
+
+  // Compute readiness data for all phases
+  const phaseData = PHASES.map(ph => {
+    const pct = phaseProgress(p, ph);
+    const unlocked = isPhaseUnlocked(p, ph.key);
+    const doneMilestones = ph.milestones.filter(m => milestoneProgress(p, ph, m) >= 1).length;
+    return { phase: ph, pct, unlocked, doneMilestones, totalMilestones: ph.milestones.length };
+  });
+  const serialBeforeParallel = phaseData.filter(d => !d.phase.parallel && d.phase.key !== 'install');
+  const parallelPhases = phaseData.filter(d => d.phase.parallel);
+  const installPhase = phaseData.find(d => d.phase.key === 'install');
+  const readyForInstall = isReadyForInstall(p);
+  const marked = isMarkedReadyForInstall(p.id);
 
   return `
-    <!-- Stage progress stepper -->
+    <!-- Phase Readiness -->
     <div class="dashboard-card" style="margin-bottom:14px">
-      <div class="stage-stepper">
-        ${STAGE_SEQ.map((key, i) => {
-          const meta = STAGES.find(s => s.key === key) || { label: key, color: 'gray' };
-          const done = seqIdx > i;
-          const active = seqIdx === i;
-          return `
-            <div class="stage-step ${done ? 'done' : ''} ${active ? 'active' : ''}">
-              <div class="stage-step-dot"></div>
-              <div class="stage-step-label">${meta.label}</div>
-            </div>
-            ${i < STAGE_SEQ.length - 1 ? `<div class="stage-step-line ${done ? 'done' : ''}"></div>` : ''}
-          `;
-        }).join('')}
+      <div class="dashboard-card-title" style="display:flex;align-items:center;justify-content:space-between">
+        <span>Project Readiness</span>
+        <button class="btn btn-sm" onclick="switchProjectTab('progress')" style="font-size:11px;padding:4px 10px">Manage Milestones &rarr;</button>
       </div>
+
+      <!-- Serial phases: Lead, Proposal, Contract -->
+      <div class="ready-phases">
+        ${serialBeforeParallel.map(d => `
+          <div class="ready-phase-row ${d.pct >= 1 ? 'done' : ''} ${!d.unlocked ? 'locked' : ''}">
+            <div class="ready-phase-head">
+              <span class="ready-phase-label" style="color:${d.phase.color}">${d.phase.label}</span>
+              <span class="ready-phase-count">${d.doneMilestones} of ${d.totalMilestones}</span>
+              <span class="ready-phase-pct">${Math.round(d.pct * 100)}%</span>
+            </div>
+            <div class="ready-phase-bar">
+              <div class="ready-phase-fill" style="width:${Math.round(d.pct * 100)}%;background:${d.phase.color}"></div>
+            </div>
+          </div>
+        `).join('')}
+      </div>
+
+      <!-- Parallel phases group -->
+      <div class="ready-parallel-group">
+        <div class="ready-parallel-header">
+          <span class="ready-parallel-title">Parallel &mdash; All required for Install</span>
+          <span class="ready-parallel-avg">${Math.round((parallelPhases.reduce((s, d) => s + d.pct, 0) / parallelPhases.length) * 100)}%</span>
+        </div>
+        ${parallelPhases.map(d => `
+          <div class="ready-phase-row ${d.pct >= 1 ? 'done' : ''} ${!d.unlocked ? 'locked' : ''}">
+            <div class="ready-phase-head">
+              <span class="ready-phase-label" style="color:${d.phase.color}">${d.phase.label}</span>
+              <span class="ready-phase-count">${d.doneMilestones} of ${d.totalMilestones}</span>
+              <span class="ready-phase-pct">${Math.round(d.pct * 100)}%</span>
+            </div>
+            <div class="ready-phase-bar">
+              <div class="ready-phase-fill" style="width:${Math.round(d.pct * 100)}%;background:${d.phase.color}"></div>
+            </div>
+          </div>
+        `).join('')}
+      </div>
+
+      <!-- Ready for Install gate -->
+      <div class="ready-gate ${readyForInstall ? 'ready-gate-open' : 'ready-gate-locked'}">
+        ${readyForInstall ? (marked ? `
+          <div class="ready-gate-inner">
+            <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M3 8l3 3 7-7" stroke="#3FB950" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+            <span>Marked Ready for Install</span>
+            <button class="btn btn-sm" onclick="unmarkReadyForInstall(${p.id})" style="margin-left:auto;font-size:11px;padding:4px 10px">Unmark</button>
+          </div>
+        ` : `
+          <div class="ready-gate-inner">
+            <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><circle cx="8" cy="8" r="6" stroke="#3FB950" stroke-width="2"/><path d="M6 8l1.5 1.5L10 6.5" stroke="#3FB950" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+            <span>All parallel phases complete</span>
+            <button class="btn-primary" onclick="markReadyForInstall(${p.id})" style="margin-left:auto;background:#238636;padding:6px 12px;font-size:12px;min-height:32px">Mark Ready for Install &rarr;</button>
+          </div>
+        `) : `
+          <div class="ready-gate-inner">
+            <svg width="14" height="14" viewBox="0 0 14 14" fill="none"><rect x="3" y="6" width="8" height="6" rx="1" stroke="#6E7681" stroke-width="1.4"/><path d="M5 6V4a2 2 0 0 1 4 0v2" stroke="#6E7681" stroke-width="1.4"/></svg>
+            <span>Install locked &mdash; complete all parallel phases first</span>
+          </div>
+        `}
+      </div>
+
+      <!-- Install phase progress (only shows when ready or in progress) -->
+      ${(marked || installPhase.pct > 0) ? `
+        <div style="margin-top:12px;padding-top:12px;border-top:1px solid #1C2333">
+          <div class="ready-phase-row ${installPhase.pct >= 1 ? 'done' : ''}">
+            <div class="ready-phase-head">
+              <span class="ready-phase-label" style="color:${installPhase.phase.color}">Install</span>
+              <span class="ready-phase-count">${installPhase.doneMilestones} of ${installPhase.totalMilestones}</span>
+              <span class="ready-phase-pct">${Math.round(installPhase.pct * 100)}%</span>
+            </div>
+            <div class="ready-phase-bar">
+              <div class="ready-phase-fill" style="width:${Math.round(installPhase.pct * 100)}%;background:${installPhase.phase.color}"></div>
+            </div>
+          </div>
+        </div>
+      ` : ''}
     </div>
 
     <!-- Key dates row: Contract + Install -->
@@ -2677,10 +2757,11 @@ function renderProjectOverviewHTML(p) {
             const labels = { sales: 'Sales', design: 'Design', management: 'Management', install: 'Install' };
             const colors = { sales: '#D29922', design: '#A371F7', management: '#58A6FF', install: '#F0883E' };
             if (items.length === 0) {
+              const active = isDomainActive(p, group);
               return `
-                <div class="attn-group attn-clear">
+                <div class="attn-group ${active ? 'attn-ok' : 'attn-clear'}">
                   <div class="attn-group-label" style="color:${colors[group]}">${labels[group]}</div>
-                  <div class="attn-group-empty">No issues</div>
+                  <div class="attn-group-empty" style="${active ? 'color:#3FB950;font-style:normal' : ''}">${active ? 'No issues' : 'Not started'}</div>
                 </div>
               `;
             }
@@ -2836,6 +2917,99 @@ function renderProjectOverviewHTML(p) {
         return '';
       }
     })()}
+  `;
+}
+
+// ── Progress tab: where milestones get checked off (Stage C Pass 1) ──
+function renderProjectProgressHTML(p) {
+  const readyForInstall = isReadyForInstall(p);
+  const marked = isMarkedReadyForInstall(p.id);
+
+  return `
+    <div class="dashboard-card" style="margin-bottom:14px">
+      <div class="dashboard-card-title">Project Milestones</div>
+      <div style="font-size:12px;color:#8B949E;line-height:1.5">
+        Work through each phase's milestones in order. Design, Purchasing, and Planning run in parallel &mdash; all three must complete before Install can begin. Progress here drives the bars on the Overview tab.
+      </div>
+    </div>
+
+    ${PHASES.map(phase => {
+      const pct = phaseProgress(p, phase);
+      const unlocked = isPhaseUnlocked(p, phase.key);
+      const doneMilestones = phase.milestones.filter(m => milestoneProgress(p, phase, m) >= 1).length;
+      const parallel = phase.parallel;
+
+      return `
+        <div class="dashboard-card" style="margin-bottom:12px;${!unlocked ? 'opacity:0.55' : ''}">
+          <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px">
+            <div style="display:flex;align-items:center;gap:8px">
+              <span style="font-size:14px;font-weight:600;color:${phase.color}">${phase.label}</span>
+              ${parallel ? `<span style="font-size:10px;font-weight:600;color:#6E7681;text-transform:uppercase;letter-spacing:0.06em;padding:2px 6px;background:#161B22;border-radius:3px">Parallel</span>` : ''}
+              ${!unlocked ? `<svg width="12" height="12" viewBox="0 0 14 14" fill="none" style="opacity:0.6"><rect x="3" y="6" width="8" height="6" rx="1" stroke="#6E7681" stroke-width="1.4"/><path d="M5 6V4a2 2 0 0 1 4 0v2" stroke="#6E7681" stroke-width="1.4"/></svg>` : ''}
+            </div>
+            <div style="display:flex;align-items:center;gap:10px">
+              <span style="font-size:11px;color:#8B949E">${doneMilestones} of ${phase.milestones.length}</span>
+              <span style="font-size:13px;font-weight:600;color:${pct >= 1 ? '#3FB950' : '#E6EDF3'}">${Math.round(pct * 100)}%</span>
+            </div>
+          </div>
+          <div class="ready-phase-bar" style="margin-bottom:14px">
+            <div class="ready-phase-fill" style="width:${Math.round(pct * 100)}%;background:${phase.color}"></div>
+          </div>
+
+          <div style="display:flex;flex-direction:column;gap:2px">
+            ${phase.milestones.map((milestone, idx) => {
+              const mPct = milestoneProgress(p, phase, milestone);
+              const mDone = mPct >= 1;
+              const mUnlocked = isMilestoneUnlocked(p, phase, idx);
+              const isLinked = !!milestone.linkedChecklist;
+              return `
+                <div class="milestone-row ${mDone ? 'done' : ''} ${!mUnlocked ? 'locked' : ''}">
+                  <div class="milestone-check ${mDone ? 'checked' : ''}" onclick="${mUnlocked && !isLinked ? `toggleMilestone(${p.id}, '${phase.key}', '${milestone.key}')` : ''}">
+                    ${mDone ? '<svg width="11" height="11" viewBox="0 0 11 11" fill="none"><path d="M2 5.5l2.5 2.5L9 3" stroke="#fff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>' : ''}
+                  </div>
+                  <div class="milestone-body">
+                    <div class="milestone-label">${esc(milestone.label)}</div>
+                    ${isLinked ? `
+                      <div class="milestone-sub">
+                        <span>Progress auto-computed from <a href="#" onclick="event.preventDefault();switchProjectTab('${milestone.linkedChecklist}')" style="color:#58A6FF;text-decoration:none">${milestone.linkedChecklist} checklists</a></span>
+                        <span style="color:${mDone ? '#3FB950' : '#8B949E'}">${Math.round(mPct * 100)}%</span>
+                      </div>
+                      ${mPct > 0 && mPct < 1 ? `
+                        <div class="milestone-subbar">
+                          <div class="milestone-subfill" style="width:${Math.round(mPct * 100)}%;background:${phase.color}"></div>
+                        </div>
+                      ` : ''}
+                    ` : ''}
+                  </div>
+                </div>
+              `;
+            }).join('')}
+          </div>
+        </div>
+      `;
+    }).join('')}
+
+    <!-- Bottom readiness gate -->
+    <div class="ready-gate ${readyForInstall ? 'ready-gate-open' : 'ready-gate-locked'}" style="margin-top:14px">
+      ${readyForInstall ? (marked ? `
+        <div class="ready-gate-inner">
+          <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M3 8l3 3 7-7" stroke="#3FB950" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          <span>Marked Ready for Install &mdash; ${fmtDate(state.readyForInstall[p.id]?.slice(0,10))}</span>
+          <button class="btn btn-sm" onclick="unmarkReadyForInstall(${p.id})" style="margin-left:auto;font-size:11px;padding:4px 10px">Unmark</button>
+        </div>
+      ` : `
+        <div class="ready-gate-inner">
+          <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><circle cx="8" cy="8" r="6" stroke="#3FB950" stroke-width="2"/><path d="M6 8l1.5 1.5L10 6.5" stroke="#3FB950" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          <span>All parallel phases complete</span>
+          <button class="btn-primary" onclick="markReadyForInstall(${p.id})" style="margin-left:auto;background:#238636;padding:6px 12px;font-size:12px;min-height:32px">Mark Ready for Install &rarr;</button>
+        </div>
+      `) : `
+        <div class="ready-gate-inner">
+          <svg width="14" height="14" viewBox="0 0 14 14" fill="none"><rect x="3" y="6" width="8" height="6" rx="1" stroke="#6E7681" stroke-width="1.4"/><path d="M5 6V4a2 2 0 0 1 4 0v2" stroke="#6E7681" stroke-width="1.4"/></svg>
+          <span>Install locked &mdash; complete all parallel phases first</span>
+        </div>
+      `}
+    </div>
   `;
 }
 
@@ -3052,7 +3226,164 @@ function countdownClass(dateStr) {
   return 'cd-ok';
 }
 
-// ── Needs Attention Flags (Pass 1) ──
+// ── Phase & Milestone System (Stage C Pass 1) ──
+// Project readiness workflow: Lead → Proposal → Contract → [Design + Purchasing + Planning parallel] → Install
+// Milestones are sequential within each phase; parallel phases can be worked independently.
+
+const PHASES = [
+  { key: 'lead', label: 'Lead', color: '#8B949E', parallel: false, milestones: [
+    { key: 'contact_made',       label: 'Initial contact made with client' },
+    { key: 'walkthrough_sched',  label: 'Walkthrough scheduled with client' }
+  ]},
+  { key: 'proposal', label: 'Proposal', color: '#D29922', parallel: false, milestones: [
+    { key: 'walkthrough_done',   label: 'Walkthrough completed' },
+    { key: 'proposal_built',     label: 'Proposal built' },
+    { key: 'proposal_sent',      label: 'Proposal sent to client' }
+  ]},
+  { key: 'contract', label: 'Contract', color: '#58A6FF', parallel: false, milestones: [
+    { key: 'client_signed',      label: 'Client signed contract' },
+    { key: 'countersigned_sent', label: 'Countersigned contract sent back to client' },
+    { key: 'deposit_invoice',    label: 'Deposit invoice sent' },
+    { key: 'insurance_tax',      label: 'Insurance & tax info sent' },
+    { key: 'install_dates_est',  label: 'Estimated install dates entered' },
+    { key: 'crew_total_est',     label: 'Estimated crew total entered' }
+  ]},
+  { key: 'design', label: 'Design', color: '#A371F7', parallel: true, milestones: [
+    { key: 'design_kickoff',     label: 'Design Kickoff Meeting' },
+    { key: 'design_completed',   label: 'Design Completed', linkedChecklist: 'design' },
+    { key: 'design_handoff',     label: 'Design Handoff Meeting' }
+  ]},
+  { key: 'purchasing', label: 'Purchasing', color: '#3FB950', parallel: true, milestones: [
+    { key: 'all_ordered',        label: 'All equipment ordered' },
+    { key: 'all_arrived',        label: 'All equipment arrived at warehouse' }
+  ]},
+  { key: 'planning', label: 'Planning', color: '#F0883E', parallel: true, milestones: [
+    { key: 'install_tasks',      label: 'Install tasks made' },
+    { key: 'install_schedule',   label: 'Install schedule made' },
+    { key: 'client_expect_sent', label: 'Client expectations & schedule sent' },
+    { key: 'crew_assigned',      label: 'Crew assigned' },
+    { key: 'vehicles_assigned',  label: 'Vehicles assigned' },
+    { key: 'tools_assigned',     label: 'Tools assigned' }
+  ]},
+  { key: 'install', label: 'Install', color: '#F85149', parallel: false, gatedByParallel: true, milestones: [
+    { key: 'shop_work_done',     label: 'Shop work completed' },
+    { key: 'job_prepped',        label: 'Job prepped' },
+    { key: 'job_loaded',         label: 'Job loaded' },
+    { key: 'install_started',    label: 'Install started' },
+    { key: 'install_complete',   label: 'Install complete', linkedChecklist: 'install' },
+    { key: 'commissioning',      label: 'Job commissioning' },
+    { key: 'asbuilt_updated',    label: 'As-built updated' },
+    { key: 'unload_deprep',      label: 'Unload & de-prep' }
+  ]}
+];
+
+function getMilestone(projectId, phaseKey, milestoneKey) {
+  return state.milestones?.[projectId]?.[phaseKey]?.[milestoneKey] || false;
+}
+
+function setMilestone(projectId, phaseKey, milestoneKey, value) {
+  if (!state.milestones[projectId]) state.milestones[projectId] = {};
+  if (!state.milestones[projectId][phaseKey]) state.milestones[projectId][phaseKey] = {};
+  if (value) {
+    state.milestones[projectId][phaseKey][milestoneKey] = true;
+  } else {
+    delete state.milestones[projectId][phaseKey][milestoneKey];
+  }
+  save('vi_milestones', state.milestones);
+}
+
+// Compute progress for a single milestone (0 to 1).
+// Binary milestones: 0 or 1. Milestones linked to checklists: partial based on checklist completion.
+function milestoneProgress(p, phase, milestone) {
+  const done = getMilestone(p.id, phase.key, milestone.key);
+  if (done) return 1;
+  // If not manually checked but has a linked checklist, compute partial from checklist state
+  if (milestone.linkedChecklist) {
+    const relevantSystems = p.systems.filter(s => TEMPLATES[milestone.linkedChecklist]?.[s]);
+    if (relevantSystems.length === 0) return 0;
+    let totalItems = 0;
+    let completedItems = 0;
+    relevantSystems.forEach(sys => {
+      const tpl = TEMPLATES[milestone.linkedChecklist][sys];
+      const key = `${p.id}_${milestone.linkedChecklist}_${sys}`;
+      const checks = state.checklists[key] || {};
+      totalItems += tpl.items.length;
+      completedItems += tpl.items.filter((_, i) => checks[i]).length;
+    });
+    return totalItems > 0 ? completedItems / totalItems : 0;
+  }
+  return 0;
+}
+
+// Compute progress for a whole phase (0 to 1). Equal weight per milestone.
+function phaseProgress(p, phase) {
+  if (phase.milestones.length === 0) return 0;
+  const total = phase.milestones.reduce((sum, m) => sum + milestoneProgress(p, phase, m), 0);
+  return total / phase.milestones.length;
+}
+
+// Check whether the previous phase is complete (for sequential phase gating).
+// Parallel phases: gated only by all prior serial phases being complete.
+function isPhaseUnlocked(p, phaseKey) {
+  const idx = PHASES.findIndex(ph => ph.key === phaseKey);
+  if (idx === 0) return true;
+  const phase = PHASES[idx];
+  // For Install: gated by all parallel phases (design, purchasing, planning) being 100%
+  if (phase.gatedByParallel) {
+    const parallels = PHASES.filter(ph => ph.parallel);
+    return parallels.every(pp => phaseProgress(p, pp) >= 1);
+  }
+  // For parallel phases: unlocked when contract is complete
+  if (phase.parallel) {
+    const contract = PHASES.find(ph => ph.key === 'contract');
+    return phaseProgress(p, contract) >= 1;
+  }
+  // Serial phases: unlocked when previous phase is complete
+  const prev = PHASES[idx - 1];
+  return phaseProgress(p, prev) >= 1;
+}
+
+// Check whether a specific milestone is unlocked (sequential within phase).
+function isMilestoneUnlocked(p, phase, milestoneIdx) {
+  if (!isPhaseUnlocked(p, phase.key)) return false;
+  if (milestoneIdx === 0) return true;
+  // All previous milestones in this phase must be done
+  for (let i = 0; i < milestoneIdx; i++) {
+    if (milestoneProgress(p, phase, phase.milestones[i]) < 1) return false;
+  }
+  return true;
+}
+
+function isReadyForInstall(p) {
+  const parallels = PHASES.filter(ph => ph.parallel);
+  return parallels.every(pp => phaseProgress(p, pp) >= 1);
+}
+
+function isMarkedReadyForInstall(projectId) {
+  return !!state.readyForInstall[projectId];
+}
+
+function markReadyForInstall(projectId) {
+  state.readyForInstall[projectId] = new Date().toISOString();
+  save('vi_ready_install', state.readyForInstall);
+  renderCurrentPage();
+}
+
+function unmarkReadyForInstall(projectId) {
+  delete state.readyForInstall[projectId];
+  save('vi_ready_install', state.readyForInstall);
+  renderCurrentPage();
+}
+
+function toggleMilestone(projectId, phaseKey, milestoneKey) {
+  const current = getMilestone(projectId, phaseKey, milestoneKey);
+  setMilestone(projectId, phaseKey, milestoneKey, !current);
+  renderCurrentPage();
+}
+
+
+
+// ── Needs Attention Flags ──
 function computeProjectFlags(p) {
   const flags = { sales: [], design: [], management: [], install: [] };
   const stage = p.stage;
@@ -3103,6 +3434,34 @@ function computeProjectFlags(p) {
 
   const total = flags.sales.length + flags.design.length + flags.management.length + flags.install.length;
   return { ...flags, total };
+}
+
+// Per-domain "is tracking started yet" for the Needs Attention empty state.
+// Returns true when the domain is active for this project (so empty = "No issues"),
+// false when nothing is expected yet (so empty = "Not started").
+function isDomainActive(p, domain) {
+  const stage = p.stage;
+  const installWin = getInstallWindow(p);
+  switch (domain) {
+    case 'sales':
+      // Sales is always active unless project is done/dead
+      return !['install', 'completed', 'lost', 'icebox'].includes(stage);
+    case 'design':
+      // Design starts once scope is known AND we're at proposal or past
+      return p.systems.length > 0 && ['proposal', 'contract', 'install', 'completed'].includes(stage);
+    case 'management':
+      // Management starts at contract stage
+      return ['contract', 'install', 'completed'].includes(stage);
+    case 'install': {
+      // Install is active once a booked window or approaching estimated install exists, or stage is install
+      if (stage === 'install' || stage === 'completed') return true;
+      if (!installWin) return false;
+      const days = daysUntil(installWin.start);
+      return days !== null && days <= 30 && days >= -30;
+    }
+    default:
+      return false;
+  }
 }
 
 
