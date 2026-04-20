@@ -697,6 +697,160 @@ td.today .cal-day-num {
   padding-top: 0;
 }
 
+/* ═══════════════════════════════════════════════════════════
+   OVERVIEW TAB PASS 1 COMPONENTS (Apr 19, 2026)
+   ═══════════════════════════════════════════════════════════ */
+
+/* Project type badge */
+.ptype-badge {
+  font-size: 10px;
+  font-weight: 600;
+  padding: 3px 9px;
+  border-radius: 3px;
+  cursor: pointer;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+  -webkit-tap-highlight-color: transparent;
+  transition: filter 0.12s;
+  white-space: nowrap;
+}
+.ptype-badge:hover { filter: brightness(1.15); }
+
+.ptype-option { transition: all 0.12s; }
+.ptype-option:hover { filter: brightness(1.1); }
+
+/* Stage stepper */
+.stage-stepper {
+  display: flex;
+  align-items: center;
+  gap: 0;
+  flex-wrap: wrap;
+}
+.stage-step {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+  min-width: 70px;
+}
+.stage-step-dot {
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background: #161B22;
+  border: 2px solid #30363D;
+  transition: all 0.2s;
+}
+.stage-step-label {
+  font-size: 11px;
+  color: #6E7681;
+  font-weight: 500;
+  text-align: center;
+}
+.stage-step.done .stage-step-dot {
+  background: #238636;
+  border-color: #238636;
+}
+.stage-step.done .stage-step-label { color: #3FB950; }
+.stage-step.active .stage-step-dot {
+  background: #1565C0;
+  border-color: #1565C0;
+  box-shadow: 0 0 0 4px rgba(21, 101, 192, 0.22);
+}
+.stage-step.active .stage-step-label {
+  color: #58A6FF;
+  font-weight: 600;
+}
+.stage-step-line {
+  flex: 1;
+  height: 2px;
+  background: #30363D;
+  min-width: 20px;
+  margin-top: -22px;
+  transition: background 0.2s;
+}
+.stage-step-line.done { background: #238636; }
+
+/* Countdown pills */
+.countdown-pill {
+  display: inline-block;
+  font-size: 11px;
+  font-weight: 500;
+  padding: 2px 8px;
+  border-radius: 10px;
+  background: #161B22;
+  color: #8B949E;
+  border: 1px solid #30363D;
+}
+.countdown-pill.cd-urgent {
+  background: #1A0D0D;
+  color: #F85149;
+  border-color: #DA3633;
+}
+.countdown-pill.cd-soon {
+  background: #1A150D;
+  color: #D29922;
+  border-color: #9E6A03;
+}
+.countdown-pill.cd-ok {
+  background: #0D1626;
+  color: #58A6FF;
+  border-color: #1565C0;
+}
+.countdown-pill.cd-past {
+  background: #161B22;
+  color: #6E7681;
+  border-color: #30363D;
+}
+
+/* Attention grid */
+.attn-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 10px;
+  margin-top: 4px;
+}
+.attn-group {
+  padding: 10px 12px;
+  background: #0D1117;
+  border-radius: 8px;
+  border: 1px solid #1C2333;
+}
+.attn-group.attn-clear { opacity: 0.55; }
+.attn-group-label {
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  margin-bottom: 8px;
+}
+.attn-group-empty {
+  font-size: 11px;
+  color: #6E7681;
+  font-style: italic;
+}
+.attn-item {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  font-size: 12px;
+  line-height: 1.4;
+  padding: 4px 0;
+}
+.attn-item + .attn-item { border-top: 1px solid #1C2333; padding-top: 8px; margin-top: 4px; }
+.attn-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  margin-top: 5px;
+  flex-shrink: 0;
+}
+.attn-red .attn-dot { background: #F85149; }
+.attn-red { color: #F85149; }
+.attn-yellow .attn-dot { background: #D29922; }
+.attn-yellow { color: #D29922; }
+
 /* Hide legacy project modal */
 #project-modal {
   display: none !important;
