@@ -851,6 +851,184 @@ td.today .cal-day-num {
 .attn-yellow .attn-dot { background: #D29922; }
 .attn-yellow { color: #D29922; }
 
+/* ═══════════════════════════════════════════════════════════
+   STAGE C PASS 1 — Phase Readiness & Milestones
+   ═══════════════════════════════════════════════════════════ */
+
+/* Readiness card (Overview) */
+.ready-phases {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-top: 4px;
+}
+
+.ready-phase-row {
+  padding: 2px 0;
+}
+.ready-phase-row.locked { opacity: 0.45; }
+
+.ready-phase-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 5px;
+}
+.ready-phase-label {
+  font-size: 12px;
+  font-weight: 600;
+  flex: 1;
+}
+.ready-phase-count {
+  font-size: 11px;
+  color: #6E7681;
+}
+.ready-phase-pct {
+  font-size: 12px;
+  font-weight: 600;
+  color: #E6EDF3;
+  min-width: 36px;
+  text-align: right;
+}
+.ready-phase-row.done .ready-phase-pct { color: #3FB950; }
+
+.ready-phase-bar {
+  height: 6px;
+  background: #161B22;
+  border-radius: 3px;
+  overflow: hidden;
+  border: 1px solid #1C2333;
+}
+.ready-phase-fill {
+  height: 100%;
+  border-radius: 2px;
+  transition: width 0.3s ease;
+}
+
+/* Parallel phase group */
+.ready-parallel-group {
+  margin-top: 14px;
+  padding: 12px;
+  background: #0D1117;
+  border: 1px dashed #30363D;
+  border-radius: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.ready-parallel-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 2px;
+}
+.ready-parallel-title {
+  font-size: 10px;
+  font-weight: 700;
+  color: #8B949E;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+.ready-parallel-avg {
+  font-size: 11px;
+  color: #6E7681;
+  font-weight: 500;
+}
+
+/* Ready for Install gate */
+.ready-gate {
+  margin-top: 14px;
+  padding: 10px 12px;
+  border-radius: 8px;
+  border: 1px solid #30363D;
+  background: #0D1117;
+}
+.ready-gate-locked {
+  border-color: #30363D;
+  background: #0D1117;
+}
+.ready-gate-open {
+  border-color: #238636;
+  background: #0D1A0E;
+}
+.ready-gate-inner {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 13px;
+  color: #C9D1D9;
+  flex-wrap: wrap;
+}
+.ready-gate-locked .ready-gate-inner { color: #8B949E; }
+.ready-gate-open .ready-gate-inner { color: #3FB950; font-weight: 500; }
+
+/* Milestone rows on Progress tab */
+.milestone-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 10px 4px;
+  border-top: 1px solid #1C2333;
+}
+.milestone-row:first-child { border-top: none; }
+.milestone-row.locked { opacity: 0.55; }
+.milestone-row.done .milestone-label { color: #8B949E; text-decoration: line-through; }
+
+.milestone-check {
+  flex-shrink: 0;
+  width: 18px;
+  height: 18px;
+  border-radius: 4px;
+  background: #0D1117;
+  border: 1.5px solid #30363D;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin-top: 1px;
+  -webkit-tap-highlight-color: transparent;
+  transition: all 0.12s;
+}
+.milestone-check:hover { border-color: #58A6FF; }
+.milestone-row.locked .milestone-check { cursor: not-allowed; }
+.milestone-row.locked .milestone-check:hover { border-color: #30363D; }
+.milestone-check.checked {
+  background: #238636;
+  border-color: #238636;
+}
+.milestone-body {
+  flex: 1;
+  min-width: 0;
+}
+.milestone-label {
+  font-size: 13px;
+  color: #E6EDF3;
+  line-height: 1.4;
+}
+.milestone-sub {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: 11px;
+  color: #6E7681;
+  margin-top: 4px;
+}
+.milestone-sub a { color: #58A6FF; }
+.milestone-subbar {
+  height: 4px;
+  background: #161B22;
+  border-radius: 2px;
+  overflow: hidden;
+  border: 1px solid #1C2333;
+  margin-top: 6px;
+}
+.milestone-subfill {
+  height: 100%;
+  border-radius: 2px;
+  transition: width 0.3s ease;
+}
+
 /* Hide legacy project modal */
 #project-modal {
   display: none !important;
