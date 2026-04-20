@@ -73,7 +73,9 @@ const state = {
   lastReadByChannel: JSON.parse(localStorage.getItem('vi_last_read_ch') || '{}'),
   activeConversation: null,
   meetings: JSON.parse(localStorage.getItem('vi_meetings') || '[]'),
-  noteSections: JSON.parse(localStorage.getItem('vi_note_sections') || '{}')
+  noteSections: JSON.parse(localStorage.getItem('vi_note_sections') || '{}'),
+  projectDrive: JSON.parse(localStorage.getItem('vi_project_drive') || '{}'),
+  projectFiles: JSON.parse(localStorage.getItem('vi_project_files') || '{}')
 };
 
 // ── Team Roster ──
@@ -2479,6 +2481,20 @@ function renderProjectPage(c) {
     : gbbTier === 'best' ? 'background:#0D1A0E;color:#3FB950;border:1px solid #238636'
     : 'background:#161B22;color:#6E7681;border:1px solid #30363D';
 
+  const railItems = [
+    { key: 'overview', label: 'Overview' },
+    { key: 'details',  label: 'Details'  },
+    { key: 'design',   label: 'Design'   },
+    { key: 'install',  label: 'Install'  },
+    { key: 'files',    label: 'Files'    },
+    { key: 'notes',    label: 'Notes'    }
+  ];
+
+  const railHTML = railItems.map(item => `
+    <div class="prail-item ${tab === item.key ? 'active' : ''}" onclick="switchProjectTab('${item.key}')">${item.label}</div>
+  `).join('');
+
+  // Page structure: existing header at top (unchanged from Stage B), then body split into rail + content
   c.innerHTML = `
     <div class="project-page">
       <div class="project-page-header">
@@ -2507,14 +2523,11 @@ function renderProjectPage(c) {
             <button class="btn-primary" onclick="markContractReviewed(${p.id})" style="background:#238636;padding:6px 12px;font-size:12px;min-height:32px">&#10003; Mark Reviewed</button>
           </div>
         ` : ''}
-        <div class="project-page-tabs">
-          <div class="ppt ${tab === 'overview' ? 'active' : ''}" onclick="switchProjectTab('overview')">Overview</div>
-          <div class="ppt ${tab === 'design' ? 'active' : ''}" onclick="switchProjectTab('design')">Design</div>
-          <div class="ppt ${tab === 'install' ? 'active' : ''}" onclick="switchProjectTab('install')">Install</div>
-          <div class="ppt ${tab === 'notes' ? 'active' : ''}" onclick="switchProjectTab('notes')">Notes</div>
-        </div>
       </div>
-      <div class="project-page-body" id="project-page-body"></div>
+      <div class="project-page-body-wrap">
+        <aside class="prail">${railHTML}</aside>
+        <div class="project-page-body" id="project-page-body"></div>
+      </div>
     </div>
   `;
   renderProjectTabContent();
@@ -2528,12 +2541,16 @@ function renderProjectTabContent() {
 
   if (tab === 'overview') {
     body.innerHTML = renderProjectOverviewHTML(p);
+  } else if (tab === 'details') {
+    body.innerHTML = renderProjectDetailsHTML(p);
   } else if (tab === 'design') {
     body.innerHTML = '';
     renderChecklistTab(body, p, 'design');
   } else if (tab === 'install') {
     body.innerHTML = '';
     renderChecklistTab(body, p, 'install');
+  } else if (tab === 'files') {
+    body.innerHTML = renderProjectFilesHTML(p);
   } else if (tab === 'notes') {
     const noteKey = `vi_notes_${p.id}`;
     const existing = localStorage.getItem(noteKey) || '';
@@ -2579,6 +2596,40 @@ function renderProjectOverviewHTML(p) {
         </div>
       </div>
     </div>
+    ${(() => {
+      const files = state.projectFiles[p.id] || {};
+      const renders = (files.renders || []).filter(r => r.url);
+      if (renders.length === 0) return '';
+      return `
+        <div class="dashboard-card" style="margin-top:14px">
+          <div class="dashboard-card-title" style="display:flex;align-items:center;justify-content:space-between">
+            <span>Renders</span>
+            <button class="btn btn-sm" onclick="switchProjectTab('files')" style="font-size:11px">Manage in Files &rarr;</button>
+          </div>
+          <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(140px,1fr));gap:8px">
+            ${renders.slice(0, 6).map(r => {
+              const isImage = r.url && /\.(png|jpe?g|gif|webp)$/i.test(r.url);
+              const driveImgId = extractDriveFileId(r.url);
+              const thumbUrl = driveImgId ? `https://drive.google.com/thumbnail?id=${driveImgId}&sz=w400` : (isImage ? r.url : null);
+              return `
+                <a href="${esc(r.url)}" target="_blank" rel="noopener" style="display:block;aspect-ratio:4/3;background:#0D1117;border:1px solid #1C2333;border-radius:6px;overflow:hidden;text-decoration:none;position:relative">
+                  ${thumbUrl
+                    ? `<img src="${esc(thumbUrl)}" style="width:100%;height:100%;object-fit:cover;display:block" onerror="this.style.display='none';this.nextElementSibling.style.display='flex'">
+                       <div style="display:none;width:100%;height:100%;align-items:center;justify-content:center;color:#6E7681;font-size:11px;padding:8px;text-align:center">${esc(r.label || 'Render')}</div>`
+                    : `<div style="width:100%;height:100%;display:flex;align-items:center;justify-content:center;color:#58A6FF;font-size:11px;padding:8px;text-align:center">
+                         <div>
+                           <svg width="20" height="20" viewBox="0 0 20 20" fill="none" style="margin:0 auto 4px"><path d="M3 15l4-4 3 3 4-5 3 4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/><circle cx="7" cy="7" r="1.5" stroke="currentColor" stroke-width="1.5"/><rect x="2" y="3" width="16" height="14" rx="1.5" stroke="currentColor" stroke-width="1.5"/></svg>
+                           <div>${esc(r.label || 'Render')}</div>
+                         </div>
+                       </div>`}
+                </a>
+              `;
+            }).join('')}
+          </div>
+          ${renders.length > 6 ? `<div style="text-align:center;margin-top:8px;font-size:11px;color:#6E7681">+${renders.length - 6} more in Files tab</div>` : ''}
+        </div>
+      `;
+    })()}
     <div class="dashboard-card" style="margin-top:14px">
       <div class="dashboard-card-title" style="display:flex;align-items:center;justify-content:space-between">
         <span>Install Timeline</span>
@@ -2742,6 +2793,271 @@ function getChecklistState(projectId, phase) {
     }
   });
   return result;
+}
+
+// ── Drive URL helpers (Stage B v1.17) ──
+function extractDriveFolderId(url) {
+  if (!url) return null;
+  // Matches: /folders/{ID}, /drive/folders/{ID}, ?id={ID}
+  const patterns = [
+    /\/folders\/([a-zA-Z0-9_-]+)/,
+    /[?&]id=([a-zA-Z0-9_-]+)/,
+    /\/drive\/u\/\d+\/folders\/([a-zA-Z0-9_-]+)/
+  ];
+  for (const re of patterns) {
+    const m = url.match(re);
+    if (m) return m[1];
+  }
+  return null;
+}
+
+function extractDriveFileId(url) {
+  if (!url) return null;
+  // Matches: /file/d/{ID}, ?id={ID}, open?id={ID}
+  const patterns = [
+    /\/file\/d\/([a-zA-Z0-9_-]+)/,
+    /\/d\/([a-zA-Z0-9_-]+)/,
+    /[?&]id=([a-zA-Z0-9_-]+)/
+  ];
+  for (const re of patterns) {
+    const m = url.match(re);
+    if (m) return m[1];
+  }
+  return null;
+}
+
+function getProjectDriveUrl(projectId) {
+  return state.projectDrive[projectId] || '';
+}
+
+function setProjectDriveUrl(projectId, url) {
+  if (url && url.trim()) {
+    state.projectDrive[projectId] = url.trim();
+  } else {
+    delete state.projectDrive[projectId];
+  }
+  save('vi_project_drive', state.projectDrive);
+}
+
+function getProjectFiles(projectId) {
+  return state.projectFiles[projectId] || { renders: [], drawings: [], asbuilts: [], contracts: [], other: [] };
+}
+
+function addProjectFile(projectId, category, label, url) {
+  if (!state.projectFiles[projectId]) {
+    state.projectFiles[projectId] = { renders: [], drawings: [], asbuilts: [], contracts: [], other: [] };
+  }
+  if (!state.projectFiles[projectId][category]) state.projectFiles[projectId][category] = [];
+  state.projectFiles[projectId][category].push({
+    id: Date.now(),
+    label: label || 'Untitled',
+    url: url || '',
+    added: new Date().toISOString()
+  });
+  save('vi_project_files', state.projectFiles);
+}
+
+function removeProjectFile(projectId, category, fileId) {
+  if (!state.projectFiles[projectId]) return;
+  state.projectFiles[projectId][category] = (state.projectFiles[projectId][category] || []).filter(f => f.id !== fileId);
+  save('vi_project_files', state.projectFiles);
+}
+
+function saveProjectDriveUrl(projectId) {
+  const input = document.getElementById('drive-url-input');
+  if (!input) return;
+  setProjectDriveUrl(projectId, input.value);
+  renderProjectTabContent();
+}
+
+function promptAddFile(projectId, category) {
+  const label = prompt('File name / description:');
+  if (!label) return;
+  const url = prompt('Drive / web URL:');
+  if (!url) return;
+  addProjectFile(projectId, category, label, url);
+  renderProjectTabContent();
+}
+
+function confirmRemoveFile(projectId, category, fileId) {
+  if (!confirm('Remove this file link?')) return;
+  removeProjectFile(projectId, category, fileId);
+  renderProjectTabContent();
+}
+
+function renderProjectDetailsHTML(p) {
+  return `
+    <div class="dashboard-grid">
+      <div class="dashboard-card">
+        <div class="dashboard-card-title">Client</div>
+        <div style="font-size:13px;color:#C9D1D9;line-height:1.9">
+          <div style="font-size:15px;font-weight:500;color:#E6EDF3;margin-bottom:6px">${esc(p.client_name || '—')}</div>
+          ${canSee('client_contact') ? `
+            ${p.primary_contact_name ? `<div><strong style="color:#8B949E">Contact:</strong> ${esc(p.primary_contact_name)}</div>` : ''}
+            ${p.primary_contact_email ? `<div><strong style="color:#8B949E">Email:</strong> <a href="mailto:${esc(p.primary_contact_email)}" style="color:#58A6FF;text-decoration:none">${esc(p.primary_contact_email)}</a></div>` : ''}
+            ${p.primary_contact_phone ? `<div><strong style="color:#8B949E">Phone:</strong> <a href="tel:${esc(p.primary_contact_phone)}" style="color:#58A6FF;text-decoration:none">${esc(p.primary_contact_phone)}</a></div>` : ''}
+          ` : '<div style="font-size:12px;color:#6E7681">Contact info hidden &mdash; requires client_contact permission</div>'}
+        </div>
+      </div>
+      <div class="dashboard-card">
+        <div class="dashboard-card-title">Location</div>
+        <div style="font-size:13px;color:#C9D1D9;line-height:1.9">
+          ${p.address ? `<div><strong style="color:#8B949E">Address:</strong> ${esc(p.address)}</div>` : ''}
+          ${p.city ? `<div><strong style="color:#8B949E">City:</strong> ${esc(p.city)}${p.state_abbr ? ', ' + esc(p.state_abbr) : ''}</div>` : ''}
+          ${p.zip ? `<div><strong style="color:#8B949E">ZIP:</strong> ${esc(p.zip)}</div>` : ''}
+          ${!p.address && !p.city && !p.zip ? '<div style="font-size:12px;color:#6E7681">No address on file</div>' : ''}
+          ${p.address || p.city ? `
+            <div style="margin-top:10px">
+              <a href="https://www.google.com/maps/search/?api=1&query=${encodeURIComponent([p.address, p.city, p.state_abbr].filter(Boolean).join(', '))}" target="_blank" rel="noopener" style="font-size:12px;color:#58A6FF;text-decoration:none">
+                Open in Google Maps &rarr;
+              </a>
+            </div>
+          ` : ''}
+        </div>
+      </div>
+    </div>
+
+    <div class="dashboard-card" style="margin-top:14px">
+      <div class="dashboard-card-title">Project Metadata</div>
+      <div style="font-size:13px;color:#C9D1D9;line-height:1.9">
+        <div><strong style="color:#8B949E">Project ID:</strong> <span style="font-family:'DM Mono',monospace;font-size:12px">#${p.id}</span></div>
+        <div><strong style="color:#8B949E">Stage:</strong> ${esc(p.raw_stage || p.stage)}</div>
+        ${p.jetbuilt_id ? `<div><strong style="color:#8B949E">Jetbuilt ID:</strong> <span style="font-family:'DM Mono',monospace;font-size:12px">${p.jetbuilt_id}</span></div>` : ''}
+        <div><strong style="color:#8B949E">Created:</strong> ${fmtDate(p.created_at)}</div>
+        <div><strong style="color:#8B949E">Last Updated:</strong> ${fmtDate(p.updated_at)}</div>
+      </div>
+    </div>
+
+    ${p.systems.length ? `
+      <div class="dashboard-card" style="margin-top:14px">
+        <div class="dashboard-card-title">Scope Tags</div>
+        <div style="margin-bottom:8px">${p.systems.map(systemTagHTML).join(' ')}</div>
+        <div style="font-size:11px;color:#6E7681">Auto-detected from project name and description. These drive the design and install checklists.</div>
+      </div>
+    ` : ''}
+
+    ${p.description ? `
+      <div class="dashboard-card" style="margin-top:14px">
+        <div class="dashboard-card-title">Description</div>
+        <div style="font-size:13px;color:#C9D1D9;line-height:1.6;white-space:pre-wrap">${esc(p.description)}</div>
+      </div>
+    ` : ''}
+
+    ${p.notes ? `
+      <div class="dashboard-card" style="margin-top:14px">
+        <div class="dashboard-card-title">Jetbuilt Notes</div>
+        <div style="font-size:13px;color:#C9D1D9;line-height:1.6;white-space:pre-wrap">${esc(p.notes)}</div>
+        <div style="margin-top:8px;font-size:11px;color:#6E7681">These are notes from Jetbuilt. Use the Notes tab for working notes.</div>
+      </div>
+    ` : ''}
+  `;
+}
+
+function renderProjectFilesHTML(p) {
+  const driveUrl = getProjectDriveUrl(p.id);
+  const folderId = extractDriveFolderId(driveUrl);
+  const files = getProjectFiles(p.id);
+
+  const categories = [
+    { key: 'renders', label: 'Renders', icon: 'image', desc: 'Sales renders and layout visuals shared with the client' },
+    { key: 'drawings', label: 'CAD Drawings', icon: 'blueprint', desc: 'Vectorworks build sets, plots, schedules' },
+    { key: 'asbuilts', label: 'As-builts', icon: 'document', desc: 'Final drawings after install is complete' },
+    { key: 'contracts', label: 'Contracts & SOWs', icon: 'contract', desc: 'Signed contracts, scope documents, change orders' },
+    { key: 'other', label: 'Other Files', icon: 'file', desc: 'Reference photos, spec sheets, anything else' }
+  ];
+
+  return `
+    <div class="dashboard-card" style="margin-bottom:14px">
+      <div class="dashboard-card-title" style="display:flex;align-items:center;justify-content:space-between">
+        <span>Google Drive Folder</span>
+        ${driveUrl ? `<a href="${esc(driveUrl)}" target="_blank" rel="noopener" class="btn btn-sm" style="text-decoration:none;font-size:11px;color:#58A6FF;border-color:#1565C0">Open in Drive &rarr;</a>` : ''}
+      </div>
+      <div style="display:flex;gap:8px;align-items:stretch">
+        <input class="form-input" id="drive-url-input" placeholder="Paste Google Drive folder URL..."
+          value="${esc(driveUrl)}" style="flex:1;font-size:13px"
+          onkeydown="if(event.key==='Enter')saveProjectDriveUrl(${p.id})">
+        <button class="btn-primary" onclick="saveProjectDriveUrl(${p.id})" style="padding:10px 16px;font-size:13px;flex-shrink:0">Save</button>
+      </div>
+      ${driveUrl && !folderId ? `
+        <div style="margin-top:10px;padding:10px 12px;background:#1A150D;border:1px solid #9E6A03;border-radius:6px;font-size:12px;color:#D29922">
+          Unable to parse folder ID from URL. Make sure it&rsquo;s a Drive <strong>folder</strong> link (contains /folders/...), not a single file.
+        </div>
+      ` : ''}
+      ${folderId ? `
+        <div style="margin-top:10px;font-size:11px;color:#6E7681;display:flex;align-items:center;gap:6px">
+          <svg width="12" height="12" viewBox="0 0 12 12" fill="none"><circle cx="6" cy="6" r="5" stroke="#3FB950" stroke-width="1.3"/><path d="M4 6l1.5 1.5L8 5" stroke="#3FB950" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          Folder linked. To show embedded preview, folder must be shared &ldquo;Anyone with link &mdash; Viewer&rdquo; in Drive.
+        </div>
+      ` : ''}
+    </div>
+
+    ${folderId ? `
+      <div class="dashboard-card" style="margin-bottom:14px;padding:0;overflow:hidden">
+        <div style="padding:10px 16px;border-bottom:1px solid #1C2333;display:flex;align-items:center;justify-content:space-between">
+          <span style="font-size:11px;font-weight:600;color:#6E7681;text-transform:uppercase;letter-spacing:0.08em">Embedded Drive Preview</span>
+          <span style="font-size:10px;color:#6E7681">If blank, folder sharing may be restricted</span>
+        </div>
+        <iframe src="https://drive.google.com/embeddedfolderview?id=${encodeURIComponent(folderId)}#grid"
+          style="width:100%;height:480px;border:none;display:block;background:#0D1117"
+          title="Google Drive folder"></iframe>
+      </div>
+    ` : `
+      <div class="dashboard-card" style="margin-bottom:14px;text-align:center;padding:40px 20px">
+        <svg width="48" height="48" viewBox="0 0 48 48" fill="none" style="margin:0 auto 12px;opacity:0.4">
+          <path d="M8 12h10l4 6h18v20a4 4 0 0 1-4 4H8a4 4 0 0 1-4-4V16a4 4 0 0 1 4-4z" stroke="#6E7681" stroke-width="2" stroke-linejoin="round"/>
+        </svg>
+        <div style="font-size:14px;color:#8B949E;margin-bottom:4px">No Drive folder linked</div>
+        <div style="font-size:12px;color:#6E7681">Paste the Google Drive folder URL above to link this project&rsquo;s files.</div>
+      </div>
+    `}
+
+    <div style="display:flex;align-items:center;justify-content:space-between;margin:20px 0 12px">
+      <div class="section-title">File Links</div>
+      <span style="font-size:11px;color:#6E7681">Quick links to specific files within Drive or elsewhere</span>
+    </div>
+
+    ${categories.map(cat => {
+      const items = files[cat.key] || [];
+      return `
+        <div class="dashboard-card" style="margin-bottom:10px">
+          <div class="dashboard-card-title" style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px">
+            <div>
+              <span>${cat.label}</span>
+              ${items.length > 0 ? `<span style="margin-left:6px;font-size:10px;color:#6E7681;font-weight:400">${items.length}</span>` : ''}
+            </div>
+            <button class="btn btn-sm" onclick="promptAddFile(${p.id}, '${cat.key}')" style="font-size:11px;padding:5px 10px">+ Add</button>
+          </div>
+          <div style="font-size:11px;color:#6E7681;margin-bottom:8px">${cat.desc}</div>
+          ${items.length === 0 ? `
+            <div style="font-size:12px;color:#6E7681;font-style:italic;padding:4px 0">No ${cat.label.toLowerCase()} linked yet</div>
+          ` : `
+            <div style="display:flex;flex-direction:column;gap:4px">
+              ${items.map(item => {
+                const driveFileId = extractDriveFileId(item.url);
+                const thumbUrl = driveFileId ? `https://drive.google.com/thumbnail?id=${driveFileId}&sz=w80` : null;
+                return `
+                  <div style="display:flex;align-items:center;gap:10px;padding:8px 10px;border-radius:6px;background:#0D1117;border:1px solid #1C2333">
+                    ${thumbUrl ? `
+                      <img src="${esc(thumbUrl)}" style="width:36px;height:36px;object-fit:cover;border-radius:4px;flex-shrink:0;background:#161B22" onerror="this.style.display='none'">
+                    ` : `
+                      <div style="width:36px;height:36px;border-radius:4px;background:#161B22;display:flex;align-items:center;justify-content:center;flex-shrink:0;color:#6E7681">
+                        <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M4 2h6l3 3v9H4V2z" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"/></svg>
+                      </div>
+                    `}
+                    <div style="flex:1;min-width:0">
+                      <a href="${esc(item.url)}" target="_blank" rel="noopener" style="font-size:13px;color:#E6EDF3;text-decoration:none;display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(item.label)}</a>
+                      <div style="font-size:10px;color:#6E7681;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(item.url)}</div>
+                    </div>
+                    <button onclick="confirmRemoveFile(${p.id}, '${cat.key}', ${item.id})" style="background:none;border:none;color:#6E7681;cursor:pointer;padding:4px 8px;font-size:16px;line-height:1;flex-shrink:0" title="Remove">&times;</button>
+                  </div>
+                `;
+              }).join('')}
+            </div>
+          `}
+        </div>
+      `;
+    }).join('')}
+  `;
 }
 
 // Legacy no-op (project-modal no longer used but kept for safety)
