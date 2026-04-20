@@ -75,7 +75,9 @@ const state = {
   meetings: JSON.parse(localStorage.getItem('vi_meetings') || '[]'),
   noteSections: JSON.parse(localStorage.getItem('vi_note_sections') || '{}'),
   projectDrive: JSON.parse(localStorage.getItem('vi_project_drive') || '{}'),
-  projectFiles: JSON.parse(localStorage.getItem('vi_project_files') || '{}')
+  projectFiles: JSON.parse(localStorage.getItem('vi_project_files') || '{}'),
+  contractDates: JSON.parse(localStorage.getItem('vi_contract_dates') || '{}'),
+  projectType: JSON.parse(localStorage.getItem('vi_project_type') || '{}')
 };
 
 // ── Team Roster ──
@@ -662,6 +664,27 @@ function enrichProject(p) {
     primary_contact_name: '',
     primary_contact_email: '',
     primary_contact_phone: '',
+    // Jetbuilt additional fields (Pass 1 of Overview redesign)
+    jb_project_type: p.project_type || '',
+    jb_close_date: p.close_date || '',
+    jb_commission_date: p.commission_date || '',
+    jb_estimated_install: p.estimated_install_on || '',
+    jb_price_valid_until: p.price_valid_until || '',
+    jb_probability: parseFloat(p.probability) || null,
+    jb_custom_id: p.custom_id || '',
+    jb_version: p.version || '',
+    jb_contract_number: p.contract_number || '',
+    jb_budget: parseFloat(p.budget) || null,
+    jb_paid_to_date: parseFloat(p.paid_to_date) || 0,
+    jb_total_margin: p.total_margin ? parseFloat(p.total_margin) : null,
+    jb_equipment_margin: p.equipment_margin ? parseFloat(p.equipment_margin) : null,
+    jb_shipping_total: parseFloat(p.shipping_total) || 0,
+    jb_tax_total: parseFloat(p.tax_total) || 0,
+    jb_owner_name: p.owner?.full_name || '',
+    jb_pm_name: p.project_manager?.full_name || '',
+    jb_engineer_name: p.engineer?.full_name || '',
+    jb_market_segment: p.market_segment?.name || '',
+    jb_company_location: p.company_location?.name || '',
     archived: archiveStatus
   };
 }
@@ -2508,6 +2531,7 @@ function renderProjectPage(c) {
             <div class="project-page-sub">#${p.id} · ${esc(p.client_name || 'No client')}${p.city ? ' · ' + esc(p.city) + (p.state_abbr ? ', ' + esc(p.state_abbr) : '') : ''}</div>
           </div>
           <div class="project-page-actions">
+            ${projectTypeBadgeHTML(p)}
             <span class="status-pill status-${stg.color}">${stg.label}</span>
             ${gbbTier ? `<span style="font-size:10px;font-weight:600;padding:3px 8px;border-radius:3px;${gbbBadgeStyle}">${gbbTier.toUpperCase()}</span>` : ''}
             <button class="btn btn-sm" onclick="toggleLikelyToClose(${p.id})" title="${likely ? 'Remove Likely to Close' : 'Mark Likely to Close'}" style="${likely ? 'background:#0D1A0E;border-color:#238636;color:#3FB950' : ''};min-height:32px;padding:4px 10px"><span style="font-size:14px">★</span></button>
@@ -2568,34 +2592,146 @@ function renderProjectTabContent() {
 function renderProjectOverviewHTML(p) {
   const gbbGroup = getGBBGroup(p.id);
   const gbbTier = getGBBTier(p.id);
+  const flags = computeProjectFlags(p);
+  const contractDate = getContractDate(p.id);
+  const installWin = getInstallWindow(p);
+  const stg = STAGES.find(s => s.key === p.stage) || STAGES[0];
+  const STAGE_SEQ = ['lead', 'proposal', 'contract', 'install', 'completed'];
+  const seqIdx = STAGE_SEQ.indexOf(p.stage);
+
   return `
-    <div class="dashboard-grid">
-      <div class="dashboard-card">
-        <div class="dashboard-card-title">Project Info</div>
-        <div style="font-size:13px;color:#C9D1D9;line-height:1.8">
-          <div><strong style="color:#8B949E">Stage:</strong> ${esc(p.raw_stage || p.stage)}</div>
-          ${canSee('financials') ? `
-            <div><strong style="color:#8B949E">Total Value:</strong> ${fmt(p.total)}</div>
-            <div><strong style="color:#8B949E">Equipment:</strong> ${fmt(p.equipment)}</div>
-            <div><strong style="color:#8B949E">Labor:</strong> ${fmt(p.labor)}</div>
-          ` : ''}
-          <div><strong style="color:#8B949E">Created:</strong> ${fmtDate(p.created_at)}</div>
-          <div><strong style="color:#8B949E">Updated:</strong> ${fmtDate(p.updated_at)}</div>
-        </div>
-      </div>
-      <div class="dashboard-card">
-        <div class="dashboard-card-title">Client</div>
-        <div style="font-size:13px;color:#C9D1D9;line-height:1.9">
-          <div style="font-size:14px;font-weight:500;color:#E6EDF3;margin-bottom:4px">${esc(p.client_name || '—')}</div>
-          ${canSee('client_contact') ? `
-            ${p.primary_contact_name ? `<div style="color:#8B949E">${esc(p.primary_contact_name)}</div>` : ''}
-            ${p.primary_contact_email ? `<div><a href="mailto:${esc(p.primary_contact_email)}" style="color:#58A6FF;text-decoration:none">${esc(p.primary_contact_email)}</a></div>` : ''}
-            ${p.primary_contact_phone ? `<div><a href="tel:${esc(p.primary_contact_phone)}" style="color:#58A6FF;text-decoration:none">${esc(p.primary_contact_phone)}</a></div>` : ''}
-          ` : ''}
-          ${p.address || p.city ? `<div style="font-size:12px;color:#6E7681;margin-top:4px">${[p.address, p.city, p.state_abbr].filter(Boolean).join(', ')}</div>` : ''}
-        </div>
+    <!-- Stage progress stepper -->
+    <div class="dashboard-card" style="margin-bottom:14px">
+      <div class="stage-stepper">
+        ${STAGE_SEQ.map((key, i) => {
+          const meta = STAGES.find(s => s.key === key) || { label: key, color: 'gray' };
+          const done = seqIdx > i;
+          const active = seqIdx === i;
+          return `
+            <div class="stage-step ${done ? 'done' : ''} ${active ? 'active' : ''}">
+              <div class="stage-step-dot"></div>
+              <div class="stage-step-label">${meta.label}</div>
+            </div>
+            ${i < STAGE_SEQ.length - 1 ? `<div class="stage-step-line ${done ? 'done' : ''}"></div>` : ''}
+          `;
+        }).join('')}
       </div>
     </div>
+
+    <!-- Key dates row: Contract + Install -->
+    <div class="dashboard-grid">
+      <div class="dashboard-card">
+        <div class="dashboard-card-title" style="display:flex;align-items:center;justify-content:space-between">
+          <span>Contract</span>
+          <button class="btn btn-sm" onclick="showContractDateDialog(${p.id})" style="font-size:11px;padding:4px 10px">
+            ${contractDate ? 'Edit' : 'Set date'}
+          </button>
+        </div>
+        ${contractDate ? `
+          <div style="font-size:20px;font-weight:600;color:#E6EDF3;line-height:1.1">${fmtDate(contractDate)}</div>
+          <div style="font-size:12px;color:#8B949E;margin-top:4px">Signed ${fmtCountdown(contractDate)}</div>
+        ` : `
+          <div style="font-size:14px;color:#6E7681;font-style:italic">No contract date set</div>
+          <div style="font-size:11px;color:#6E7681;margin-top:4px">Set this when the contract is signed</div>
+        `}
+      </div>
+
+      <div class="dashboard-card">
+        <div class="dashboard-card-title" style="display:flex;align-items:center;justify-content:space-between">
+          <span>Install</span>
+          <button class="btn btn-sm" onclick="showSetBookedDatesDialog(${p.id})" style="font-size:11px;padding:4px 10px">
+            ${getBookedTimeline(p.id) ? 'Edit window' : 'Book dates'}
+          </button>
+        </div>
+        ${installWin ? (() => {
+          const sameDay = installWin.start === installWin.end;
+          const cdClass = countdownClass(installWin.start);
+          return `
+            <div style="font-size:20px;font-weight:600;color:#E6EDF3;line-height:1.1">
+              ${fmtDate(installWin.start)}${sameDay ? '' : ' &ndash; ' + fmtDate(installWin.end)}
+            </div>
+            <div style="display:flex;align-items:center;gap:8px;margin-top:4px">
+              <span class="countdown-pill ${cdClass}">${fmtCountdown(installWin.start)}</span>
+              <span style="font-size:11px;color:#6E7681">${installWin.source === 'booked' ? 'Booked window' : 'Jetbuilt estimate'}</span>
+            </div>
+          `;
+        })() : `
+          <div style="font-size:14px;color:#6E7681;font-style:italic">Not scheduled</div>
+          <div style="font-size:11px;color:#6E7681;margin-top:4px">No estimate from Jetbuilt or booked window</div>
+        `}
+      </div>
+    </div>
+
+    <!-- Needs Attention (multi-audience executive summary) -->
+    <div class="dashboard-card" style="margin-top:14px">
+      <div class="dashboard-card-title">Needs Attention</div>
+      ${flags.total === 0 ? `
+        <div style="display:flex;align-items:center;gap:8px;padding:8px 0">
+          <div style="width:8px;height:8px;border-radius:50%;background:#3FB950"></div>
+          <span style="font-size:13px;color:#3FB950;font-weight:500">All clear &mdash; nothing flagged</span>
+        </div>
+      ` : `
+        <div class="attn-grid">
+          ${['sales', 'design', 'management', 'install'].map(group => {
+            const items = flags[group] || [];
+            const labels = { sales: 'Sales', design: 'Design', management: 'Management', install: 'Install' };
+            const colors = { sales: '#D29922', design: '#A371F7', management: '#58A6FF', install: '#F0883E' };
+            if (items.length === 0) {
+              return `
+                <div class="attn-group attn-clear">
+                  <div class="attn-group-label" style="color:${colors[group]}">${labels[group]}</div>
+                  <div class="attn-group-empty">No issues</div>
+                </div>
+              `;
+            }
+            return `
+              <div class="attn-group">
+                <div class="attn-group-label" style="color:${colors[group]}">${labels[group]}</div>
+                ${items.map(flag => `
+                  <div class="attn-item attn-${flag.level}">
+                    <div class="attn-dot"></div>
+                    <span>${flag.text}</span>
+                  </div>
+                `).join('')}
+              </div>
+            `;
+          }).join('')}
+        </div>
+      `}
+    </div>
+
+    <!-- Proposal activity (only in proposal stage) -->
+    ${p.stage === 'proposal' && p.jb_price_valid_until ? (() => {
+      const days = daysUntil(p.jb_price_valid_until);
+      const cdClass = countdownClass(p.jb_price_valid_until);
+      return `
+        <div class="dashboard-card" style="margin-top:14px">
+          <div class="dashboard-card-title">Proposal Activity</div>
+          <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:10px">
+            <div style="padding:10px 12px;background:#0D1117;border-radius:8px;border:1px solid #1C2333">
+              <div style="font-size:10px;color:#6E7681;text-transform:uppercase;letter-spacing:0.06em;margin-bottom:4px">Valid Until</div>
+              <div style="font-size:14px;color:#E6EDF3">${fmtDate(p.jb_price_valid_until)}</div>
+              <div style="margin-top:4px"><span class="countdown-pill ${cdClass}">${fmtCountdown(p.jb_price_valid_until)}</span></div>
+            </div>
+            ${p.jb_probability !== null ? `
+              <div style="padding:10px 12px;background:#0D1117;border-radius:8px;border:1px solid #1C2333">
+                <div style="font-size:10px;color:#6E7681;text-transform:uppercase;letter-spacing:0.06em;margin-bottom:4px">Probability</div>
+                <div style="font-size:14px;color:#E6EDF3">${Math.round(p.jb_probability * 100)}%</div>
+              </div>
+            ` : ''}
+            ${p.jb_close_date ? `
+              <div style="padding:10px 12px;background:#0D1117;border-radius:8px;border:1px solid #1C2333">
+                <div style="font-size:10px;color:#6E7681;text-transform:uppercase;letter-spacing:0.06em;margin-bottom:4px">Expected Close</div>
+                <div style="font-size:14px;color:#E6EDF3">${fmtDate(p.jb_close_date)}</div>
+              </div>
+            ` : ''}
+          </div>
+          <div style="margin-top:10px;font-size:11px;color:#6E7681">Detailed proposal view counts and links will land on the Quote tab (coming soon)</div>
+        </div>
+      `;
+    })() : ''}
+
+    <!-- Renders preview -->
     ${(() => {
       const files = state.projectFiles[p.id] || {};
       const renders = (files.renders || []).filter(r => r.url);
@@ -2630,35 +2766,8 @@ function renderProjectOverviewHTML(p) {
         </div>
       `;
     })()}
-    <div class="dashboard-card" style="margin-top:14px">
-      <div class="dashboard-card-title" style="display:flex;align-items:center;justify-content:space-between">
-        <span>Install Timeline</span>
-        <button class="btn btn-sm" onclick="showSetBookedDatesDialog(${p.id})" style="font-size:11px">
-          ${getBookedTimeline(p.id) ? 'Edit Booked Dates' : 'Set Booked Dates'}
-        </button>
-      </div>
-      <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:6px">
-        <div style="padding:10px 12px;background:#0D1117;border-radius:8px;border:1px solid #1C2333">
-          <div style="font-size:10px;color:#6E7681;text-transform:uppercase;letter-spacing:0.06em;margin-bottom:4px">Estimated (Jetbuilt)</div>
-          <div style="font-size:13px;color:${p.start_date ? '#C9D1D9' : '#6E7681'}">${p.start_date ? fmtDate(p.start_date) : '— Not set'}</div>
-        </div>
-        <div style="padding:10px 12px;background:${getBookedTimeline(p.id) ? '#0D1A0E' : '#0D1117'};border-radius:8px;border:1px solid ${getBookedTimeline(p.id) ? '#238636' : '#1C2333'}">
-          <div style="font-size:10px;color:#6E7681;text-transform:uppercase;letter-spacing:0.06em;margin-bottom:4px">Booked Install</div>
-          ${(() => {
-            const b = getBookedTimeline(p.id);
-            if (!b) return '<div style="font-size:13px;color:#6E7681">— Not booked</div>';
-            const end = b.end && b.end !== b.start ? ' – ' + fmtDate(b.end) : '';
-            return `<div style="font-size:13px;color:#3FB950">${fmtDate(b.start)}${end}</div>`;
-          })()}
-        </div>
-      </div>
-    </div>
-    ${p.systems.length ? `
-      <div class="dashboard-card" style="margin-top:14px">
-        <div class="dashboard-card-title">Scope Tags</div>
-        <div>${p.systems.map(systemTagHTML).join(' ')}</div>
-      </div>
-    ` : ''}
+
+    <!-- Project Team (compact) -->
     <div class="dashboard-card" style="margin-top:14px">
       <div class="dashboard-card-title">Project Team</div>
       ${['design', 'install'].map(phase => {
@@ -2690,12 +2799,14 @@ function renderProjectOverviewHTML(p) {
         `;
       }).join('')}
     </div>
+
     ${p.description ? `
       <div class="dashboard-card" style="margin-top:14px">
         <div class="dashboard-card-title">Description</div>
-        <div style="font-size:13px;color:#C9D1D9;line-height:1.6">${esc(p.description)}</div>
+        <div style="font-size:13px;color:#C9D1D9;line-height:1.6;white-space:pre-wrap">${esc(p.description)}</div>
       </div>
     ` : ''}
+
     ${(() => {
       if (gbbGroup) {
         const goodP = state.projects.find(x => x.id === gbbGroup.good);
@@ -2714,20 +2825,15 @@ function renderProjectOverviewHTML(p) {
                     <span style="font-size:11px;font-weight:600;color:#6E7681;text-transform:uppercase">${t.label}</span>
                     <div style="font-size:13px;color:#E6EDF3;margin-top:2px">${t.proj ? esc(t.proj.name) : 'Unknown'}</div>
                   </div>
-                  ${canSee('financials') && t.proj ? `<span style="font-size:13px;font-weight:500;color:${t.label === 'Better' ? '#58A6FF' : '#6E7681'}">${fmt(t.proj.total)}${t.label === 'Better' ? ' ★' : ''}</span>` : ''}
+                  ${canSee('financials') && t.proj ? `<span style="font-size:13px;font-weight:500;color:${t.label === 'Better' ? '#58A6FF' : '#6E7681'}">${fmt(t.proj.total)}${t.label === 'Better' ? ' &#9733;' : ''}</span>` : ''}
                 </div>
               `).join('')}
             </div>
-            <div style="margin-top:10px;font-size:11px;color:#6E7681">★ Pipeline value uses the Better amount</div>
+            <div style="margin-top:10px;font-size:11px;color:#6E7681">&#9733; Pipeline value uses the Better amount</div>
             <button class="btn btn-sm btn-danger" onclick="showGBBLinkDialog(${p.id})" style="margin-top:8px">Manage GBB Link</button>
           </div>`;
       } else {
-        return `
-          <div class="dashboard-card" style="margin-top:14px">
-            <div class="dashboard-card-title">Good / Better / Best</div>
-            <div style="font-size:12px;color:#6E7681;margin-bottom:10px">Link this project to a Good/Better/Best group to track related bids together.</div>
-            <button class="btn btn-sm" onclick="showGBBLinkDialog(${p.id})">Link to GBB Group</button>
-          </div>`;
+        return '';
       }
     })()}
   `;
@@ -2795,7 +2901,212 @@ function getChecklistState(projectId, phase) {
   return result;
 }
 
-// ── Drive URL helpers (Stage B v1.17) ──
+// ── Project Classifier (Pass 1) ──
+const PROJECT_TYPES = [
+  { key: 'install',     label: 'Install',      color: '#1565C0', bg: '#0D1626' },
+  { key: 'service',     label: 'Service Call', color: '#D29922', bg: '#1A150D' },
+  { key: 'box_sale',    label: 'Box Sale',     color: '#3FB950', bg: '#0D1A0E' },
+  { key: 'design',      label: 'Design Only',  color: '#A371F7', bg: '#1A0D26' },
+  { key: 'rental',      label: 'Rental',       color: '#F0883E', bg: '#1A1208' }
+];
+
+function getProjectType(p) {
+  // Override wins; fall back to Jetbuilt's project_type, then default to 'install'
+  if (state.projectType[p.id]) return state.projectType[p.id];
+  const jbType = p.jb_project_type || '';
+  if (jbType === 'project') return 'install';  // Jetbuilt calls installs "project"
+  if (['service', 'box_sale', 'design', 'rental'].includes(jbType)) return jbType;
+  return 'install';
+}
+
+function setProjectType(projectId, type) {
+  state.projectType[projectId] = type;
+  save('vi_project_type', state.projectType);
+  renderCurrentPage();
+}
+
+function projectTypeBadgeHTML(p) {
+  const type = getProjectType(p);
+  const meta = PROJECT_TYPES.find(t => t.key === type) || PROJECT_TYPES[0];
+  return `<span class="ptype-badge" style="background:${meta.bg};color:${meta.color};border:1px solid ${meta.color}40" onclick="showProjectTypeDialog(${p.id})" title="Click to change">${meta.label}</span>`;
+}
+
+function showProjectTypeDialog(projectId) {
+  const p = state.projects.find(pr => pr.id === projectId);
+  if (!p) return;
+  const current = getProjectType(p);
+  document.getElementById('ptype-dialog')?.remove();
+  const modal = document.createElement('div');
+  modal.id = 'ptype-dialog';
+  modal.className = 'modal-overlay';
+  modal.innerHTML = `
+    <div class="modal-container" style="max-width:400px">
+      <div class="modal-header">
+        <div>
+          <div class="modal-title">Project Type</div>
+          <div class="modal-sub">Classification override &mdash; will sync back to Jetbuilt later</div>
+        </div>
+        <button class="modal-close" onclick="document.getElementById('ptype-dialog')?.remove()">&times;</button>
+      </div>
+      <div class="modal-body">
+        <div style="display:flex;flex-direction:column;gap:6px">
+          ${PROJECT_TYPES.map(t => `
+            <button class="ptype-option ${current === t.key ? 'active' : ''}" onclick="setProjectType(${projectId}, '${t.key}');document.getElementById('ptype-dialog')?.remove()"
+              style="background:${current === t.key ? t.bg : '#0D1117'};border:1px solid ${current === t.key ? t.color : '#1C2333'};color:${current === t.key ? t.color : '#C9D1D9'};padding:12px 14px;border-radius:8px;text-align:left;font-size:13px;font-weight:500;cursor:pointer;font-family:'DM Sans',sans-serif">
+              ${t.label}
+            </button>
+          `).join('')}
+        </div>
+        ${p.jb_project_type ? `<div style="margin-top:14px;font-size:11px;color:#6E7681">Jetbuilt value: <code style="color:#8B949E">${esc(p.jb_project_type)}</code></div>` : ''}
+      </div>
+    </div>
+  `;
+  document.body.appendChild(modal);
+}
+
+// ── Contract Date (Pass 1) ──
+function getContractDate(projectId) {
+  return state.contractDates[projectId] || '';
+}
+
+function setContractDate(projectId, date) {
+  if (date) state.contractDates[projectId] = date;
+  else delete state.contractDates[projectId];
+  save('vi_contract_dates', state.contractDates);
+}
+
+function showContractDateDialog(projectId) {
+  const existing = getContractDate(projectId);
+  const today = new Date().toISOString().slice(0, 10);
+  document.getElementById('contract-date-dialog')?.remove();
+  const modal = document.createElement('div');
+  modal.id = 'contract-date-dialog';
+  modal.className = 'modal-overlay';
+  modal.innerHTML = `
+    <div class="modal-container" style="max-width:420px">
+      <div class="modal-header">
+        <div>
+          <div class="modal-title">Contract Signed Date</div>
+          <div class="modal-sub">The day the contract was signed &mdash; not the close date</div>
+        </div>
+        <button class="modal-close" onclick="document.getElementById('contract-date-dialog')?.remove()">&times;</button>
+      </div>
+      <div class="modal-body">
+        <label style="font-size:12px;color:#8B949E;font-weight:500;display:block;margin-bottom:6px">Date signed</label>
+        <input type="date" id="contract-date-input" class="form-input" value="${esc(existing)}" style="width:100%">
+        <div style="display:flex;gap:8px;margin-top:14px">
+          <button class="btn" onclick="document.getElementById('contract-date-input').value='${today}'" style="flex:1">Use Today</button>
+          ${existing ? `<button class="btn btn-danger" onclick="setContractDate(${projectId}, '');document.getElementById('contract-date-dialog')?.remove();renderCurrentPage()">Clear</button>` : ''}
+          <button class="btn-primary" onclick="const v=document.getElementById('contract-date-input').value;if(v){setContractDate(${projectId}, v);document.getElementById('contract-date-dialog')?.remove();renderCurrentPage()}" style="flex:1">Save</button>
+        </div>
+      </div>
+    </div>
+  `;
+  document.body.appendChild(modal);
+}
+
+// ── Install Countdown (Pass 1) ──
+function getInstallWindow(p) {
+  // Prefer booked window; fall back to Jetbuilt estimated (single date)
+  const booked = getBookedTimeline(p.id);
+  if (booked && booked.start) {
+    return {
+      start: booked.start,
+      end: booked.end || booked.start,
+      source: 'booked'
+    };
+  }
+  if (p.jb_estimated_install) {
+    return {
+      start: p.jb_estimated_install,
+      end: p.jb_estimated_install,
+      source: 'estimated'
+    };
+  }
+  return null;
+}
+
+function daysUntil(dateStr) {
+  if (!dateStr) return null;
+  const d = new Date(dateStr + 'T00:00:00');
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  return Math.round((d - today) / 86400000);
+}
+
+function fmtCountdown(dateStr) {
+  const days = daysUntil(dateStr);
+  if (days === null) return '';
+  if (days === 0) return 'Today';
+  if (days === 1) return 'Tomorrow';
+  if (days < 0) return `${Math.abs(days)}d ago`;
+  return `in ${days}d`;
+}
+
+function countdownClass(dateStr) {
+  const days = daysUntil(dateStr);
+  if (days === null) return '';
+  if (days < 0) return 'cd-past';
+  if (days <= 7) return 'cd-urgent';
+  if (days <= 14) return 'cd-soon';
+  return 'cd-ok';
+}
+
+// ── Needs Attention Flags (Pass 1) ──
+function computeProjectFlags(p) {
+  const flags = { sales: [], design: [], management: [], install: [] };
+  const stage = p.stage;
+  const contractDate = getContractDate(p.id);
+  const booked = getBookedTimeline(p.id);
+  const installWin = getInstallWindow(p);
+
+  // SALES flags
+  if (p.jb_price_valid_until) {
+    const validDays = daysUntil(p.jb_price_valid_until);
+    if (validDays !== null && validDays >= 0 && validDays <= 14) {
+      flags.sales.push({ level: validDays <= 7 ? 'red' : 'yellow', text: `Proposal expires ${fmtCountdown(p.jb_price_valid_until)}` });
+    } else if (validDays !== null && validDays < 0 && stage === 'proposal') {
+      flags.sales.push({ level: 'red', text: `Proposal expired ${fmtCountdown(p.jb_price_valid_until)}` });
+    }
+  }
+  // Stage stale check — no updates in 30+ days for active stages
+  if (['lead', 'proposal', 'contract'].includes(stage) && p.updated_at) {
+    const daysSinceUpdate = Math.abs(daysUntil(p.updated_at.slice(0, 10)));
+    if (daysSinceUpdate > 30) {
+      flags.sales.push({ level: 'yellow', text: `No activity in ${daysSinceUpdate}d` });
+    }
+  }
+
+  // MANAGEMENT flags
+  if (stage === 'contract' && !contractDate) {
+    flags.management.push({ level: 'yellow', text: 'Contract date not set' });
+  }
+  if (isContractNeedsReview(p)) {
+    flags.management.push({ level: 'red', text: 'Contract needs review' });
+  }
+  if (stage === 'contract' && !booked) {
+    flags.management.push({ level: 'yellow', text: 'Install dates not booked' });
+  }
+
+  // DESIGN flags
+  if (stage === 'contract' && p.systems.length === 0) {
+    flags.design.push({ level: 'yellow', text: 'No scope tags detected' });
+  }
+
+  // INSTALL flags
+  if (installWin) {
+    const startDays = daysUntil(installWin.start);
+    if (startDays !== null && startDays >= 0 && startDays <= 14 && stage !== 'install') {
+      flags.install.push({ level: startDays <= 7 ? 'red' : 'yellow', text: `Install ${fmtCountdown(installWin.start)} &mdash; prep readiness?` });
+    }
+  }
+
+  const total = flags.sales.length + flags.design.length + flags.management.length + flags.install.length;
+  return { ...flags, total };
+}
+
+
+// ── Drive URL helpers ──
 function extractDriveFolderId(url) {
   if (!url) return null;
   // Matches: /folders/{ID}, /drive/folders/{ID}, ?id={ID}
