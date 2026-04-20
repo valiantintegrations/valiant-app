@@ -552,8 +552,7 @@ td.today .cal-day-num {
 .mobile-project-item:active { border-color: #58A6FF; background: #1C2333; }
 
 /* ═══════════════════════════════════════════════════════════
-   STAGE A — Project Page (v1.16, Apr 19, 2026)
-   Full-page project detail view (replaces modal)
+   PROJECT PAGE — Header + body with left rail
    ═══════════════════════════════════════════════════════════ */
 
 .project-page {
@@ -599,7 +598,6 @@ td.today .cal-day-num {
   min-height: 32px;
   flex-shrink: 0;
 }
-
 .project-back-btn:hover {
   background: #1C2333;
   color: #C9D1D9;
@@ -654,45 +652,51 @@ td.today .cal-day-num {
   flex-wrap: wrap;
 }
 
-.project-page-tabs {
+/* Body area — left rail + tab content */
+.project-page-body-wrap {
   display: flex;
-  gap: 2px;
-  margin-top: 14px;
-  margin-bottom: -14px;
-  margin-left: -16px;
-  margin-right: -16px;
-  padding: 0 16px;
-  border-bottom: 1px solid #1C2333;
-  overflow-x: auto;
-  -webkit-overflow-scrolling: touch;
+  gap: 16px;
+  align-items: flex-start;
 }
 
-.ppt {
-  padding: 10px 16px;
+.prail {
+  flex-shrink: 0;
+  width: 160px;
+  background: #0D1117;
+  border: 1px solid #1C2333;
+  border-radius: 10px;
+  padding: 6px;
+  position: sticky;
+  top: 140px;
+}
+
+.prail-item {
+  padding: 9px 12px;
   font-size: 13px;
   font-weight: 500;
-  color: #6E7681;
+  color: #8B949E;
   cursor: pointer;
-  border-bottom: 2px solid transparent;
-  white-space: nowrap;
+  border-radius: 6px;
+  margin-bottom: 2px;
   -webkit-tap-highlight-color: transparent;
-  transition: all 0.15s;
+  transition: background 0.12s, color 0.12s;
 }
-
-.ppt:hover {
-  color: #C9D1D9;
+.prail-item:hover {
+  background: #161B22;
+  color: #E6EDF3;
 }
-
-.ppt.active {
+.prail-item.active {
+  background: #0D1626;
   color: #58A6FF;
-  border-bottom-color: #58A6FF;
 }
 
 .project-page-body {
-  padding-top: 4px;
+  flex: 1;
+  min-width: 0;
+  padding-top: 0;
 }
 
-/* Hide legacy project modal (no longer used) */
+/* Hide legacy project modal */
 #project-modal {
   display: none !important;
 }
@@ -751,17 +755,34 @@ td.today .cal-day-num {
   .projects-table { display: none; }
   .mobile-project-list { display: flex; }
 
-  /* Stage A project page mobile */
-  .project-page-header {
-    padding: 12px;
-    border-radius: 8px;
-  }
+  /* Project page mobile — rail becomes horizontal scrolling strip */
+  .project-page-header { padding: 12px; border-radius: 8px; }
   .project-page-top { gap: 8px; }
   .project-page-name { font-size: 16px; }
   .project-back-btn { padding: 5px 10px; font-size: 11px; }
   .project-page-actions { gap: 6px; width: 100%; }
   .project-page-title-block { width: 100%; }
-  .ppt { padding: 9px 12px; font-size: 12px; }
+
+  .project-page-body-wrap {
+    flex-direction: column;
+    gap: 10px;
+  }
+  .prail {
+    width: 100%;
+    position: static;
+    padding: 4px;
+    display: flex;
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+    gap: 2px;
+  }
+  .prail-item {
+    flex-shrink: 0;
+    white-space: nowrap;
+    padding: 8px 14px;
+    margin-bottom: 0;
+    font-size: 12px;
+  }
 }
 
 @media (min-width: 769px) {
