@@ -1,4 +1,4 @@
-=// ── Valiant Integrations App ──
+// ── Valiant Integrations App ──
 // API calls handled via /api/jetbuilt proxy
 
 // ── State ──
@@ -2481,69 +2481,44 @@ function renderProjectPage(c) {
     : gbbTier === 'best' ? 'background:#0D1A0E;color:#3FB950;border:1px solid #238636'
     : 'background:#161B22;color:#6E7681;border:1px solid #30363D';
 
-  // Project rail items (shared between desktop sidebar and mobile horizontal strip)
-  const railItems = [
-    { key: 'overview', label: 'Overview',  icon: '<svg width="15" height="15" viewBox="0 0 15 15" fill="none"><rect x="2" y="2" width="5" height="5" rx="1" stroke="currentColor" stroke-width="1.3"/><rect x="8" y="2" width="5" height="5" rx="1" stroke="currentColor" stroke-width="1.3"/><rect x="2" y="8" width="5" height="5" rx="1" stroke="currentColor" stroke-width="1.3"/><rect x="8" y="8" width="5" height="5" rx="1" stroke="currentColor" stroke-width="1.3"/></svg>' },
-    { key: 'details',  label: 'Details',   icon: '<svg width="15" height="15" viewBox="0 0 15 15" fill="none"><circle cx="7.5" cy="5" r="2.2" stroke="currentColor" stroke-width="1.3"/><path d="M2.5 13c0-2.485 2.239-4.5 5-4.5s5 2.015 5 4.5" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/></svg>' },
-    { key: 'design',   label: 'Design',    icon: '<svg width="15" height="15" viewBox="0 0 15 15" fill="none"><path d="M2 12l3-9 3 5 2-2 3 6" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/></svg>' },
-    { key: 'install',  label: 'Install',   icon: '<svg width="15" height="15" viewBox="0 0 15 15" fill="none"><path d="M4 4h7v7H4z" stroke="currentColor" stroke-width="1.3"/><path d="M7.5 1.5v2.5M7.5 11v2.5M1.5 7.5h2.5M11 7.5h2.5" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/></svg>' },
-    { key: 'files',    label: 'Files',     icon: '<svg width="15" height="15" viewBox="0 0 15 15" fill="none"><path d="M2 4h4l1.5 2h5.5v7H2V4z" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"/></svg>' },
-    { key: 'notes',    label: 'Notes',     icon: '<svg width="15" height="15" viewBox="0 0 15 15" fill="none"><path d="M3 2h7l2.5 2.5V13H3V2z" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"/><path d="M9 2v3h3M5 8h5M5 10.5h4" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/></svg>' }
-  ];
-
-  const railHTML = railItems.map(item => `
-    <div class="prail-item ${tab === item.key ? 'active' : ''}" onclick="switchProjectTab('${item.key}')">
-      <span class="prail-icon">${item.icon}</span>
-      <span class="prail-label">${item.label}</span>
-    </div>
-  `).join('');
-
   c.innerHTML = `
-    <div class="project-layout">
-      <aside class="project-rail">
-        <div class="prail-top">
+    <div class="project-page">
+      <div class="project-page-header">
+        <div class="project-page-top">
           <button class="project-back-btn" onclick="closeProjectPage()">
             <svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M9 2L4 7l5 5" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>
             <span>Back</span>
           </button>
-        </div>
-        <div class="prail-identity">
-          <div class="prail-project-name">${esc(p.name)}</div>
-          <div class="prail-project-sub">#${p.id} &middot; ${esc(p.client_name || 'No client')}</div>
-          <div class="prail-project-meta">
+          <div class="project-page-title-block">
+            <div class="project-page-name">${esc(p.name)}</div>
+            <div class="project-page-sub">#${p.id} · ${esc(p.client_name || 'No client')}${p.city ? ' · ' + esc(p.city) + (p.state_abbr ? ', ' + esc(p.state_abbr) : '') : ''}</div>
+          </div>
+          <div class="project-page-actions">
             <span class="status-pill status-${stg.color}">${stg.label}</span>
             ${gbbTier ? `<span style="font-size:10px;font-weight:600;padding:3px 8px;border-radius:3px;${gbbBadgeStyle}">${gbbTier.toUpperCase()}</span>` : ''}
+            <button class="btn btn-sm" onclick="toggleLikelyToClose(${p.id})" title="${likely ? 'Remove Likely to Close' : 'Mark Likely to Close'}" style="${likely ? 'background:#0D1A0E;border-color:#238636;color:#3FB950' : ''};min-height:32px;padding:4px 10px"><span style="font-size:14px">★</span></button>
           </div>
-          ${p.systems.length ? `<div class="prail-tags">${p.systems.map(systemTagHTML).join('')}</div>` : ''}
         </div>
-        <div class="prail-nav">
-          ${railHTML}
-        </div>
-      </aside>
-
-      <div class="project-main">
-        <div class="project-main-header">
-          <div class="project-main-title-row">
-            <div class="project-main-title-block">
-              <div class="project-main-name">${esc(p.name)}</div>
-              <div class="project-main-sub">${esc(p.client_name || 'No client')}${p.city ? ' &middot; ' + esc(p.city) + (p.state_abbr ? ', ' + esc(p.state_abbr) : '') : ''}</div>
+        ${p.systems.length ? `<div class="project-page-tags">${p.systems.map(systemTagHTML).join('')}</div>` : ''}
+        ${needsReview ? `
+          <div class="project-page-review-banner">
+            <div style="display:flex;align-items:center;gap:8px;flex:1">
+              <div style="width:8px;height:8px;border-radius:50%;background:#DA3633;animation:pulse 1.5s infinite;flex-shrink:0"></div>
+              <span style="font-size:12px;font-weight:600;color:#F85149">REVIEW REQUIRED &mdash; SEND TO DESIGN &amp; INSTALL</span>
             </div>
-            <div class="project-main-actions">
-              <button class="btn btn-sm" onclick="toggleLikelyToClose(${p.id})" title="${likely ? 'Remove Likely to Close' : 'Mark Likely to Close'}" style="${likely ? 'background:#0D1A0E;border-color:#238636;color:#3FB950' : ''};min-height:32px;padding:4px 12px"><span style="font-size:14px">&#9733;</span> ${likely ? 'Likely' : 'Mark Likely'}</button>
-            </div>
+            <button class="btn-primary" onclick="markContractReviewed(${p.id})" style="background:#238636;padding:6px 12px;font-size:12px;min-height:32px">&#10003; Mark Reviewed</button>
           </div>
-          ${needsReview ? `
-            <div class="project-page-review-banner" style="margin-top:12px">
-              <div style="display:flex;align-items:center;gap:8px;flex:1">
-                <div style="width:8px;height:8px;border-radius:50%;background:#DA3633;animation:pulse 1.5s infinite;flex-shrink:0"></div>
-                <span style="font-size:12px;font-weight:600;color:#F85149">REVIEW REQUIRED &mdash; SEND TO DESIGN &amp; INSTALL</span>
-              </div>
-              <button class="btn-primary" onclick="markContractReviewed(${p.id})" style="background:#238636;padding:6px 12px;font-size:12px;min-height:32px">&#10003; Mark Reviewed</button>
-            </div>
-          ` : ''}
+        ` : ''}
+        <div class="project-page-tabs">
+          <div class="ppt ${tab === 'overview' ? 'active' : ''}" onclick="switchProjectTab('overview')">Overview</div>
+          <div class="ppt ${tab === 'details' ? 'active' : ''}" onclick="switchProjectTab('details')">Details</div>
+          <div class="ppt ${tab === 'design' ? 'active' : ''}" onclick="switchProjectTab('design')">Design</div>
+          <div class="ppt ${tab === 'install' ? 'active' : ''}" onclick="switchProjectTab('install')">Install</div>
+          <div class="ppt ${tab === 'files' ? 'active' : ''}" onclick="switchProjectTab('files')">Files</div>
+          <div class="ppt ${tab === 'notes' ? 'active' : ''}" onclick="switchProjectTab('notes')">Notes</div>
         </div>
-        <div class="project-main-body" id="project-page-body"></div>
       </div>
+      <div class="project-page-body" id="project-page-body"></div>
     </div>
   `;
   renderProjectTabContent();
