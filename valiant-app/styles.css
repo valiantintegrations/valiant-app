@@ -552,32 +552,33 @@ td.today .cal-day-num {
 .mobile-project-item:active { border-color: #58A6FF; background: #1C2333; }
 
 /* ═══════════════════════════════════════════════════════════
-   PROJECT PAGE — Left-rail layout (v1.17, Apr 19, 2026)
-   Three-column structure: main sidebar | project rail | content
+   STAGE A — Project Page (v1.16, Apr 19, 2026)
+   Full-page project detail view (replaces modal)
    ═══════════════════════════════════════════════════════════ */
 
-.project-layout {
-  display: grid;
-  grid-template-columns: 180px 1fr;
-  gap: 0;
-  min-height: calc(100vh - 56px);
-  margin: -24px;
+.project-page {
+  max-width: 1200px;
+  margin: 0 auto;
 }
 
-.project-rail {
-  background: #0A0E14;
-  border-right: 1px solid #1C2333;
+.project-page-header {
+  background: rgba(13, 17, 23, 0.95);
+  border: 1px solid #1C2333;
+  border-radius: 10px;
+  padding: 14px 16px;
+  margin-bottom: 16px;
+  position: sticky;
+  top: 0;
+  z-index: 5;
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+}
+
+.project-page-top {
   display: flex;
-  flex-direction: column;
-  padding: 16px 0 20px;
-  overflow-y: auto;
-  -webkit-overflow-scrolling: touch;
-}
-
-.prail-top {
-  padding: 0 14px 12px;
-  border-bottom: 1px solid #1C2333;
-  margin-bottom: 12px;
+  align-items: flex-start;
+  gap: 12px;
+  flex-wrap: wrap;
 }
 
 .project-back-btn {
@@ -596,132 +597,36 @@ td.today .cal-day-num {
   -webkit-tap-highlight-color: transparent;
   transition: all 0.15s;
   min-height: 32px;
-  width: 100%;
-  justify-content: center;
+  flex-shrink: 0;
 }
+
 .project-back-btn:hover {
   background: #1C2333;
   color: #C9D1D9;
   border-color: #484F58;
 }
 
-.prail-identity {
-  padding: 0 14px 14px;
-  border-bottom: 1px solid #1C2333;
-  margin-bottom: 10px;
+.project-page-title-block {
+  flex: 1;
+  min-width: 200px;
 }
-.prail-project-name {
-  font-size: 13px;
+
+.project-page-name {
+  font-size: 18px;
   font-weight: 600;
   color: #E6EDF3;
   line-height: 1.3;
-  margin-bottom: 3px;
-  word-break: break-word;
-}
-.prail-project-sub {
-  font-size: 11px;
-  color: #6E7681;
-  line-height: 1.4;
-  margin-bottom: 8px;
-}
-.prail-project-meta {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 4px;
-  margin-bottom: 8px;
-}
-.prail-tags {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 3px;
-}
-
-.prail-nav {
-  display: flex;
-  flex-direction: column;
-  padding: 0 8px;
-}
-
-.prail-item {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  padding: 9px 10px;
-  border-radius: 6px;
-  color: #8B949E;
-  font-size: 13px;
-  font-weight: 500;
-  cursor: pointer;
-  -webkit-tap-highlight-color: transparent;
-  transition: background 0.12s, color 0.12s;
   margin-bottom: 2px;
-}
-.prail-item:hover {
-  background: #161B22;
-  color: #E6EDF3;
-}
-.prail-item.active {
-  background: #0D1626;
-  color: #58A6FF;
-}
-.prail-item.active .prail-icon { color: #58A6FF; }
-.prail-icon {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  width: 16px;
-  height: 16px;
-  flex-shrink: 0;
-  color: #6E7681;
-}
-.prail-label {
-  flex: 1;
-}
-
-/* Main content area (right of project rail) */
-.project-main {
-  display: flex;
-  flex-direction: column;
-  padding: 20px 24px 40px;
-  min-width: 0;
-  overflow-x: hidden;
-}
-
-.project-main-header {
-  padding-bottom: 16px;
-  border-bottom: 1px solid #1C2333;
-  margin-bottom: 20px;
-}
-
-.project-main-title-row {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 12px;
-  flex-wrap: wrap;
-}
-
-.project-main-title-block {
-  flex: 1;
-  min-width: 0;
-}
-
-.project-main-name {
-  font-size: 20px;
-  font-weight: 600;
-  color: #E6EDF3;
-  line-height: 1.25;
-  margin-bottom: 3px;
   word-break: break-word;
 }
 
-.project-main-sub {
-  font-size: 13px;
-  color: #8B949E;
+.project-page-sub {
+  font-size: 12px;
+  color: #6E7681;
   line-height: 1.4;
 }
 
-.project-main-actions {
+.project-page-actions {
   display: flex;
   align-items: center;
   gap: 8px;
@@ -729,11 +634,13 @@ td.today .cal-day-num {
   flex-shrink: 0;
 }
 
-.project-main-body {
-  min-width: 0;
+.project-page-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-top: 10px;
 }
 
-/* Keep old review banner style (reused) */
 .project-page-review-banner {
   display: flex;
   align-items: center;
@@ -743,18 +650,52 @@ td.today .cal-day-num {
   background: #1A0D0D;
   border: 1px solid #DA3633;
   border-radius: 8px;
+  margin-top: 12px;
   flex-wrap: wrap;
 }
 
-/* Hide legacy project modal */
+.project-page-tabs {
+  display: flex;
+  gap: 2px;
+  margin-top: 14px;
+  margin-bottom: -14px;
+  margin-left: -16px;
+  margin-right: -16px;
+  padding: 0 16px;
+  border-bottom: 1px solid #1C2333;
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+}
+
+.ppt {
+  padding: 10px 16px;
+  font-size: 13px;
+  font-weight: 500;
+  color: #6E7681;
+  cursor: pointer;
+  border-bottom: 2px solid transparent;
+  white-space: nowrap;
+  -webkit-tap-highlight-color: transparent;
+  transition: all 0.15s;
+}
+
+.ppt:hover {
+  color: #C9D1D9;
+}
+
+.ppt.active {
+  color: #58A6FF;
+  border-bottom-color: #58A6FF;
+}
+
+.project-page-body {
+  padding-top: 4px;
+}
+
+/* Hide legacy project modal (no longer used) */
 #project-modal {
   display: none !important;
 }
-
-/* Hide right panel strip on project pages (too cramped with rail) — optional */
-/* Comment out the next 3 lines if you want the right strip visible on project pages */
-body:has(.project-layout) #right-panel > .rpanel-strip { opacity: 0.5; }
-body:has(.project-layout) #main { padding-right: 52px; }
 
 /* ══════════════════════════════ */
 /* ══ MOBILE ══════════════════ */
@@ -810,54 +751,17 @@ body:has(.project-layout) #main { padding-right: 52px; }
   .projects-table { display: none; }
   .mobile-project-list { display: flex; }
 
-  /* Project page mobile — rail collapses to horizontal strip */
-  .project-layout {
-    grid-template-columns: 1fr;
-    margin: -16px -16px 0;
+  /* Stage A project page mobile */
+  .project-page-header {
+    padding: 12px;
+    border-radius: 8px;
   }
-  .project-rail {
-    border-right: none;
-    border-bottom: 1px solid #1C2333;
-    padding: 10px 0 8px;
-    position: sticky;
-    top: 0;
-    z-index: 5;
-    background: #0A0E14;
-  }
-  .prail-top {
-    padding: 0 12px 8px;
-    margin-bottom: 8px;
-  }
-  .project-back-btn {
-    padding: 5px 10px;
-    font-size: 11px;
-    width: auto;
-    min-height: 28px;
-  }
-  .prail-identity {
-    padding: 0 12px 8px;
-    margin-bottom: 8px;
-  }
-  .prail-project-name { font-size: 14px; }
-  .prail-nav {
-    flex-direction: row;
-    overflow-x: auto;
-    padding: 0 12px;
-    gap: 2px;
-    -webkit-overflow-scrolling: touch;
-  }
-  .prail-item {
-    flex-shrink: 0;
-    white-space: nowrap;
-    padding: 8px 12px;
-  }
-  .prail-item .prail-label { font-size: 12px; }
-
-  .project-main {
-    padding: 14px 16px 40px;
-  }
-  .project-main-name { font-size: 16px; }
-  .project-main-sub { font-size: 12px; }
+  .project-page-top { gap: 8px; }
+  .project-page-name { font-size: 16px; }
+  .project-back-btn { padding: 5px 10px; font-size: 11px; }
+  .project-page-actions { gap: 6px; width: 100%; }
+  .project-page-title-block { width: 100%; }
+  .ppt { padding: 9px 12px; font-size: 12px; }
 }
 
 @media (min-width: 769px) {
