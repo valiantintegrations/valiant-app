@@ -1092,6 +1092,72 @@ td.today .cal-day-num {
   margin-bottom: 8px;
 }
 
+/* Combined Sales bar (Lead + Proposal + Contract as one 3-segment bar) */
+.ready-sales-row {
+  padding: 4px 0 8px;
+}
+.ready-sales-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 6px;
+}
+.ready-sales-label {
+  font-size: 11px;
+  font-weight: 700;
+  color: #D29922;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  flex: 1;
+}
+.ready-sales-track {
+  display: flex;
+  height: 8px;
+  background: #0D1117;
+  border: 1px solid #1C2333;
+  border-radius: 4px;
+  overflow: hidden;
+}
+.ready-sales-seg {
+  position: relative;
+  height: 100%;
+  background: #161B22;
+  border-right: 1px solid #0D1117;
+}
+.ready-sales-seg:last-child { border-right: none; }
+.ready-sales-seg-fill {
+  height: 100%;
+  transition: width 0.3s ease;
+}
+.ready-sales-sublabels {
+  display: flex;
+  margin-top: 6px;
+}
+.ready-sales-sublabel {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  padding: 0 6px;
+  font-size: 11px;
+  font-weight: 500;
+  min-width: 0;
+  overflow: hidden;
+  border-right: 1px solid #1C2333;
+}
+.ready-sales-sublabel:first-child { padding-left: 2px; }
+.ready-sales-sublabel:last-child { border-right: none; padding-right: 2px; }
+.ready-sales-sublabel > span:first-child {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.ready-sales-sublabel-pct {
+  font-size: 10px;
+  color: #6E7681;
+  flex-shrink: 0;
+}
+
 /* Milestone action button on Progress tab */
 .milestone-action {
   display: flex;
