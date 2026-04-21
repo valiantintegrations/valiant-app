@@ -2659,7 +2659,6 @@ function renderProjectOverviewHTML(p) {
             return `
               <div class="pmap-label" style="width:${width}%">
                 <div class="pmap-label-name" style="color:${d.pct >= 1 ? d.phase.color : '#8B949E'}">${d.phase.label}</div>
-                <div class="pmap-label-pct">${Math.round(d.pct * 100)}%</div>
               </div>
             `;
           }).join('')}
@@ -2671,22 +2670,43 @@ function renderProjectOverviewHTML(p) {
     <div class="dashboard-card" style="margin-bottom:14px">
       <div class="dashboard-card-title">Phase Readiness</div>
 
-      <!-- Sales group (serial phases) -->
-      <div class="ready-group-header" style="color:#D29922">Sales</div>
-      <div class="ready-phases">
-        ${serialBeforeParallel.map(d => `
-          <div class="ready-phase-row ${d.pct >= 1 ? 'done' : ''} ${!d.unlocked ? 'locked' : ''}">
-            <div class="ready-phase-head">
-              <span class="ready-phase-label" style="color:${d.phase.color}">${d.phase.label}</span>
-              <span class="ready-phase-count">${d.doneMilestones} of ${d.totalMilestones}</span>
-              <span class="ready-phase-pct">${Math.round(d.pct * 100)}%</span>
+      <!-- Sales group: combined Lead+Proposal+Contract as one segmented bar -->
+      ${(() => {
+        const salesMilestones = serialBeforeParallel.reduce((s, d) => s + d.totalMilestones, 0);
+        const salesDone = serialBeforeParallel.reduce((s, d) => s + d.doneMilestones, 0);
+        const salesPct = salesMilestones > 0 ? (serialBeforeParallel.reduce((s, d) =>
+          s + d.phase.milestones.reduce((ms, m) => ms + milestoneProgress(p, d.phase, m), 0), 0) / salesMilestones) : 0;
+        return `
+          <div class="ready-sales-row">
+            <div class="ready-sales-head">
+              <span class="ready-sales-label">Sales</span>
+              <span class="ready-phase-count">${salesDone} of ${salesMilestones}</span>
+              <span class="ready-phase-pct" style="color:${salesPct >= 1 ? '#3FB950' : '#E6EDF3'}">${Math.round(salesPct * 100)}%</span>
             </div>
-            <div class="ready-phase-bar">
-              <div class="ready-phase-fill" style="width:${Math.round(d.pct * 100)}%;background:${d.phase.color}"></div>
+            <div class="ready-sales-track">
+              ${serialBeforeParallel.map(d => {
+                const w = (d.totalMilestones / salesMilestones) * 100;
+                return `
+                  <div class="ready-sales-seg" style="width:${w}%">
+                    <div class="ready-sales-seg-fill" style="width:${Math.round(d.pct * 100)}%;background:${d.phase.color}"></div>
+                  </div>
+                `;
+              }).join('')}
+            </div>
+            <div class="ready-sales-sublabels">
+              ${serialBeforeParallel.map(d => {
+                const w = (d.totalMilestones / salesMilestones) * 100;
+                return `
+                  <div class="ready-sales-sublabel" style="width:${w}%;color:${d.pct >= 1 ? d.phase.color : '#6E7681'}">
+                    <span>${d.phase.label}</span>
+                    <span class="ready-sales-sublabel-pct">${Math.round(d.pct * 100)}%</span>
+                  </div>
+                `;
+              }).join('')}
             </div>
           </div>
-        `).join('')}
-      </div>
+        `;
+      })()}
 
       <!-- Parallel phases group -->
       <div class="ready-parallel-group">
@@ -2745,6 +2765,45 @@ function renderProjectOverviewHTML(p) {
           </div>
         </div>
       ` : ''}
+    </div>
+
+    <!-- Needs Attention (multi-audience executive summary) -->
+    <div class="dashboard-card" style="margin-bottom:14px">
+      <div class="dashboard-card-title">Needs Attention</div>
+      ${flags.total === 0 ? `
+        <div style="display:flex;align-items:center;gap:8px;padding:8px 0">
+          <div style="width:8px;height:8px;border-radius:50%;background:#3FB950"></div>
+          <span style="font-size:13px;color:#3FB950;font-weight:500">All clear &mdash; nothing flagged</span>
+        </div>
+      ` : `
+        <div class="attn-grid">
+          ${['sales', 'design', 'management', 'install'].map(group => {
+            const items = flags[group] || [];
+            const labels = { sales: 'Sales', design: 'Design', management: 'Management', install: 'Install' };
+            const colors = { sales: '#D29922', design: '#A371F7', management: '#58A6FF', install: '#F0883E' };
+            if (items.length === 0) {
+              const active = isDomainActive(p, group);
+              return `
+                <div class="attn-group ${active ? 'attn-ok' : 'attn-clear'}">
+                  <div class="attn-group-label" style="color:${colors[group]}">${labels[group]}</div>
+                  <div class="attn-group-empty" style="${active ? 'color:#3FB950;font-style:normal' : ''}">${active ? 'No issues' : 'Not started'}</div>
+                </div>
+              `;
+            }
+            return `
+              <div class="attn-group">
+                <div class="attn-group-label" style="color:${colors[group]}">${labels[group]}</div>
+                ${items.map(flag => `
+                  <div class="attn-item attn-${flag.level}">
+                    <div class="attn-dot"></div>
+                    <span>${flag.text}</span>
+                  </div>
+                `).join('')}
+              </div>
+            `;
+          }).join('')}
+        </div>
+      `}
     </div>
 
     <!-- Install Dates card (editable) -->
@@ -2787,83 +2846,6 @@ function renderProjectOverviewHTML(p) {
       </div>
     </div>
 
-    <!-- Key dates row: Contract + Install -->
-
-      <!-- Serial phases: Lead, Proposal, Contract -->
-      <div class="ready-phases">
-        ${serialBeforeParallel.map(d => `
-          <div class="ready-phase-row ${d.pct >= 1 ? 'done' : ''} ${!d.unlocked ? 'locked' : ''}">
-            <div class="ready-phase-head">
-              <span class="ready-phase-label" style="color:${d.phase.color}">${d.phase.label}</span>
-              <span class="ready-phase-count">${d.doneMilestones} of ${d.totalMilestones}</span>
-              <span class="ready-phase-pct">${Math.round(d.pct * 100)}%</span>
-            </div>
-            <div class="ready-phase-bar">
-              <div class="ready-phase-fill" style="width:${Math.round(d.pct * 100)}%;background:${d.phase.color}"></div>
-            </div>
-          </div>
-        `).join('')}
-      </div>
-
-      <!-- Parallel phases group -->
-      <div class="ready-parallel-group">
-        <div class="ready-parallel-header">
-          <span class="ready-parallel-title">Parallel &mdash; All required for Install</span>
-          <span class="ready-parallel-avg">${Math.round((parallelPhases.reduce((s, d) => s + d.pct, 0) / parallelPhases.length) * 100)}%</span>
-        </div>
-        ${parallelPhases.map(d => `
-          <div class="ready-phase-row ${d.pct >= 1 ? 'done' : ''} ${!d.unlocked ? 'locked' : ''}">
-            <div class="ready-phase-head">
-              <span class="ready-phase-label" style="color:${d.phase.color}">${d.phase.label}</span>
-              <span class="ready-phase-count">${d.doneMilestones} of ${d.totalMilestones}</span>
-              <span class="ready-phase-pct">${Math.round(d.pct * 100)}%</span>
-            </div>
-            <div class="ready-phase-bar">
-              <div class="ready-phase-fill" style="width:${Math.round(d.pct * 100)}%;background:${d.phase.color}"></div>
-            </div>
-          </div>
-        `).join('')}
-      </div>
-
-      <!-- Ready for Install gate -->
-      <div class="ready-gate ${readyForInstall ? 'ready-gate-open' : 'ready-gate-locked'}">
-        ${readyForInstall ? (marked ? `
-          <div class="ready-gate-inner">
-            <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M3 8l3 3 7-7" stroke="#3FB950" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
-            <span>Marked Ready for Install</span>
-            <button class="btn btn-sm" onclick="unmarkReadyForInstall(${p.id})" style="margin-left:auto;font-size:11px;padding:4px 10px">Unmark</button>
-          </div>
-        ` : `
-          <div class="ready-gate-inner">
-            <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><circle cx="8" cy="8" r="6" stroke="#3FB950" stroke-width="2"/><path d="M6 8l1.5 1.5L10 6.5" stroke="#3FB950" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
-            <span>All parallel phases complete</span>
-            <button class="btn-primary" onclick="markReadyForInstall(${p.id})" style="margin-left:auto;background:#238636;padding:6px 12px;font-size:12px;min-height:32px">Mark Ready for Install &rarr;</button>
-          </div>
-        `) : `
-          <div class="ready-gate-inner">
-            <svg width="14" height="14" viewBox="0 0 14 14" fill="none"><rect x="3" y="6" width="8" height="6" rx="1" stroke="#6E7681" stroke-width="1.4"/><path d="M5 6V4a2 2 0 0 1 4 0v2" stroke="#6E7681" stroke-width="1.4"/></svg>
-            <span>Install locked &mdash; complete all parallel phases first</span>
-          </div>
-        `}
-      </div>
-
-      <!-- Install phase progress (only shows when ready or in progress) -->
-      ${(marked || installPhase.pct > 0) ? `
-        <div style="margin-top:12px;padding-top:12px;border-top:1px solid #1C2333">
-          <div class="ready-phase-row ${installPhase.pct >= 1 ? 'done' : ''}">
-            <div class="ready-phase-head">
-              <span class="ready-phase-label" style="color:${installPhase.phase.color}">Install</span>
-              <span class="ready-phase-count">${installPhase.doneMilestones} of ${installPhase.totalMilestones}</span>
-              <span class="ready-phase-pct">${Math.round(installPhase.pct * 100)}%</span>
-            </div>
-            <div class="ready-phase-bar">
-              <div class="ready-phase-fill" style="width:${Math.round(installPhase.pct * 100)}%;background:${installPhase.phase.color}"></div>
-            </div>
-          </div>
-        </div>
-      ` : ''}
-    </div>
-
     <!-- Contract date card -->
     <div class="dashboard-card" style="margin-bottom:14px">
       <div class="dashboard-card-title" style="display:flex;align-items:center;justify-content:space-between">
@@ -2878,45 +2860,6 @@ function renderProjectOverviewHTML(p) {
       ` : `
         <div style="font-size:14px;color:#6E7681;font-style:italic">No contract date set</div>
         <div style="font-size:11px;color:#6E7681;margin-top:4px">Set this when the contract is signed</div>
-      `}
-    </div>
-
-    <!-- Needs Attention (multi-audience executive summary) -->
-    <div class="dashboard-card" style="margin-top:14px">
-      <div class="dashboard-card-title">Needs Attention</div>
-      ${flags.total === 0 ? `
-        <div style="display:flex;align-items:center;gap:8px;padding:8px 0">
-          <div style="width:8px;height:8px;border-radius:50%;background:#3FB950"></div>
-          <span style="font-size:13px;color:#3FB950;font-weight:500">All clear &mdash; nothing flagged</span>
-        </div>
-      ` : `
-        <div class="attn-grid">
-          ${['sales', 'design', 'management', 'install'].map(group => {
-            const items = flags[group] || [];
-            const labels = { sales: 'Sales', design: 'Design', management: 'Management', install: 'Install' };
-            const colors = { sales: '#D29922', design: '#A371F7', management: '#58A6FF', install: '#F0883E' };
-            if (items.length === 0) {
-              const active = isDomainActive(p, group);
-              return `
-                <div class="attn-group ${active ? 'attn-ok' : 'attn-clear'}">
-                  <div class="attn-group-label" style="color:${colors[group]}">${labels[group]}</div>
-                  <div class="attn-group-empty" style="${active ? 'color:#3FB950;font-style:normal' : ''}">${active ? 'No issues' : 'Not started'}</div>
-                </div>
-              `;
-            }
-            return `
-              <div class="attn-group">
-                <div class="attn-group-label" style="color:${colors[group]}">${labels[group]}</div>
-                ${items.map(flag => `
-                  <div class="attn-item attn-${flag.level}">
-                    <div class="attn-dot"></div>
-                    <span>${flag.text}</span>
-                  </div>
-                `).join('')}
-              </div>
-            `;
-          }).join('')}
-        </div>
       `}
     </div>
 
