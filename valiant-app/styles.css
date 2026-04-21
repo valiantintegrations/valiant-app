@@ -1029,6 +1029,112 @@ td.today .cal-day-num {
   transition: width 0.3s ease;
 }
 
+/* ═══════════════════════════════════════════════════════════
+   STAGE C PASS 2A — Segmented progress map + milestone actions
+   ═══════════════════════════════════════════════════════════ */
+
+/* Segmented progress map on Overview */
+.pmap-wrap {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.pmap-track {
+  display: flex;
+  height: 10px;
+  background: #0D1117;
+  border: 1px solid #1C2333;
+  border-radius: 5px;
+  overflow: hidden;
+}
+.pmap-seg {
+  position: relative;
+  height: 100%;
+  background: #161B22;
+  border-right: 1px solid #0D1117;
+}
+.pmap-seg:last-child { border-right: none; }
+.pmap-seg-fill {
+  height: 100%;
+  transition: width 0.3s ease;
+}
+.pmap-labels {
+  display: flex;
+  margin-top: 2px;
+}
+.pmap-label {
+  padding: 4px 2px 0;
+  text-align: center;
+  min-width: 0;
+  overflow: hidden;
+}
+.pmap-label-name {
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.pmap-label-pct {
+  font-size: 10px;
+  color: #6E7681;
+  margin-top: 1px;
+}
+
+/* Sales group header in Readiness card */
+.ready-group-header {
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  margin-bottom: 8px;
+}
+
+/* Milestone action button on Progress tab */
+.milestone-action {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px;
+  background: #161B22;
+  border: 1px solid #30363D;
+  color: #C9D1D9;
+  font-size: 11px;
+  font-weight: 500;
+  border-radius: 6px;
+  cursor: pointer;
+  font-family: 'DM Sans', sans-serif;
+  -webkit-tap-highlight-color: transparent;
+  transition: all 0.12s;
+  flex-shrink: 0;
+  align-self: center;
+  white-space: nowrap;
+}
+.milestone-action:hover {
+  background: #1C2333;
+  border-color: #58A6FF;
+  color: #58A6FF;
+}
+.milestone-row.locked .milestone-action {
+  opacity: 0.4;
+  pointer-events: none;
+}
+
+/* Milestone row needs updated layout to fit action button */
+.milestone-row {
+  flex-wrap: wrap;
+  gap: 10px;
+}
+@media (max-width: 640px) {
+  .milestone-action {
+    margin-left: 28px;
+    width: 100%;
+    justify-content: center;
+  }
+}
+
 /* Hide legacy project modal */
 #project-modal {
   display: none !important;
