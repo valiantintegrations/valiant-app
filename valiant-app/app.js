@@ -79,7 +79,12 @@ const state = {
   contractDates: JSON.parse(localStorage.getItem('vi_contract_dates') || '{}'),
   projectType: JSON.parse(localStorage.getItem('vi_project_type') || '{}'),
   milestones: JSON.parse(localStorage.getItem('vi_milestones') || '{}'),
-  readyForInstall: JSON.parse(localStorage.getItem('vi_ready_install') || '{}')
+  readyForInstall: JSON.parse(localStorage.getItem('vi_ready_install') || '{}'),
+  estimatedInstallOverride: JSON.parse(localStorage.getItem('vi_estimated_install') || '{}'),
+  meetingLogs: JSON.parse(localStorage.getItem('vi_meeting_logs') || '{}'),
+  planningAssignments: JSON.parse(localStorage.getItem('vi_planning_assignments') || '{}'),
+  vehicles: JSON.parse(localStorage.getItem('vi_vehicles') || '[]'),
+  tools: JSON.parse(localStorage.getItem('vi_tools') || '[]')
 };
 
 // ── Team Roster ──
@@ -2609,6 +2614,15 @@ function renderProjectOverviewHTML(p) {
     const doneMilestones = ph.milestones.filter(m => milestoneProgress(p, ph, m) >= 1).length;
     return { phase: ph, pct, unlocked, doneMilestones, totalMilestones: ph.milestones.length };
   });
+
+  // Milestone-weighted overall progress (30 milestones total)
+  const totalMilestones = phaseData.reduce((s, d) => s + d.totalMilestones, 0);
+  const doneMilestonesSum = phaseData.reduce((s, d) => s + d.doneMilestones, 0);
+  // For partial credit in overall %, use sum of actual progress values
+  const fractionalDone = PHASES.reduce((sum, ph) =>
+    sum + ph.milestones.reduce((s, m) => s + milestoneProgress(p, ph, m), 0), 0);
+  const overallPct = totalMilestones > 0 ? (fractionalDone / totalMilestones) : 0;
+
   const serialBeforeParallel = phaseData.filter(d => !d.phase.parallel && d.phase.key !== 'install');
   const parallelPhases = phaseData.filter(d => d.phase.parallel);
   const installPhase = phaseData.find(d => d.phase.key === 'install');
@@ -2616,12 +2630,164 @@ function renderProjectOverviewHTML(p) {
   const marked = isMarkedReadyForInstall(p.id);
 
   return `
-    <!-- Phase Readiness -->
+    <!-- Overall progress + segmented linear map -->
     <div class="dashboard-card" style="margin-bottom:14px">
-      <div class="dashboard-card-title" style="display:flex;align-items:center;justify-content:space-between">
-        <span>Project Readiness</span>
-        <button class="btn btn-sm" onclick="switchProjectTab('progress')" style="font-size:11px;padding:4px 10px">Manage Milestones &rarr;</button>
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px">
+        <div>
+          <div style="font-size:11px;font-weight:600;color:#6E7681;text-transform:uppercase;letter-spacing:0.08em">Overall Progress</div>
+          <div style="font-size:28px;font-weight:700;color:#E6EDF3;line-height:1.1;margin-top:2px">${Math.round(overallPct * 100)}%</div>
+          <div style="font-size:11px;color:#8B949E;margin-top:2px">${doneMilestonesSum} of ${totalMilestones} milestones complete${marked ? ' &middot; <span style="color:#3FB950">Ready for Install</span>' : ''}</div>
+        </div>
+        <button class="btn btn-sm" onclick="switchProjectTab('progress')" style="font-size:11px;padding:6px 12px">Manage Milestones &rarr;</button>
       </div>
+
+      <!-- Segmented linear progress map -->
+      <div class="pmap-wrap">
+        <div class="pmap-track">
+          ${phaseData.map(d => {
+            const width = (d.totalMilestones / totalMilestones) * 100;
+            return `
+              <div class="pmap-seg" style="width:${width}%;--seg-color:${d.phase.color}" title="${d.phase.label}: ${Math.round(d.pct * 100)}%">
+                <div class="pmap-seg-fill" style="width:${Math.round(d.pct * 100)}%;background:${d.phase.color}"></div>
+              </div>
+            `;
+          }).join('')}
+        </div>
+        <div class="pmap-labels">
+          ${phaseData.map(d => {
+            const width = (d.totalMilestones / totalMilestones) * 100;
+            return `
+              <div class="pmap-label" style="width:${width}%">
+                <div class="pmap-label-name" style="color:${d.pct >= 1 ? d.phase.color : '#8B949E'}">${d.phase.label}</div>
+                <div class="pmap-label-pct">${Math.round(d.pct * 100)}%</div>
+              </div>
+            `;
+          }).join('')}
+        </div>
+      </div>
+    </div>
+
+    <!-- Readiness detail card -->
+    <div class="dashboard-card" style="margin-bottom:14px">
+      <div class="dashboard-card-title">Phase Readiness</div>
+
+      <!-- Sales group (serial phases) -->
+      <div class="ready-group-header" style="color:#D29922">Sales</div>
+      <div class="ready-phases">
+        ${serialBeforeParallel.map(d => `
+          <div class="ready-phase-row ${d.pct >= 1 ? 'done' : ''} ${!d.unlocked ? 'locked' : ''}">
+            <div class="ready-phase-head">
+              <span class="ready-phase-label" style="color:${d.phase.color}">${d.phase.label}</span>
+              <span class="ready-phase-count">${d.doneMilestones} of ${d.totalMilestones}</span>
+              <span class="ready-phase-pct">${Math.round(d.pct * 100)}%</span>
+            </div>
+            <div class="ready-phase-bar">
+              <div class="ready-phase-fill" style="width:${Math.round(d.pct * 100)}%;background:${d.phase.color}"></div>
+            </div>
+          </div>
+        `).join('')}
+      </div>
+
+      <!-- Parallel phases group -->
+      <div class="ready-parallel-group">
+        <div class="ready-parallel-header">
+          <span class="ready-parallel-title">Parallel &mdash; All required for Install</span>
+          <span class="ready-parallel-avg">${Math.round((parallelPhases.reduce((s, d) => s + d.pct, 0) / parallelPhases.length) * 100)}%</span>
+        </div>
+        ${parallelPhases.map(d => `
+          <div class="ready-phase-row ${d.pct >= 1 ? 'done' : ''} ${!d.unlocked ? 'locked' : ''}">
+            <div class="ready-phase-head">
+              <span class="ready-phase-label" style="color:${d.phase.color}">${d.phase.label}</span>
+              <span class="ready-phase-count">${d.doneMilestones} of ${d.totalMilestones}</span>
+              <span class="ready-phase-pct">${Math.round(d.pct * 100)}%</span>
+            </div>
+            <div class="ready-phase-bar">
+              <div class="ready-phase-fill" style="width:${Math.round(d.pct * 100)}%;background:${d.phase.color}"></div>
+            </div>
+          </div>
+        `).join('')}
+      </div>
+
+      <!-- Ready for Install gate -->
+      <div class="ready-gate ${readyForInstall ? 'ready-gate-open' : 'ready-gate-locked'}">
+        ${readyForInstall ? (marked ? `
+          <div class="ready-gate-inner">
+            <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M3 8l3 3 7-7" stroke="#3FB950" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+            <span>Marked Ready for Install</span>
+            <button class="btn btn-sm" onclick="unmarkReadyForInstall(${p.id})" style="margin-left:auto;font-size:11px;padding:4px 10px">Unmark</button>
+          </div>
+        ` : `
+          <div class="ready-gate-inner">
+            <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><circle cx="8" cy="8" r="6" stroke="#3FB950" stroke-width="2"/><path d="M6 8l1.5 1.5L10 6.5" stroke="#3FB950" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+            <span>All parallel phases complete</span>
+            <button class="btn-primary" onclick="markReadyForInstall(${p.id})" style="margin-left:auto;background:#238636;padding:6px 12px;font-size:12px;min-height:32px">Mark Ready for Install &rarr;</button>
+          </div>
+        `) : `
+          <div class="ready-gate-inner">
+            <svg width="14" height="14" viewBox="0 0 14 14" fill="none"><rect x="3" y="6" width="8" height="6" rx="1" stroke="#6E7681" stroke-width="1.4"/><path d="M5 6V4a2 2 0 0 1 4 0v2" stroke="#6E7681" stroke-width="1.4"/></svg>
+            <span>Install locked &mdash; complete all parallel phases first</span>
+          </div>
+        `}
+      </div>
+
+      <!-- Install phase progress (only shows when ready or in progress) -->
+      ${(marked || installPhase.pct > 0) ? `
+        <div style="margin-top:12px;padding-top:12px;border-top:1px solid #1C2333">
+          <div class="ready-phase-row ${installPhase.pct >= 1 ? 'done' : ''}">
+            <div class="ready-phase-head">
+              <span class="ready-phase-label" style="color:${installPhase.phase.color}">Install</span>
+              <span class="ready-phase-count">${installPhase.doneMilestones} of ${installPhase.totalMilestones}</span>
+              <span class="ready-phase-pct">${Math.round(installPhase.pct * 100)}%</span>
+            </div>
+            <div class="ready-phase-bar">
+              <div class="ready-phase-fill" style="width:${Math.round(installPhase.pct * 100)}%;background:${installPhase.phase.color}"></div>
+            </div>
+          </div>
+        </div>
+      ` : ''}
+    </div>
+
+    <!-- Install Dates card (editable) -->
+    <div class="dashboard-card" style="margin-bottom:14px">
+      <div class="dashboard-card-title">Install Dates</div>
+      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:10px">
+        <!-- Estimated install -->
+        <div style="padding:12px;background:#0D1117;border-radius:8px;border:1px solid #1C2333">
+          <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px">
+            <div style="font-size:10px;color:#6E7681;text-transform:uppercase;letter-spacing:0.06em">Estimated (from Jetbuilt)</div>
+            <button class="btn btn-sm" onclick="showEstimatedInstallDialog(${p.id})" style="font-size:10px;padding:3px 8px">Edit</button>
+          </div>
+          ${(() => {
+            const est = getEstimatedInstall(p);
+            if (!est) return '<div style="font-size:13px;color:#6E7681;font-style:italic">Not set</div>';
+            const cd = countdownClass(est);
+            return `
+              <div style="font-size:16px;font-weight:600;color:#E6EDF3">${fmtDate(est)}</div>
+              <div style="margin-top:4px"><span class="countdown-pill ${cd}">${fmtCountdown(est)}</span></div>
+            `;
+          })()}
+        </div>
+        <!-- Booked window -->
+        <div style="padding:12px;background:${getBookedTimeline(p.id) ? '#0D1A0E' : '#0D1117'};border-radius:8px;border:1px solid ${getBookedTimeline(p.id) ? '#238636' : '#1C2333'}">
+          <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px">
+            <div style="font-size:10px;color:#6E7681;text-transform:uppercase;letter-spacing:0.06em">Booked Install Window</div>
+            <button class="btn btn-sm" onclick="showSetBookedDatesDialog(${p.id})" style="font-size:10px;padding:3px 8px">${getBookedTimeline(p.id) ? 'Edit' : 'Book'}</button>
+          </div>
+          ${(() => {
+            const b = getBookedTimeline(p.id);
+            if (!b) return '<div style="font-size:13px;color:#6E7681;font-style:italic">Not booked</div>';
+            const sameDay = !b.end || b.end === b.start;
+            const cd = countdownClass(b.start);
+            return `
+              <div style="font-size:16px;font-weight:600;color:#3FB950">${fmtDate(b.start)}${sameDay ? '' : ' &ndash; ' + fmtDate(b.end)}</div>
+              <div style="margin-top:4px"><span class="countdown-pill ${cd}">${fmtCountdown(b.start)}</span></div>
+            `;
+          })()}
+        </div>
+      </div>
+    </div>
+
+    <!-- Key dates row: Contract + Install -->
 
       <!-- Serial phases: Lead, Proposal, Contract -->
       <div class="ready-phases">
@@ -2698,48 +2864,21 @@ function renderProjectOverviewHTML(p) {
       ` : ''}
     </div>
 
-    <!-- Key dates row: Contract + Install -->
-    <div class="dashboard-grid">
-      <div class="dashboard-card">
-        <div class="dashboard-card-title" style="display:flex;align-items:center;justify-content:space-between">
-          <span>Contract</span>
-          <button class="btn btn-sm" onclick="showContractDateDialog(${p.id})" style="font-size:11px;padding:4px 10px">
-            ${contractDate ? 'Edit' : 'Set date'}
-          </button>
-        </div>
-        ${contractDate ? `
-          <div style="font-size:20px;font-weight:600;color:#E6EDF3;line-height:1.1">${fmtDate(contractDate)}</div>
-          <div style="font-size:12px;color:#8B949E;margin-top:4px">Signed ${fmtCountdown(contractDate)}</div>
-        ` : `
-          <div style="font-size:14px;color:#6E7681;font-style:italic">No contract date set</div>
-          <div style="font-size:11px;color:#6E7681;margin-top:4px">Set this when the contract is signed</div>
-        `}
+    <!-- Contract date card -->
+    <div class="dashboard-card" style="margin-bottom:14px">
+      <div class="dashboard-card-title" style="display:flex;align-items:center;justify-content:space-between">
+        <span>Contract</span>
+        <button class="btn btn-sm" onclick="showContractDateDialog(${p.id})" style="font-size:11px;padding:4px 10px">
+          ${contractDate ? 'Edit' : 'Set date'}
+        </button>
       </div>
-
-      <div class="dashboard-card">
-        <div class="dashboard-card-title" style="display:flex;align-items:center;justify-content:space-between">
-          <span>Install</span>
-          <button class="btn btn-sm" onclick="showSetBookedDatesDialog(${p.id})" style="font-size:11px;padding:4px 10px">
-            ${getBookedTimeline(p.id) ? 'Edit window' : 'Book dates'}
-          </button>
-        </div>
-        ${installWin ? (() => {
-          const sameDay = installWin.start === installWin.end;
-          const cdClass = countdownClass(installWin.start);
-          return `
-            <div style="font-size:20px;font-weight:600;color:#E6EDF3;line-height:1.1">
-              ${fmtDate(installWin.start)}${sameDay ? '' : ' &ndash; ' + fmtDate(installWin.end)}
-            </div>
-            <div style="display:flex;align-items:center;gap:8px;margin-top:4px">
-              <span class="countdown-pill ${cdClass}">${fmtCountdown(installWin.start)}</span>
-              <span style="font-size:11px;color:#6E7681">${installWin.source === 'booked' ? 'Booked window' : 'Jetbuilt estimate'}</span>
-            </div>
-          `;
-        })() : `
-          <div style="font-size:14px;color:#6E7681;font-style:italic">Not scheduled</div>
-          <div style="font-size:11px;color:#6E7681;margin-top:4px">No estimate from Jetbuilt or booked window</div>
-        `}
-      </div>
+      ${contractDate ? `
+        <div style="font-size:20px;font-weight:600;color:#E6EDF3;line-height:1.1">${fmtDate(contractDate)}</div>
+        <div style="font-size:12px;color:#8B949E;margin-top:4px">Signed ${fmtCountdown(contractDate)}</div>
+      ` : `
+        <div style="font-size:14px;color:#6E7681;font-style:italic">No contract date set</div>
+        <div style="font-size:11px;color:#6E7681;margin-top:4px">Set this when the contract is signed</div>
+      `}
     </div>
 
     <!-- Needs Attention (multi-audience executive summary) -->
@@ -2962,6 +3101,7 @@ function renderProjectProgressHTML(p) {
               const mDone = mPct >= 1;
               const mUnlocked = isMilestoneUnlocked(p, phase, idx);
               const isLinked = !!milestone.linkedChecklist;
+              const action = getMilestoneAction(phase.key, milestone.key);
               return `
                 <div class="milestone-row ${mDone ? 'done' : ''} ${!mUnlocked ? 'locked' : ''}">
                   <div class="milestone-check ${mDone ? 'checked' : ''}" onclick="${mUnlocked && !isLinked ? `toggleMilestone(${p.id}, '${phase.key}', '${milestone.key}')` : ''}">
@@ -2981,6 +3121,16 @@ function renderProjectProgressHTML(p) {
                       ` : ''}
                     ` : ''}
                   </div>
+                  ${action && mUnlocked ? `
+                    <button class="milestone-action" onclick="triggerMilestoneAction(${p.id}, '${phase.key}', '${milestone.key}')" title="${esc(action.label)}">
+                      ${action.type === 'email'
+                        ? '<svg width="12" height="12" viewBox="0 0 14 14" fill="none"><rect x="1.5" y="3" width="11" height="8" rx="1" stroke="currentColor" stroke-width="1.3"/><path d="M2 4l5 4 5-4" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/></svg>'
+                        : action.type === 'tab'
+                          ? '<svg width="12" height="12" viewBox="0 0 14 14" fill="none"><path d="M5 3l4 4-4 4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>'
+                          : '<svg width="12" height="12" viewBox="0 0 14 14" fill="none"><path d="M7 3v8M3 7h8" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>'}
+                      <span>${esc(action.label)}</span>
+                    </button>
+                  ` : ''}
                 </div>
               `;
             }).join('')}
@@ -3180,8 +3330,53 @@ function showContractDateDialog(projectId) {
 }
 
 // ── Install Countdown (Pass 1) ──
+
+// Returns the effective estimated install date — user override wins over Jetbuilt's value
+function getEstimatedInstall(p) {
+  const override = state.estimatedInstallOverride?.[p.id];
+  return override || p.jb_estimated_install || '';
+}
+
+function setEstimatedInstallOverride(projectId, date) {
+  if (!state.estimatedInstallOverride) state.estimatedInstallOverride = {};
+  if (date) state.estimatedInstallOverride[projectId] = date;
+  else delete state.estimatedInstallOverride[projectId];
+  save('vi_estimated_install', state.estimatedInstallOverride);
+}
+
+function showEstimatedInstallDialog(projectId) {
+  const p = state.projects.find(pr => pr.id === projectId);
+  if (!p) return;
+  const current = getEstimatedInstall(p);
+  document.getElementById('est-install-dialog')?.remove();
+  const modal = document.createElement('div');
+  modal.id = 'est-install-dialog';
+  modal.className = 'modal-overlay';
+  modal.innerHTML = `
+    <div class="modal-container" style="max-width:420px">
+      <div class="modal-header">
+        <div>
+          <div class="modal-title">Estimated Install Date</div>
+          <div class="modal-sub">Override Jetbuilt&rsquo;s estimate &mdash; will sync back later</div>
+        </div>
+        <button class="modal-close" onclick="document.getElementById('est-install-dialog')?.remove()">&times;</button>
+      </div>
+      <div class="modal-body">
+        <label style="font-size:12px;color:#8B949E;font-weight:500;display:block;margin-bottom:6px">Estimated date</label>
+        <input type="date" id="est-install-input" class="form-input" value="${esc(current)}" style="width:100%">
+        ${p.jb_estimated_install ? `<div style="margin-top:10px;font-size:11px;color:#6E7681">Jetbuilt value: <code style="color:#8B949E">${esc(p.jb_estimated_install)}</code></div>` : ''}
+        <div style="display:flex;gap:8px;margin-top:14px">
+          ${state.estimatedInstallOverride?.[projectId] ? `<button class="btn btn-danger" onclick="setEstimatedInstallOverride(${projectId}, '');document.getElementById('est-install-dialog')?.remove();renderCurrentPage()">Reset to Jetbuilt</button>` : ''}
+          <button class="btn-primary" onclick="const v=document.getElementById('est-install-input').value;setEstimatedInstallOverride(${projectId}, v);document.getElementById('est-install-dialog')?.remove();renderCurrentPage()" style="flex:1">Save</button>
+        </div>
+      </div>
+    </div>
+  `;
+  document.body.appendChild(modal);
+}
+
 function getInstallWindow(p) {
-  // Prefer booked window; fall back to Jetbuilt estimated (single date)
+  // Prefer booked window; fall back to estimated (with user override)
   const booked = getBookedTimeline(p.id);
   if (booked && booked.start) {
     return {
@@ -3190,10 +3385,11 @@ function getInstallWindow(p) {
       source: 'booked'
     };
   }
-  if (p.jb_estimated_install) {
+  const est = getEstimatedInstall(p);
+  if (est) {
     return {
-      start: p.jb_estimated_install,
-      end: p.jb_estimated_install,
+      start: est,
+      end: est,
       source: 'estimated'
     };
   }
@@ -3276,6 +3472,550 @@ const PHASES = [
     { key: 'unload_deprep',      label: 'Unload & de-prep' }
   ]}
 ];
+
+// Milestone action registry — keys are "phaseKey.milestoneKey"
+// Types: 'email' (opens email modal), 'tab' (jumps to another tab), 'dialog' (opens a custom modal)
+const MILESTONE_ACTIONS = {
+  'lead.walkthrough_sched': {
+    type: 'email',
+    label: 'Schedule Walkthrough',
+    template: 'walkthrough_schedule'
+  },
+  'proposal.walkthrough_done': {
+    type: 'dialog',
+    label: 'Log Walkthrough',
+    handler: 'showLogWalkthroughDialog'
+  },
+  'proposal.proposal_built': {
+    type: 'tab',
+    label: 'Open Quote Tab',
+    tab: 'files',  // placeholder until Quote tab exists
+    note: 'Quote tab coming soon — using Files for now'
+  },
+  'proposal.proposal_sent': {
+    type: 'email',
+    label: 'Send Proposal',
+    template: 'proposal_send'
+  },
+  'contract.client_signed': {
+    type: 'tab',
+    label: 'Upload Signed Contract',
+    tab: 'files'
+  },
+  'contract.countersigned_sent': {
+    type: 'email',
+    label: 'Send Countersigned',
+    template: 'countersigned_send'
+  },
+  'contract.deposit_invoice': {
+    type: 'email',
+    label: 'Send Deposit Invoice',
+    template: 'deposit_invoice'
+  },
+  'contract.insurance_tax': {
+    type: 'email',
+    label: 'Send Insurance & Tax',
+    template: 'insurance_tax'
+  },
+  'contract.install_dates_est': {
+    type: 'dialog',
+    label: 'Set Estimated Dates',
+    handler: 'showEstimatedInstallDialog'
+  },
+  'design.design_kickoff': {
+    type: 'dialog',
+    label: 'Log Kickoff Meeting',
+    handler: 'showLogMeetingDialog',
+    arg: 'kickoff'
+  },
+  'design.design_completed': {
+    type: 'tab',
+    label: 'Open Design Tab',
+    tab: 'design'
+  },
+  'design.design_handoff': {
+    type: 'dialog',
+    label: 'Log Handoff Meeting',
+    handler: 'showLogMeetingDialog',
+    arg: 'handoff'
+  },
+  'planning.client_expect_sent': {
+    type: 'email',
+    label: 'Send to Client',
+    template: 'client_expectations'
+  },
+  'planning.crew_assigned': {
+    type: 'dialog',
+    label: 'Assign Crew',
+    handler: 'showCrewAssignDialog'
+  },
+  'planning.vehicles_assigned': {
+    type: 'dialog',
+    label: 'Assign Vehicles',
+    handler: 'showVehiclesAssignDialog'
+  },
+  'planning.tools_assigned': {
+    type: 'dialog',
+    label: 'Assign Tools',
+    handler: 'showToolsAssignDialog'
+  },
+  'install.install_complete': {
+    type: 'tab',
+    label: 'Open Install Tab',
+    tab: 'install'
+  }
+};
+
+function getMilestoneAction(phaseKey, milestoneKey) {
+  return MILESTONE_ACTIONS[`${phaseKey}.${milestoneKey}`] || null;
+}
+
+function triggerMilestoneAction(projectId, phaseKey, milestoneKey) {
+  const action = getMilestoneAction(phaseKey, milestoneKey);
+  if (!action) return;
+  if (action.type === 'tab') {
+    switchProjectTab(action.tab);
+  } else if (action.type === 'email') {
+    showMilestoneEmailDialog(projectId, phaseKey, milestoneKey, action.template);
+  } else if (action.type === 'dialog') {
+    // Call the named handler with project id (and arg if present)
+    const fn = window[action.handler];
+    if (typeof fn === 'function') {
+      action.arg ? fn(projectId, action.arg) : fn(projectId);
+    }
+  }
+}
+
+// ── Email template system (Stage C Pass 2A) ──
+// Each template returns { subject, body } given the project
+const EMAIL_TEMPLATES = {
+  walkthrough_schedule: (p) => ({
+    subject: `Site walkthrough for ${p.name}`,
+    body: `Hi ${(p.primary_contact_name || p.client_name || '').split(' ')[0] || 'there'},
+
+I'd like to schedule a site walkthrough for ${p.name} so we can finalize the scope and take any necessary measurements.
+
+Proposed date/time: [DATE] at [TIME]
+Location: ${[p.address, p.city, p.state_abbr].filter(Boolean).join(', ') || '[to confirm]'}
+Expected duration: 30-60 minutes
+
+Please let me know if this works, or suggest an alternative that fits your schedule.
+
+Thanks,
+[Your name]
+Valiant Integrations`
+  }),
+  proposal_send: (p) => ({
+    subject: `Proposal: ${p.name}`,
+    body: `Hi ${(p.primary_contact_name || p.client_name || '').split(' ')[0] || 'there'},
+
+Please find attached our proposal for ${p.name}. I've built it around the scope we discussed during the walkthrough, and it reflects the priorities you outlined.
+
+A few quick notes:
+- The pricing is valid until [DATE]
+- We'd typically plan an install window of [X days]
+- If you'd like to walk through it together, I'm happy to get on a call
+
+Let me know if you have any questions.
+
+Thanks,
+[Your name]
+Valiant Integrations`
+  }),
+  countersigned_send: (p) => ({
+    subject: `Countersigned contract: ${p.name}`,
+    body: `Hi ${(p.primary_contact_name || p.client_name || '').split(' ')[0] || 'there'},
+
+Attached is the countersigned contract for ${p.name} for your records.
+
+Next steps on our side:
+- A deposit invoice will follow shortly
+- Our insurance and W-9 will be sent separately
+- We'll share estimated install dates once purchasing is confirmed
+
+Thanks for choosing Valiant Integrations.
+
+[Your name]`
+  }),
+  deposit_invoice: (p) => ({
+    subject: `Deposit invoice: ${p.name}`,
+    body: `Hi ${(p.primary_contact_name || p.client_name || '').split(' ')[0] || 'there'},
+
+Please find the deposit invoice for ${p.name} attached. Payment of this deposit will allow us to begin ordering equipment and locking in install dates.
+
+Payment is due per the terms in the contract. Let me know if you have any questions.
+
+Thanks,
+[Your name]
+Valiant Integrations`
+  }),
+  insurance_tax: (p) => ({
+    subject: `Insurance & tax documents: ${p.name}`,
+    body: `Hi ${(p.primary_contact_name || p.client_name || '').split(' ')[0] || 'there'},
+
+For ${p.name}, attached are our:
+- Certificate of Insurance
+- W-9
+
+Please forward to your AP/accounting team as needed. Let me know if there's any additional documentation you need.
+
+Thanks,
+[Your name]
+Valiant Integrations`
+  }),
+  client_expectations: (p) => {
+    const win = getInstallWindow(p);
+    const dates = win ? `${fmtDate(win.start)}${win.end && win.end !== win.start ? ' – ' + fmtDate(win.end) : ''}` : '[install dates]';
+    return {
+      subject: `Install expectations & schedule: ${p.name}`,
+      body: `Hi ${(p.primary_contact_name || p.client_name || '').split(' ')[0] || 'there'},
+
+As we get close to install for ${p.name}, here's what to expect:
+
+Schedule: ${dates}
+Crew size: [X technicians]
+Access needs: [parking, loading dock, freight elevator, etc.]
+Site readiness needed: [cleared space, power, networking access, etc.]
+Work hours: [typical schedule, breaks]
+
+Please let us know if there are any site-specific requirements we should know about — security badging, insurance certificates for the venue, scheduled quiet hours, etc.
+
+Thanks,
+[Your name]
+Valiant Integrations`
+    };
+  }
+};
+
+function showMilestoneEmailDialog(projectId, phaseKey, milestoneKey, templateKey) {
+  const p = state.projects.find(pr => pr.id === projectId);
+  if (!p) return;
+  const tpl = EMAIL_TEMPLATES[templateKey];
+  if (!tpl) return;
+  const rendered = tpl(p);
+  const to = p.primary_contact_email || '';
+
+  document.getElementById('mail-dialog')?.remove();
+  const modal = document.createElement('div');
+  modal.id = 'mail-dialog';
+  modal.className = 'modal-overlay';
+  modal.innerHTML = `
+    <div class="modal-container" style="max-width:640px">
+      <div class="modal-header">
+        <div>
+          <div class="modal-title">Compose Email</div>
+          <div class="modal-sub">Review, edit, then send or copy</div>
+        </div>
+        <button class="modal-close" onclick="document.getElementById('mail-dialog')?.remove()">&times;</button>
+      </div>
+      <div class="modal-body">
+        <label style="font-size:11px;color:#8B949E;font-weight:500;display:block;margin-bottom:4px">To</label>
+        <input type="email" id="mail-to" class="form-input" value="${esc(to)}" style="width:100%;margin-bottom:10px">
+
+        <label style="font-size:11px;color:#8B949E;font-weight:500;display:block;margin-bottom:4px">Subject</label>
+        <input type="text" id="mail-subject" class="form-input" value="${esc(rendered.subject)}" style="width:100%;margin-bottom:10px">
+
+        <label style="font-size:11px;color:#8B949E;font-weight:500;display:block;margin-bottom:4px">Body</label>
+        <textarea id="mail-body" class="form-textarea" rows="14" style="width:100%;font-family:inherit;font-size:13px;line-height:1.5">${esc(rendered.body)}</textarea>
+
+        <div style="margin-top:10px;font-size:11px;color:#6E7681;padding:8px 10px;background:#0D1117;border:1px solid #1C2333;border-radius:6px">
+          <strong style="color:#8B949E">Tip:</strong> &ldquo;Open in Email Client&rdquo; launches your default mail app with all fields pre-filled. If that doesn&rsquo;t work, use &ldquo;Copy to Clipboard&rdquo; and paste into Gmail/Outlook web.
+        </div>
+
+        <div style="display:flex;gap:8px;margin-top:14px;align-items:center;flex-wrap:wrap">
+          <label style="display:flex;align-items:center;gap:6px;font-size:12px;color:#8B949E;flex:1;min-width:180px">
+            <input type="checkbox" id="mail-check-milestone" checked style="margin:0">
+            Check off milestone after sending
+          </label>
+          <button class="btn" onclick="copyMilestoneEmail()">Copy to Clipboard</button>
+          <button class="btn-primary" onclick="sendMilestoneEmail(${projectId}, '${phaseKey}', '${milestoneKey}')">Open in Email Client</button>
+        </div>
+      </div>
+    </div>
+  `;
+  document.body.appendChild(modal);
+}
+
+function copyMilestoneEmail() {
+  const to = document.getElementById('mail-to')?.value || '';
+  const subject = document.getElementById('mail-subject')?.value || '';
+  const body = document.getElementById('mail-body')?.value || '';
+  const text = `To: ${to}\nSubject: ${subject}\n\n${body}`;
+  if (navigator.clipboard) {
+    navigator.clipboard.writeText(text).then(() => {
+      const btn = document.querySelector('#mail-dialog .btn:not(.btn-primary)');
+      if (btn) { const orig = btn.textContent; btn.textContent = '✓ Copied'; setTimeout(() => btn.textContent = orig, 1500); }
+    });
+  }
+}
+
+function sendMilestoneEmail(projectId, phaseKey, milestoneKey) {
+  const to = document.getElementById('mail-to')?.value || '';
+  const subject = document.getElementById('mail-subject')?.value || '';
+  const body = document.getElementById('mail-body')?.value || '';
+  const shouldCheck = document.getElementById('mail-check-milestone')?.checked;
+  // mailto: URL (encoded)
+  const url = `mailto:${encodeURIComponent(to)}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
+  window.location.href = url;
+  if (shouldCheck) {
+    setMilestone(projectId, phaseKey, milestoneKey, true);
+  }
+  setTimeout(() => {
+    document.getElementById('mail-dialog')?.remove();
+    renderCurrentPage();
+  }, 300);
+}
+
+// ── Meeting logs (Pass 2B) ──
+function getMeetingLog(projectId, type) {
+  return state.meetingLogs?.[projectId]?.[type] || null;
+}
+
+function saveMeetingLog(projectId, type, data) {
+  if (!state.meetingLogs[projectId]) state.meetingLogs[projectId] = {};
+  state.meetingLogs[projectId][type] = { ...data, saved_at: new Date().toISOString() };
+  save('vi_meeting_logs', state.meetingLogs);
+}
+
+function showMeetingLogDialog(projectId, type, config) {
+  // type: 'walkthrough' | 'design_kickoff' | 'design_handoff'
+  // config: { title, milestonePhase, milestoneKey }
+  const p = state.projects.find(pr => pr.id === projectId);
+  if (!p) return;
+  const existing = getMeetingLog(projectId, type) || {};
+  const today = new Date().toISOString().slice(0, 10);
+  document.getElementById('meeting-log-dialog')?.remove();
+  const modal = document.createElement('div');
+  modal.id = 'meeting-log-dialog';
+  modal.className = 'modal-overlay';
+  modal.innerHTML = `
+    <div class="modal-container" style="max-width:520px">
+      <div class="modal-header">
+        <div>
+          <div class="modal-title">${esc(config.title)}</div>
+          <div class="modal-sub">${esc(p.name)} &middot; Log the meeting once it&rsquo;s done</div>
+        </div>
+        <button class="modal-close" onclick="document.getElementById('meeting-log-dialog')?.remove()">&times;</button>
+      </div>
+      <div class="modal-body">
+        <label style="font-size:11px;color:#8B949E;font-weight:500;display:block;margin-bottom:4px">Meeting date</label>
+        <input type="date" id="mlog-date" class="form-input" value="${esc(existing.date || today)}" style="width:100%;margin-bottom:12px">
+
+        <label style="font-size:11px;color:#8B949E;font-weight:500;display:block;margin-bottom:4px">Attendees</label>
+        <input type="text" id="mlog-attendees" class="form-input" value="${esc(existing.attendees || '')}" placeholder="e.g. Jacob, Kris, client rep"  style="width:100%;margin-bottom:12px">
+
+        <label style="font-size:11px;color:#8B949E;font-weight:500;display:block;margin-bottom:4px">Notes / decisions</label>
+        <textarea id="mlog-notes" class="form-textarea" rows="6" placeholder="What was discussed, decided, or needs follow-up..." style="width:100%;font-family:inherit;font-size:13px;line-height:1.5">${esc(existing.notes || '')}</textarea>
+
+        <div style="display:flex;gap:8px;margin-top:14px;align-items:center;flex-wrap:wrap">
+          <label style="display:flex;align-items:center;gap:6px;font-size:12px;color:#8B949E;flex:1;min-width:160px">
+            <input type="checkbox" id="mlog-check-milestone" ${existing.date ? '' : 'checked'} style="margin:0">
+            Check off milestone after saving
+          </label>
+          <button class="btn" onclick="document.getElementById('meeting-log-dialog')?.remove()">Cancel</button>
+          <button class="btn-primary" onclick="saveMeetingLogAndClose(${projectId}, '${type}', '${config.milestonePhase}', '${config.milestoneKey}')" style="padding:8px 14px;font-size:13px">Save</button>
+        </div>
+      </div>
+    </div>
+  `;
+  document.body.appendChild(modal);
+}
+
+function saveMeetingLogAndClose(projectId, type, phaseKey, milestoneKey) {
+  const date = document.getElementById('mlog-date')?.value || '';
+  const attendees = document.getElementById('mlog-attendees')?.value || '';
+  const notes = document.getElementById('mlog-notes')?.value || '';
+  const shouldCheck = document.getElementById('mlog-check-milestone')?.checked;
+  saveMeetingLog(projectId, type, { date, attendees, notes });
+  if (shouldCheck && phaseKey && milestoneKey) {
+    setMilestone(projectId, phaseKey, milestoneKey, true);
+  }
+  document.getElementById('meeting-log-dialog')?.remove();
+  renderCurrentPage();
+}
+
+function showLogWalkthroughDialog(projectId) {
+  showMeetingLogDialog(projectId, 'walkthrough', {
+    title: 'Log Walkthrough',
+    milestonePhase: 'proposal',
+    milestoneKey: 'walkthrough_done'
+  });
+}
+
+function showLogMeetingDialog(projectId, which) {
+  if (which === 'kickoff') {
+    showMeetingLogDialog(projectId, 'design_kickoff', {
+      title: 'Log Design Kickoff Meeting',
+      milestonePhase: 'design',
+      milestoneKey: 'design_kickoff'
+    });
+  } else if (which === 'handoff') {
+    showMeetingLogDialog(projectId, 'design_handoff', {
+      title: 'Log Design Handoff Meeting',
+      milestonePhase: 'design',
+      milestoneKey: 'design_handoff'
+    });
+  }
+}
+
+// ── Planning assignments (crew, vehicles, tools) ──
+function getPlanningAssignment(projectId, kind) {
+  return state.planningAssignments?.[projectId]?.[kind] || [];
+}
+
+function setPlanningAssignment(projectId, kind, ids) {
+  if (!state.planningAssignments[projectId]) state.planningAssignments[projectId] = {};
+  state.planningAssignments[projectId][kind] = ids;
+  save('vi_planning_assignments', state.planningAssignments);
+}
+
+function toggleAssignmentPick(projectId, kind, id) {
+  const current = getPlanningAssignment(projectId, kind);
+  const next = current.includes(id) ? current.filter(x => x !== id) : [...current, id];
+  setPlanningAssignment(projectId, kind, next);
+  // Re-render picker contents (keep dialog open)
+  const content = document.getElementById('assign-dialog-content');
+  if (content && window._assignDialogRefresh) window._assignDialogRefresh();
+}
+
+function showAssignmentDialog(projectId, kind, config) {
+  // kind: 'crew' | 'vehicles' | 'tools'
+  // config: { title, milestonePhase, milestoneKey, options: [...], getColor?, groupBy? }
+  const p = state.projects.find(pr => pr.id === projectId);
+  if (!p) return;
+  document.getElementById('assign-dialog')?.remove();
+  const modal = document.createElement('div');
+  modal.id = 'assign-dialog';
+  modal.className = 'modal-overlay';
+
+  const renderInner = () => {
+    const picked = getPlanningAssignment(projectId, kind);
+    let listHTML = '';
+    if (config.groupBy) {
+      // Group options by category/type
+      const groups = {};
+      config.options.forEach(opt => {
+        const g = opt[config.groupBy] || 'other';
+        if (!groups[g]) groups[g] = [];
+        groups[g].push(opt);
+      });
+      listHTML = Object.entries(groups).map(([g, items]) => `
+        <div style="margin-bottom:12px">
+          <div style="font-size:10px;font-weight:700;color:#6E7681;text-transform:uppercase;letter-spacing:0.08em;margin-bottom:6px">${esc(g)}</div>
+          <div style="display:flex;flex-wrap:wrap;gap:6px">
+            ${items.map(opt => {
+              const active = picked.includes(opt.id);
+              const color = config.getColor ? config.getColor(opt) : '#58A6FF';
+              return `
+                <div onclick="toggleAssignmentPick(${projectId}, '${kind}', '${opt.id}')"
+                  style="display:flex;align-items:center;gap:6px;padding:6px 12px;border-radius:20px;cursor:pointer;border:1px solid ${active ? color + '66' : '#1C2333'};background:${active ? color + '18' : '#0D1117'};-webkit-tap-highlight-color:transparent;font-size:12px;color:${active ? '#E6EDF3' : '#8B949E'}">
+                  ${active ? `<svg width="11" height="11" viewBox="0 0 11 11" fill="none"><path d="M2 5.5l2.5 2.5L9 3" stroke="${color}" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>` : `<div style="width:11px;height:11px;border:1px solid #30363D;border-radius:3px"></div>`}
+                  <span>${esc(opt.name)}</span>
+                </div>
+              `;
+            }).join('')}
+          </div>
+        </div>
+      `).join('');
+    } else {
+      listHTML = `<div style="display:flex;flex-wrap:wrap;gap:6px">${config.options.map(opt => {
+        const active = picked.includes(opt.id);
+        const color = config.getColor ? config.getColor(opt) : '#58A6FF';
+        return `
+          <div onclick="toggleAssignmentPick(${projectId}, '${kind}', '${opt.id}')"
+            style="display:flex;align-items:center;gap:6px;padding:6px 12px;border-radius:20px;cursor:pointer;border:1px solid ${active ? color + '66' : '#1C2333'};background:${active ? color + '18' : '#0D1117'};-webkit-tap-highlight-color:transparent;font-size:12px;color:${active ? '#E6EDF3' : '#8B949E'}">
+            ${active ? `<svg width="11" height="11" viewBox="0 0 11 11" fill="none"><path d="M2 5.5l2.5 2.5L9 3" stroke="${color}" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>` : `<div style="width:11px;height:11px;border:1px solid #30363D;border-radius:3px"></div>`}
+            <span>${esc(opt.name)}</span>
+          </div>
+        `;
+      }).join('')}</div>`;
+    }
+
+    const picked2 = getPlanningAssignment(projectId, kind);
+    return `
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;font-size:12px;color:#8B949E">
+        <span>${picked2.length} ${kind === 'crew' ? 'selected' : 'picked'}</span>
+        ${picked2.length > 0 ? `<button class="btn btn-sm" onclick="setPlanningAssignment(${projectId}, '${kind}', []);window._assignDialogRefresh()" style="font-size:11px;padding:4px 8px">Clear all</button>` : ''}
+      </div>
+      ${listHTML}
+    `;
+  };
+
+  modal.innerHTML = `
+    <div class="modal-container" style="max-width:540px">
+      <div class="modal-header">
+        <div>
+          <div class="modal-title">${esc(config.title)}</div>
+          <div class="modal-sub">${esc(p.name)}</div>
+        </div>
+        <button class="modal-close" onclick="document.getElementById('assign-dialog')?.remove();window._assignDialogRefresh=null">&times;</button>
+      </div>
+      <div class="modal-body">
+        <div id="assign-dialog-content">${renderInner()}</div>
+
+        <div style="display:flex;gap:8px;margin-top:16px;align-items:center;flex-wrap:wrap;border-top:1px solid #1C2333;padding-top:12px">
+          <label style="display:flex;align-items:center;gap:6px;font-size:12px;color:#8B949E;flex:1;min-width:180px">
+            <input type="checkbox" id="assign-check-milestone" checked style="margin:0">
+            Check off milestone when done
+          </label>
+          <button class="btn" onclick="document.getElementById('assign-dialog')?.remove();window._assignDialogRefresh=null">Close</button>
+          <button class="btn-primary" onclick="finalizeAssignment(${projectId}, '${kind}', '${config.milestonePhase}', '${config.milestoneKey}')" style="padding:8px 14px;font-size:13px">Save</button>
+        </div>
+      </div>
+    </div>
+  `;
+  document.body.appendChild(modal);
+  window._assignDialogRefresh = () => {
+    const container = document.getElementById('assign-dialog-content');
+    if (container) container.innerHTML = renderInner();
+  };
+}
+
+function finalizeAssignment(projectId, kind, phaseKey, milestoneKey) {
+  const shouldCheck = document.getElementById('assign-check-milestone')?.checked;
+  const picked = getPlanningAssignment(projectId, kind);
+  if (shouldCheck && picked.length > 0 && phaseKey && milestoneKey) {
+    setMilestone(projectId, phaseKey, milestoneKey, true);
+  }
+  document.getElementById('assign-dialog')?.remove();
+  window._assignDialogRefresh = null;
+  renderCurrentPage();
+}
+
+function showCrewAssignDialog(projectId) {
+  const eligible = state.team.filter(m =>
+    m.access.includes('installer') || m.access.includes('project_manager') || m.access.includes('admin')
+  );
+  showAssignmentDialog(projectId, 'crew', {
+    title: 'Assign Crew',
+    milestonePhase: 'planning',
+    milestoneKey: 'crew_assigned',
+    options: eligible.map(m => ({ id: String(m.id), name: m.name, role: m.primaryRole })),
+    getColor: (opt) => DASHBOARD_ACCESS.find(d => d.key === opt.role)?.color || '#58A6FF'
+  });
+}
+
+function showVehiclesAssignDialog(projectId) {
+  showAssignmentDialog(projectId, 'vehicles', {
+    title: 'Assign Vehicles',
+    milestonePhase: 'planning',
+    milestoneKey: 'vehicles_assigned',
+    options: state.vehicles || [],
+    groupBy: 'type',
+    getColor: () => '#F0883E'
+  });
+}
+
+function showToolsAssignDialog(projectId) {
+  showAssignmentDialog(projectId, 'tools', {
+    title: 'Assign Tools',
+    milestonePhase: 'planning',
+    milestoneKey: 'tools_assigned',
+    options: state.tools || [],
+    groupBy: 'category',
+    getColor: () => '#3FB950'
+  });
+}
 
 function getMilestone(projectId, phaseKey, milestoneKey) {
   return state.milestones?.[projectId]?.[phaseKey]?.[milestoneKey] || false;
@@ -4633,6 +5373,31 @@ async function fetchProjectDetail(projectId) {
 
 // ── Init ──
 async function init() {
+  // Seed default vehicles and tools on first load (can be edited later via Team/Settings)
+  if (!state.vehicles || state.vehicles.length === 0) {
+    state.vehicles = [
+      { id: 'van-1', name: 'White Sprinter Van', type: 'van' },
+      { id: 'van-2', name: 'Cargo Van', type: 'van' },
+      { id: 'trailer-1', name: '20ft Enclosed Trailer', type: 'trailer' },
+      { id: 'truck-1', name: 'F-250 Pickup', type: 'truck' }
+    ];
+    save('vi_vehicles', state.vehicles);
+  }
+  if (!state.tools || state.tools.length === 0) {
+    state.tools = [
+      { id: 'tool-lift', name: 'Genie Scissor Lift', category: 'access' },
+      { id: 'tool-ladders', name: 'Extension Ladders (set)', category: 'access' },
+      { id: 'tool-rack-cart', name: 'Rack Cart', category: 'transport' },
+      { id: 'tool-pallet-jack', name: 'Pallet Jack', category: 'transport' },
+      { id: 'tool-hand-kit', name: 'Hand Tool Kit', category: 'hand' },
+      { id: 'tool-drill-kit', name: 'Drill & Impact Kit', category: 'power' },
+      { id: 'tool-cable-tester', name: 'Cable Tester / Toner', category: 'testing' },
+      { id: 'tool-rf-analyzer', name: 'RF Analyzer', category: 'testing' },
+      { id: 'tool-spl-meter', name: 'SPL Meter', category: 'testing' },
+      { id: 'tool-laser', name: 'Laser Level', category: 'measure' }
+    ];
+    save('vi_tools', state.tools);
+  }
   const c = document.getElementById('content');
   const sel = document.getElementById('role-select');
   if (sel) {
