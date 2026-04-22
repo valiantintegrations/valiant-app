@@ -1298,29 +1298,36 @@ function showMoveMenu(projectId, event) {
   menu.id = 'move-menu';
   menu.style.cssText = 'position:fixed;bottom:70px;left:12px;right:12px;background:#161B22;border:1px solid #30363D;border-radius:12px;z-index:70;padding:8px 0;box-shadow:0 8px 32px rgba(0,0,0,0.5)';
 
-  const stageItems = STAGES.map(s =>
+  const canChangeStage = currentUserHasPermission('projects.change_stage');
+  const canDelete = currentUserHasPermission('projects.delete');
+
+  const stageItems = canChangeStage ? STAGES.map(s =>
     `<div onclick="moveProjectToStage(${projectId},'${s.key}');document.getElementById('move-menu')?.remove()" style="padding:14px 20px;color:#C9D1D9;font-size:14px;cursor:pointer;display:flex;align-items:center;gap:10px;-webkit-tap-highlight-color:transparent">
       <span class="status-pill status-${s.color}" style="font-size:11px">${s.label}</span>
     </div>`
-  ).join('');
+  ).join('') : '';
 
-  const archiveItems = ARCHIVE_BINS.map(b =>
+  const archiveItems = canDelete ? ARCHIVE_BINS.map(b =>
     `<div onclick="archiveProject(${projectId},'${b.key}');document.getElementById('move-menu')?.remove()" style="padding:14px 20px;color:${b.color};font-size:14px;cursor:pointer;display:flex;align-items:center;gap:10px">
       ${b.icon} ${b.label}
     </div>`
-  ).join('');
+  ).join('') : '';
 
   const likely = isLikelyToClose(projectId);
   menu.innerHTML = `
     <div onclick="toggleLikelyToClose(${projectId});document.getElementById('move-menu')?.remove()" style="padding:14px 20px;color:${likely ? '#6E7681' : '#3FB950'};font-size:14px;cursor:pointer;display:flex;align-items:center;gap:10px;background:${likely ? 'transparent' : '#0D1A0E'};-webkit-tap-highlight-color:transparent">
       ${likely ? '⊘ Remove Likely to Close' : '★ Mark Likely to Close'}
     </div>
-    <div style="border-top:1px solid #30363D;margin:4px 0"></div>
-    <div style="padding:8px 20px 4px;font-size:11px;color:#6E7681;text-transform:uppercase;letter-spacing:0.06em">Move to Stage</div>
-    ${stageItems}
-    <div style="border-top:1px solid #30363D;margin:4px 0"></div>
-    <div style="padding:8px 20px 4px;font-size:11px;color:#6E7681;text-transform:uppercase;letter-spacing:0.06em">Archive</div>
-    ${archiveItems}
+    ${canChangeStage ? `
+      <div style="border-top:1px solid #30363D;margin:4px 0"></div>
+      <div style="padding:8px 20px 4px;font-size:11px;color:#6E7681;text-transform:uppercase;letter-spacing:0.06em">Move to Stage</div>
+      ${stageItems}
+    ` : ''}
+    ${canDelete ? `
+      <div style="border-top:1px solid #30363D;margin:4px 0"></div>
+      <div style="padding:8px 20px 4px;font-size:11px;color:#6E7681;text-transform:uppercase;letter-spacing:0.06em">Archive</div>
+      ${archiveItems}
+    ` : ''}
     <div style="border-top:1px solid #30363D;margin:4px 0"></div>
     <div onclick="document.getElementById('move-menu')?.remove()" style="padding:12px 20px;color:#6E7681;font-size:13px;cursor:pointer;text-align:center">Cancel</div>
   `;
@@ -1568,27 +1575,108 @@ function deleteTask(id) {
   renderCurrentPage();
 }
 
-// ── Project Assignments ──
+// ── Project Assignments (Pass 3B: expanded role slots) ──
+// New shape per project: { sales: [{id, lead}], design: [...], pm: [...], install: [...], warehouse: [...] }
+// Legacy shape: { design: [1, 2], install: [3] } — auto-migrated on access
+const ASSIGNMENT_ROLES = [
+  { key: 'sales',     label: 'Sales',       color: '#3FB950', desc: 'Client relationship, contract holder' },
+  { key: 'design',    label: 'Design',      color: '#A371F7', desc: 'CAD, engineering, BOM' },
+  { key: 'pm',        label: 'Project Manager', color: '#58A6FF', desc: 'Owns schedule + coordination' },
+  { key: 'install',   label: 'Install',     color: '#F85149', desc: 'On-site crew' },
+  { key: 'warehouse', label: 'Warehouse',   color: '#F0883E', desc: 'Receiving + staging' }
+];
+
+function migrateAssignment(a) {
+  // Normalize a project's assignment object to new shape. Handles legacy and new.
+  const out = { sales: [], design: [], pm: [], install: [], warehouse: [] };
+  if (!a) return out;
+  ASSIGNMENT_ROLES.forEach(r => {
+    const raw = a[r.key];
+    if (!raw) { out[r.key] = []; return; }
+    if (Array.isArray(raw)) {
+      out[r.key] = raw.map((item, idx) => {
+        if (typeof item === 'number' || typeof item === 'string') {
+          // Legacy: bare member id — first one becomes lead
+          return { id: parseInt(item), lead: idx === 0 };
+        }
+        if (item && typeof item === 'object') {
+          return { id: parseInt(item.id), lead: !!item.lead };
+        }
+        return null;
+      }).filter(Boolean);
+    }
+  });
+  return out;
+}
+
 function getProjectAssignment(projectId) {
-  return state.assignments[projectId] || { design: [], install: [] };
+  const raw = state.assignments[projectId];
+  return migrateAssignment(raw);
 }
 
-function isAssignedTo(projectId, phase, memberId) {
-  const a = getProjectAssignment(projectId);
-  return (a[phase] || []).includes(memberId);
-}
-
-function toggleProjectAssignment(projectId, phase, memberId) {
-  if (!state.assignments[projectId]) state.assignments[projectId] = { design: [], install: [] };
-  const list = state.assignments[projectId][phase] || [];
-  const idx = list.indexOf(memberId);
-  if (idx >= 0) list.splice(idx, 1);
-  else list.push(memberId);
-  state.assignments[projectId][phase] = list;
+function setProjectAssignment(projectId, role, list) {
+  if (!state.assignments[projectId]) state.assignments[projectId] = {};
+  // Persist migrated version of whole project to avoid future legacy reads
+  const full = migrateAssignment(state.assignments[projectId]);
+  full[role] = list;
+  state.assignments[projectId] = full;
   save('vi_assignments', state.assignments);
+}
+
+function isAssignedToProject(memberId, projectId, role) {
+  const a = getProjectAssignment(projectId);
+  if (role) return (a[role] || []).some(x => x.id === memberId);
+  return ASSIGNMENT_ROLES.some(r => (a[r.key] || []).some(x => x.id === memberId));
+}
+
+function isLeadOnProject(memberId, projectId, role) {
+  const a = getProjectAssignment(projectId);
+  return (a[role] || []).some(x => x.id === memberId && x.lead);
+}
+
+function getLeadForRole(projectId, role) {
+  const a = getProjectAssignment(projectId);
+  return (a[role] || []).find(x => x.lead) || null;
+}
+
+function toggleRoleAssignment(projectId, role, memberId) {
+  const a = getProjectAssignment(projectId);
+  const list = a[role] || [];
+  const idx = list.findIndex(x => x.id === memberId);
+  if (idx >= 0) {
+    const wasLead = list[idx].lead;
+    list.splice(idx, 1);
+    // If the removed member was Lead and there are others left, promote the first one
+    if (wasLead && list.length > 0) list[0].lead = true;
+  } else {
+    // If no one is Lead yet, make this new assignee the Lead
+    const hasLead = list.some(x => x.lead);
+    list.push({ id: memberId, lead: !hasLead });
+  }
+  setProjectAssignment(projectId, role, list);
   if (state.currentPage === 'project' && state.currentProject?.id === projectId) {
     renderCurrentPage();
   }
+}
+
+function setRoleLead(projectId, role, memberId) {
+  const a = getProjectAssignment(projectId);
+  const list = a[role] || [];
+  list.forEach(x => x.lead = (x.id === memberId));
+  setProjectAssignment(projectId, role, list);
+  if (state.currentPage === 'project' && state.currentProject?.id === projectId) {
+    renderCurrentPage();
+  }
+}
+
+// ── Legacy compatibility — used by old renderers until migrated ──
+function isAssignedTo(projectId, phase, memberId) {
+  // Old callers pass 'design' or 'install' — map 'install' correctly
+  return isAssignedToProject(memberId, projectId, phase);
+}
+
+function toggleProjectAssignment(projectId, phase, memberId) {
+  toggleRoleAssignment(projectId, phase, memberId);
 }
 
 function getDerivedTasks(role) {
@@ -3196,37 +3284,44 @@ function renderProjectOverviewHTML(p) {
       `;
     })()}
 
-    <!-- Project Team (compact) -->
+    <!-- Project Team (5 role slots with Lead flag) -->
     <div class="dashboard-card" style="margin-top:14px">
-      <div class="dashboard-card-title">Project Team</div>
-      ${['design', 'install'].map(phase => {
-        const assigned = getProjectAssignment(p.id)[phase] || [];
-        const eligible = state.team.filter(m =>
-          phase === 'design' ? m.access.includes('design') || m.access.includes('admin')
-          : m.access.includes('installer') || m.access.includes('project_manager') || m.access.includes('admin')
-        );
-        const phaseColor = phase === 'design' ? '#D29922' : '#58A6FF';
-        const phaseLabel = phase === 'design' ? 'Design' : 'Install';
-        return `
-          <div style="margin-bottom:10px">
-            <div style="font-size:11px;font-weight:600;color:${phaseColor};text-transform:uppercase;letter-spacing:0.06em;margin-bottom:6px">${phaseLabel}</div>
-            <div style="display:flex;flex-wrap:wrap;gap:6px">
-              ${eligible.map(m => {
-                const active = assigned.includes(m.id);
-                const color = DASHBOARD_ACCESS.find(d => d.key === m.primaryRole)?.color || '#6E7681';
-                return `
-                  <div onclick="toggleProjectAssignment(${p.id},'${phase}',${m.id})"
-                    style="display:flex;align-items:center;gap:6px;padding:5px 10px;border-radius:20px;cursor:pointer;border:1px solid ${active ? color + '66' : '#1C2333'};background:${active ? color + '18' : '#0D1117'};-webkit-tap-highlight-color:transparent">
-                    <div style="width:20px;height:20px;border-radius:50%;background:${color}22;border:1px solid ${color}66;display:flex;align-items:center;justify-content:center;font-size:9px;font-weight:600;color:${color}">${esc(m.initials || m.name.slice(0,2).toUpperCase())}</div>
-                    <span style="font-size:12px;color:${active ? '#E6EDF3' : '#6E7681'};font-weight:${active ? '500' : '400'}">${esc(m.name)}</span>
-                    ${active ? `<svg width="10" height="10" viewBox="0 0 10 10" fill="none"><path d="M2 5l2.5 2.5L8 3" stroke="${color}" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>` : ''}
-                  </div>`;
-              }).join('')}
-              ${eligible.length === 0 ? `<span style="font-size:12px;color:#6E7681">No ${phaseLabel.toLowerCase()} team members yet</span>` : ''}
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px">
+        <div class="dashboard-card-title" style="margin-bottom:0">Project Team</div>
+        ${currentUserHasPermission('projects.assign_team') ? `<button class="btn btn-sm" onclick="showAssignTeamDialog(${p.id})" style="font-size:11px;padding:4px 10px">Manage</button>` : ''}
+      </div>
+      ${(() => {
+        const a = getProjectAssignment(p.id);
+        const rows = ASSIGNMENT_ROLES.map(r => {
+          const assigned = a[r.key] || [];
+          if (assigned.length === 0) return `
+            <div class="team-slot-row">
+              <div class="team-slot-role" style="color:${r.color}">${r.label}</div>
+              <div class="team-slot-empty">Unassigned</div>
             </div>
-          </div>
-        `;
-      }).join('')}
+          `;
+          return `
+            <div class="team-slot-row">
+              <div class="team-slot-role" style="color:${r.color}">${r.label}</div>
+              <div class="team-slot-members">
+                ${assigned.map(x => {
+                  const m = getTeamMember(x.id);
+                  if (!m) return '';
+                  const color = DASHBOARD_ACCESS.find(d => d.key === m.primaryRole)?.color || '#6E7681';
+                  return `
+                    <div class="team-slot-pill${x.lead ? ' is-lead' : ''}" title="${x.lead ? 'Lead — ' : ''}${esc(m.name)}">
+                      <div class="team-slot-avatar" style="background:${color}22;border-color:${color};color:${color}">${esc(m.initials || m.name.slice(0,2).toUpperCase())}</div>
+                      <span>${esc(m.name)}</span>
+                      ${x.lead ? `<span class="team-slot-lead-badge" style="color:${r.color};border-color:${r.color}66">LEAD</span>` : ''}
+                    </div>
+                  `;
+                }).join('')}
+              </div>
+            </div>
+          `;
+        }).join('');
+        return `<div class="team-slots">${rows}</div>`;
+      })()}
     </div>
 
     ${p.description ? `
@@ -3266,6 +3361,80 @@ function renderProjectOverviewHTML(p) {
       }
     })()}
   `;
+}
+
+// ── Project Team Assignment dialog (Pass 3B) ──
+function showAssignTeamDialog(projectId) {
+  const p = state.projects.find(pr => pr.id === projectId);
+  if (!p) return;
+  if (!currentUserHasPermission('projects.assign_team')) return;
+  document.getElementById('assign-team-dialog')?.remove();
+  const modal = document.createElement('div');
+  modal.id = 'assign-team-dialog';
+  modal.className = 'modal-overlay';
+  modal.innerHTML = `
+    <div class="modal-container" style="max-width:640px;max-height:85vh;overflow:hidden;display:flex;flex-direction:column">
+      <div class="modal-header">
+        <div>
+          <div class="modal-title">Project Team: ${esc(p.name)}</div>
+          <div class="modal-sub">Assign team members to each role. Star marks the Lead.</div>
+        </div>
+        <button class="modal-close" onclick="document.getElementById('assign-team-dialog')?.remove()">&times;</button>
+      </div>
+      <div class="modal-body" id="assign-team-body" style="overflow-y:auto;flex:1">
+        ${renderAssignTeamBody(projectId)}
+      </div>
+      <div style="padding:12px 14px;border-top:1px solid #1C2333;display:flex;justify-content:flex-end">
+        <button class="btn-primary" onclick="document.getElementById('assign-team-dialog')?.remove();renderCurrentPage()" style="padding:8px 16px;font-size:13px">Done</button>
+      </div>
+    </div>
+  `;
+  document.body.appendChild(modal);
+}
+
+function renderAssignTeamBody(projectId) {
+  const a = getProjectAssignment(projectId);
+  return ASSIGNMENT_ROLES.map(r => {
+    const assigned = a[r.key] || [];
+    const eligible = state.team.filter(m => m.status !== 'inactive');
+    return `
+      <div class="assign-role-block" style="border-left:3px solid ${r.color}">
+        <div style="display:flex;align-items:flex-start;justify-content:space-between;margin-bottom:8px">
+          <div>
+            <div style="font-size:13px;font-weight:600;color:${r.color}">${r.label}</div>
+            <div style="font-size:11px;color:#6E7681;margin-top:2px">${esc(r.desc)}</div>
+          </div>
+          <div style="font-size:11px;color:#8B949E">${assigned.length} assigned</div>
+        </div>
+        <div style="display:flex;flex-wrap:wrap;gap:5px">
+          ${eligible.map(m => {
+            const isAssigned = assigned.some(x => x.id === m.id);
+            const isLead = assigned.some(x => x.id === m.id && x.lead);
+            const memberColor = DASHBOARD_ACCESS.find(d => d.key === m.primaryRole)?.color || '#6E7681';
+            return `
+              <div class="assign-chip${isAssigned ? ' active' : ''}${isLead ? ' lead' : ''}" style="${isAssigned ? `border-color:${r.color}66;background:${r.color}15` : ''}">
+                <div onclick="toggleRoleAssignment(${projectId},'${r.key}',${m.id});refreshAssignTeamBody(${projectId})" style="display:flex;align-items:center;gap:6px;cursor:pointer;padding:4px 10px 4px 4px;-webkit-tap-highlight-color:transparent">
+                  <div style="width:22px;height:22px;border-radius:50%;background:${memberColor}22;border:1px solid ${memberColor};display:flex;align-items:center;justify-content:center;font-size:10px;font-weight:600;color:${memberColor}">${esc(m.initials || m.name.slice(0,2).toUpperCase())}</div>
+                  <span style="font-size:12px;color:${isAssigned ? '#E6EDF3' : '#8B949E'};font-weight:${isAssigned ? '500' : '400'}">${esc(m.name)}</span>
+                </div>
+                ${isAssigned ? `
+                  <button onclick="setRoleLead(${projectId},'${r.key}',${m.id});refreshAssignTeamBody(${projectId})" title="${isLead ? 'Lead' : 'Make Lead'}" style="background:transparent;border:none;padding:3px 8px 3px 4px;cursor:pointer;color:${isLead ? r.color : '#6E7681'};-webkit-tap-highlight-color:transparent">
+                    <svg width="12" height="12" viewBox="0 0 12 12" fill="${isLead ? r.color : 'none'}" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"><path d="M6 1l1.5 3 3.5.5-2.5 2.5.5 3.5L6 9l-3 1.5.5-3.5L1 4.5 4.5 4z"/></svg>
+                  </button>
+                ` : ''}
+              </div>
+            `;
+          }).join('')}
+          ${eligible.length === 0 ? `<div style="font-size:12px;color:#6E7681;font-style:italic">No active team members</div>` : ''}
+        </div>
+      </div>
+    `;
+  }).join('');
+}
+
+function refreshAssignTeamBody(projectId) {
+  const body = document.getElementById('assign-team-body');
+  if (body) body.innerHTML = renderAssignTeamBody(projectId);
 }
 
 // ── Progress tab: where milestones get checked off (Stage C Pass 1) ──
@@ -5047,7 +5216,7 @@ function renderAdminBundles(isMasterAdmin) {
   return `
     <div class="alert alert-info" style="margin-bottom:14px;font-size:12px">
       <svg width="14" height="14" viewBox="0 0 16 16" fill="none"><circle cx="8" cy="8" r="6" stroke="currentColor" stroke-width="1.2"/><path d="M8 5v3M8 10v.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
-      <span>Bundles are permission presets. ${isMasterAdmin ? 'Edit what each bundle includes — your changes apply to every user on that bundle.' : 'View-only — ask a Master Admin to adjust bundles.'} (Bundle editor coming in Pass 3A.5.)</span>
+      <span>Bundles are permission presets. ${isMasterAdmin ? 'Edit a bundle to change what permissions it grants &mdash; your changes apply to every user on that bundle.' : 'View-only &mdash; only Master Admins can edit bundles.'}</span>
     </div>
     <div style="display:flex;flex-direction:column;gap:10px">
       ${Object.entries(state.bundles).map(([key, b]) => `
@@ -5061,14 +5230,119 @@ function renderAdminBundles(isMasterAdmin) {
               <div style="font-size:12px;color:#8B949E;margin-bottom:6px">${esc(b.desc)}</div>
               <div style="font-size:11px;color:#6E7681">${b.permissions.length} permission${b.permissions.length === 1 ? '' : 's'}</div>
             </div>
-            <div style="font-size:11px;color:#8B949E;flex-shrink:0">
-              ${state.team.filter(m => getUserPermissions(m.id)?.bundle === key).length} user${state.team.filter(m => getUserPermissions(m.id)?.bundle === key).length === 1 ? '' : 's'}
+            <div style="display:flex;flex-direction:column;align-items:flex-end;gap:6px;flex-shrink:0">
+              <div style="font-size:11px;color:#8B949E">
+                ${state.team.filter(m => getUserPermissions(m.id)?.bundle === key).length} user${state.team.filter(m => getUserPermissions(m.id)?.bundle === key).length === 1 ? '' : 's'}
+              </div>
+              ${isMasterAdmin ? `<button class="btn btn-sm" onclick="showBundleEditDialog('${key}')" style="font-size:11px;padding:4px 10px">Edit</button>` : ''}
             </div>
           </div>
         </div>
       `).join('')}
     </div>
   `;
+}
+
+// ── Bundle editor (Pass 3B Priority 3) ──
+function showBundleEditDialog(bundleKey) {
+  if (!currentUserHasPermission('admin.system')) return; // only Master Admin can edit bundles
+  const bundle = state.bundles[bundleKey];
+  if (!bundle) return;
+  // Snapshot for cancel
+  window._bundleOriginal = { key: bundleKey, snapshot: JSON.stringify(bundle) };
+
+  document.getElementById('bundle-edit-dialog')?.remove();
+  const modal = document.createElement('div');
+  modal.id = 'bundle-edit-dialog';
+  modal.className = 'modal-overlay';
+  modal.innerHTML = `
+    <div class="modal-container" style="max-width:600px;max-height:85vh;overflow:hidden;display:flex;flex-direction:column">
+      <div class="modal-header">
+        <div>
+          <div class="modal-title">Edit Bundle: <span style="color:${bundle.color}">${esc(bundle.label)}</span></div>
+          <div class="modal-sub">Changes apply to all users on this bundle</div>
+        </div>
+        <button class="modal-close" onclick="cancelBundleEdit()">&times;</button>
+      </div>
+      <div class="modal-body" style="overflow-y:auto;flex:1">
+        <label style="font-size:11px;color:#8B949E;font-weight:500;display:block;margin-bottom:4px">Label</label>
+        <input type="text" id="bundle-label" class="form-input" value="${esc(bundle.label)}" style="width:100%;margin-bottom:12px">
+
+        <label style="font-size:11px;color:#8B949E;font-weight:500;display:block;margin-bottom:4px">Description</label>
+        <textarea id="bundle-desc" class="form-textarea" rows="2" style="width:100%;margin-bottom:14px">${esc(bundle.desc)}</textarea>
+
+        <div style="font-size:11px;color:#8B949E;font-weight:500;margin-bottom:8px">Permissions in this bundle</div>
+        <div id="bundle-perm-list" style="display:flex;flex-direction:column;gap:4px">
+          ${renderBundleEditPermissions(bundleKey)}
+        </div>
+      </div>
+      <div style="display:flex;gap:8px;padding:14px;border-top:1px solid #1C2333">
+        <button class="btn" style="flex:1" onclick="cancelBundleEdit()">Cancel</button>
+        <button class="btn-primary" style="flex:1" onclick="saveBundleEdit('${bundleKey}')">Save Bundle</button>
+      </div>
+    </div>
+  `;
+  document.body.appendChild(modal);
+}
+
+function renderBundleEditPermissions(bundleKey) {
+  const bundle = state.bundles[bundleKey];
+  const bundleSet = new Set(bundle.permissions);
+  const groups = {};
+  PERMISSION_KEYS.forEach(k => {
+    const g = k.split('.')[0];
+    if (!groups[g]) groups[g] = [];
+    groups[g].push(k);
+  });
+  const labels = {
+    admin: 'Admin', projects: 'Projects', design: 'Design', install: 'Install',
+    purchasing: 'Purchasing', warehouse: 'Warehouse', vendors: 'Vendors',
+    financials: 'Financials', sales: 'Sales', client: 'Client'
+  };
+  return Object.entries(groups).map(([g, perms]) => `
+    <div style="margin-top:10px">
+      <div style="font-size:10px;font-weight:700;color:#6E7681;text-transform:uppercase;letter-spacing:0.08em;margin-bottom:6px">${labels[g] || g}</div>
+      ${perms.map(k => {
+        const checked = bundleSet.has(k);
+        return `
+          <div style="display:flex;align-items:center;gap:10px;padding:6px 10px;border-radius:4px;border:1px solid #1C2333;margin-bottom:3px">
+            <input type="checkbox" ${checked ? 'checked' : ''} onchange="toggleBundlePermission('${bundleKey}','${k}',this.checked)" style="margin:0">
+            <div style="font-size:12px;color:#E6EDF3;font-family:monospace">${k}</div>
+          </div>
+        `;
+      }).join('')}
+    </div>
+  `).join('');
+}
+
+function toggleBundlePermission(bundleKey, permKey, checked) {
+  const bundle = state.bundles[bundleKey];
+  if (!bundle) return;
+  const set = new Set(bundle.permissions);
+  if (checked) set.add(permKey);
+  else set.delete(permKey);
+  bundle.permissions = Array.from(set);
+}
+
+function saveBundleEdit(bundleKey) {
+  const bundle = state.bundles[bundleKey];
+  if (!bundle) return;
+  const label = document.getElementById('bundle-label')?.value;
+  const desc = document.getElementById('bundle-desc')?.value;
+  if (label) bundle.label = label;
+  if (desc !== undefined) bundle.desc = desc;
+  save('vi_bundles', state.bundles);
+  window._bundleOriginal = null;
+  document.getElementById('bundle-edit-dialog')?.remove();
+  renderCurrentPage();
+}
+
+function cancelBundleEdit() {
+  if (window._bundleOriginal) {
+    state.bundles[window._bundleOriginal.key] = JSON.parse(window._bundleOriginal.snapshot);
+    window._bundleOriginal = null;
+  }
+  document.getElementById('bundle-edit-dialog')?.remove();
 }
 
 function showUserPermissionsDialog(memberId) {
