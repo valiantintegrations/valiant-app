@@ -319,7 +319,8 @@ const state = {
   vehicles: JSON.parse(localStorage.getItem('vi_vehicles') || '[]'),
   tools: JSON.parse(localStorage.getItem('vi_tools') || '[]'),
   bundles: JSON.parse(localStorage.getItem('vi_bundles') || 'null') || JSON.parse(JSON.stringify(DEFAULT_BUNDLES)),
-  userPermissions: JSON.parse(localStorage.getItem('vi_user_perms') || '{}')
+  userPermissions: JSON.parse(localStorage.getItem('vi_user_perms') || '{}'),
+  dashboardMode: localStorage.getItem('vi_dashboard_mode') || 'mine'
 };
 
 // ── Team Roster ──
@@ -1459,10 +1460,15 @@ function renderCurrentPage() {
 function openProject(id) {
   const p = state.projects.find(x => x.id === id);
   if (!p) return;
+  // Remember where we came from so Back returns to the right page
+  if (state.currentPage && state.currentPage !== 'project') {
+    state.projectOrigin = state.currentPage;
+  } else if (!state.projectOrigin) {
+    state.projectOrigin = 'dashboard';
+  }
   state.currentProject = p;
   state.projectTab = getDefaultProjectTab();
   state.currentPage = 'project';
-  // Clear active highlighting on nav (project is not in nav)
   document.querySelectorAll('.nav-item').forEach(el => el.classList.remove('active'));
   document.querySelectorAll('#bottom-nav .bnav-item').forEach(el => el.classList.remove('active'));
   const titleEl = document.getElementById('page-title');
@@ -1481,7 +1487,9 @@ function getDefaultProjectTab() {
 
 function closeProjectPage() {
   state.currentProject = null;
-  navigate('dashboard');
+  const origin = state.projectOrigin || 'dashboard';
+  state.projectOrigin = null;
+  navigate(origin);
 }
 
 function switchProjectTab(tab) {
@@ -2598,7 +2606,407 @@ function quickAddTask() {
 }
 // ── Dashboard ──
 function renderDashboard(c) {
-  const projects = state.projects.filter(p => !p.archived);
+  const activeMember = getTeamMember(getActiveTeamMemberId());
+  const memberId = activeMember?.id;
+  document.getElementById('page-title').textContent = 'Dashboard';
+
+  const canSeeAllProjects = currentUserHasPermission('projects.view_all');
+  const isMasterAdmin = currentUserHasPermission('admin.system');
+
+  // Determine which view mode to show
+  // Default: Master Admin → executive, others → mine
+  let dashboardMode = state.dashboardMode || (isMasterAdmin ? 'executive' : 'mine');
+  // If user explicitly set executive but lost Master Admin perm, fall back
+  if (dashboardMode === 'executive' && !isMasterAdmin) dashboardMode = 'mine';
+  // If user explicitly set pipeline but lost view_all perm, fall back
+  if (dashboardMode === 'pipeline' && !canSeeAllProjects) dashboardMode = 'mine';
+
+  // Compute my assignments across all active projects
+  const activeProjects = state.projects.filter(p => !p.archived);
+  const myAssignments = computeMyAssignments(memberId, activeProjects);
+  const totalMyWork = Object.values(myAssignments).reduce((n, arr) => n + arr.length, 0);
+
+  // Build mode toggle — tabs visible based on permissions
+  const tabs = [];
+  if (isMasterAdmin) tabs.push({ key: 'executive', label: 'Executive' });
+  tabs.push({ key: 'mine', label: 'My Work', badge: totalMyWork });
+  if (canSeeAllProjects) tabs.push({ key: 'pipeline', label: 'Full Pipeline' });
+
+  const modeToggle = tabs.length > 1 ? `
+    <div style="display:inline-flex;background:#0D1117;border:1px solid #30363D;border-radius:6px;overflow:hidden;font-size:12px;margin-bottom:14px">
+      ${tabs.map(t => `
+        <div onclick="setDashboardMode('${t.key}')" style="padding:7px 14px;cursor:pointer;transition:all 0.15s;${dashboardMode === t.key ? 'background:#1565C0;color:#58A6FF;font-weight:500' : 'color:#8B949E'};-webkit-tap-highlight-color:transparent">
+          ${t.label}${t.badge > 0 ? ` <span style="opacity:0.7;margin-left:4px">${t.badge}</span>` : ''}
+        </div>
+      `).join('')}
+    </div>
+  ` : '';
+
+  if (dashboardMode === 'executive') {
+    c.innerHTML = modeToggle + renderExecutiveDashboard(activeProjects);
+  } else if (dashboardMode === 'mine') {
+    c.innerHTML = modeToggle + renderMyWorkDashboard(memberId, activeProjects, myAssignments, activeMember);
+  } else {
+    c.innerHTML = modeToggle + renderPipelineDashboard(activeProjects);
+  }
+}
+
+function setDashboardMode(mode) {
+  state.dashboardMode = mode;
+  localStorage.setItem('vi_dashboard_mode', mode);
+  renderDashboard(document.getElementById('content'));
+}
+
+// Compute everything a member is assigned to, grouped by role
+function computeMyAssignments(memberId, projects) {
+  const out = { sales: [], design: [], pm: [], install: [], warehouse: [] };
+  if (!memberId) return out;
+  projects.forEach(p => {
+    const a = getProjectAssignment(p.id);
+    ASSIGNMENT_ROLES.forEach(r => {
+      const entry = (a[r.key] || []).find(x => x.id === memberId);
+      if (entry) {
+        out[r.key].push({ project: p, isLead: entry.lead });
+      }
+    });
+  });
+  return out;
+}
+
+// Sort projects by urgency: booked install within 30d first, then upcoming, then everything else
+function sortByUrgency(projects) {
+  return [...projects].sort((a, b) => {
+    const aDate = getInstallWindow(a)?.start;
+    const bDate = getInstallWindow(b)?.start;
+    if (aDate && bDate) return new Date(aDate) - new Date(bDate);
+    if (aDate) return -1;
+    if (bDate) return 1;
+    // Fall back to stage order + progress
+    const aStage = STAGES.findIndex(s => s.key === a.stage);
+    const bStage = STAGES.findIndex(s => s.key === b.stage);
+    return bStage - aStage;
+  });
+}
+
+function renderMyWorkDashboard(memberId, activeProjects, myAssignments, activeMember) {
+  const totalAssigned = Object.values(myAssignments).reduce((n, arr) => n + arr.length, 0);
+
+  // If no assignments at all and user is Master Admin / has view_all → suggest switching to pipeline
+  if (totalAssigned === 0) {
+    const canSeeAll = currentUserHasPermission('projects.view_all');
+    return `
+      <div style="max-width:520px;margin:60px auto;text-align:center;padding:40px 20px">
+        <svg width="56" height="56" viewBox="0 0 48 48" fill="none" style="margin:0 auto 16px;opacity:0.4">
+          <path d="M8 12h32M8 20h32M8 28h20M8 36h14" stroke="#6E7681" stroke-width="2" stroke-linecap="round"/>
+        </svg>
+        <div style="font-size:16px;font-weight:600;color:#E6EDF3;margin-bottom:6px">You're not on any active projects</div>
+        <div style="font-size:13px;color:#8B949E;margin-bottom:16px">When someone assigns you to a project&rsquo;s Sales, Design, PM, Install, or Warehouse role, it&rsquo;ll show up here organized by role.</div>
+        ${canSeeAll ? `<button class="btn-primary" onclick="setDashboardMode('pipeline')" style="padding:10px 20px;font-size:13px">View Full Pipeline &rarr;</button>` : ''}
+      </div>
+    `;
+  }
+
+  // Compute overall readiness metrics relevant to this user
+  const allMyProjects = new Set();
+  Object.values(myAssignments).forEach(arr => arr.forEach(a => allMyProjects.add(a.project.id)));
+  const myProjects = activeProjects.filter(p => allMyProjects.has(p.id));
+  const urgentProjects = myProjects.filter(p => {
+    const win = getInstallWindow(p);
+    if (!win) return false;
+    const days = daysUntil(win.start);
+    return days !== null && days >= 0 && days <= 14;
+  });
+  const flaggedProjects = myProjects.filter(p => computeProjectFlags(p).total > 0);
+
+  // Build summary row
+  const summaryRow = `
+    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:10px;margin-bottom:18px">
+      <div class="metric-card">
+        <div class="metric-label">My Projects</div>
+        <div class="metric-value">${myProjects.length}</div>
+        <div class="metric-sub">across ${Object.keys(myAssignments).filter(k => myAssignments[k].length > 0).length} role${Object.keys(myAssignments).filter(k => myAssignments[k].length > 0).length === 1 ? '' : 's'}</div>
+      </div>
+      ${urgentProjects.length > 0 ? `
+        <div class="metric-card" style="border-color:#DA3633">
+          <div class="metric-label">Urgent</div>
+          <div class="metric-value" style="color:#F85149">${urgentProjects.length}</div>
+          <div class="metric-sub">install within 14 days</div>
+        </div>
+      ` : ''}
+      ${flaggedProjects.length > 0 ? `
+        <div class="metric-card" style="border-color:#9E6A03">
+          <div class="metric-label">Needs Attention</div>
+          <div class="metric-value" style="color:#D29922">${flaggedProjects.length}</div>
+          <div class="metric-sub">has flagged items</div>
+        </div>
+      ` : ''}
+    </div>
+  `;
+
+  // Build sections — one per role that has assignments
+  const sections = ASSIGNMENT_ROLES.map(r => {
+    const assignments = myAssignments[r.key];
+    if (!assignments.length) return '';
+    // Sort: Leads first, then by urgency
+    const sortedAssignments = [...assignments].sort((a, b) => {
+      if (a.isLead !== b.isLead) return a.isLead ? -1 : 1;
+      const aDate = getInstallWindow(a.project)?.start;
+      const bDate = getInstallWindow(b.project)?.start;
+      if (aDate && bDate) return new Date(aDate) - new Date(bDate);
+      if (aDate) return -1;
+      if (bDate) return 1;
+      return 0;
+    });
+    const leadCount = assignments.filter(a => a.isLead).length;
+
+    return `
+      <div class="mywork-section">
+        <div class="mywork-section-header">
+          <div style="display:flex;align-items:center;gap:8px">
+            <div style="width:8px;height:8px;border-radius:50%;background:${r.color}"></div>
+            <div class="mywork-section-title" style="color:${r.color}">${r.label}</div>
+            <div class="mywork-section-count">${assignments.length}${leadCount > 0 ? ` · ${leadCount} lead` : ''}</div>
+          </div>
+        </div>
+        <div class="mywork-cards">
+          ${sortedAssignments.map(entry => renderMyWorkCard(entry.project, r, entry.isLead)).join('')}
+        </div>
+      </div>
+    `;
+  }).join('');
+
+  return `
+    ${summaryRow}
+    ${sections}
+  `;
+}
+
+function renderMyWorkCard(p, role, isLead) {
+  const phaseData = PHASES.map(ph => ({ phase: ph, pct: phaseProgress(p, ph) }));
+  const totalMilestones = PHASES.reduce((s, ph) => s + ph.milestones.length, 0);
+  const doneMilestones = PHASES.reduce((s, ph) => s + ph.milestones.filter(m => milestoneProgress(p, ph, m) >= 1).length, 0);
+  const overallPct = totalMilestones > 0 ? (doneMilestones / totalMilestones) : 0;
+  const win = getInstallWindow(p);
+  const days = win ? daysUntil(win.start) : null;
+  const cdClass = win ? countdownClass(win.start) : '';
+  const flags = computeProjectFlags(p);
+  const urgent = days !== null && days >= 0 && days <= 14;
+  const stg = STAGES.find(s => s.key === p.stage) || STAGES[0];
+
+  return `
+    <div class="mywork-card ${isLead ? 'is-lead' : ''} ${urgent ? 'urgent' : ''}" onclick="openProject(${p.id})" style="${isLead ? `border-left:3px solid ${role.color}` : ''}">
+      <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:8px;margin-bottom:6px">
+        <div style="flex:1;min-width:0">
+          <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap">
+            ${isLead ? `<div style="width:10px;height:10px;border-radius:50%;background:${role.color};flex-shrink:0" title="Lead"></div>` : ''}
+            <span style="font-size:13px;font-weight:600;color:#E6EDF3">${esc(p.name)}</span>
+          </div>
+          <div style="font-size:11px;color:#8B949E;margin-top:2px">${esc(p.client_name || 'No client')}${p.city ? ' · ' + esc(p.city) : ''}</div>
+        </div>
+        <span class="status-pill status-${stg.color}" style="font-size:10px;flex-shrink:0">${stg.label}</span>
+      </div>
+
+      <!-- Segmented progress map -->
+      <div class="mywork-pmap">
+        ${phaseData.map(d => {
+          const w = (d.phase.milestones.length / totalMilestones) * 100;
+          return `
+            <div class="mywork-pmap-seg" style="width:${w}%" title="${d.phase.label}: ${Math.round(d.pct * 100)}%">
+              <div class="mywork-pmap-fill" style="width:${Math.round(d.pct * 100)}%;background:${d.phase.color}"></div>
+            </div>
+          `;
+        }).join('')}
+      </div>
+
+      <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;margin-top:6px">
+        <div style="font-size:11px;color:#8B949E">${doneMilestones}/${totalMilestones} milestones</div>
+        <div style="display:flex;align-items:center;gap:6px">
+          ${flags.total > 0 ? `<span style="font-size:10px;padding:2px 6px;border-radius:3px;background:#1A150D;color:#D29922;border:1px solid #9E6A03">${flags.total} flag${flags.total === 1 ? '' : 's'}</span>` : ''}
+          ${win ? `<span class="countdown-pill ${cdClass}">${fmtCountdown(win.start)}</span>` : ''}
+        </div>
+      </div>
+    </div>
+  `;
+}
+
+// Executive dashboard — high-level business overview for Master Admin
+function renderExecutiveDashboard(activeProjects) {
+  const totalValue = getPipelineValue(activeProjects);
+  const likelyValue = getLikelyToCloseTotal();
+  const likelyCount = activeProjects.filter(p => isLikelyToClose(p.id)).length;
+  const closeRate = getCloseRate();
+  const archivedCount = state.projects.filter(p => p.archived).length;
+  const wonCount = Object.values(state.archived).filter(v => v === 'won').length;
+  const lostCount = Object.values(state.archived).filter(v => v === 'lost').length;
+  const contractedCount = activeProjects.filter(p => p.stage === 'contract').length;
+  const reviewCount = activeProjects.filter(p => isContractNeedsReview(p)).length;
+
+  // Project status breakdown
+  const byStage = {};
+  STAGES.forEach(s => byStage[s.key] = 0);
+  activeProjects.forEach(p => {
+    if (byStage[p.stage] !== undefined) byStage[p.stage]++;
+  });
+
+  // Install pipeline — projects with upcoming installs
+  const upcomingInstalls = activeProjects
+    .map(p => ({ p, win: getInstallWindow(p) }))
+    .filter(x => x.win)
+    .map(x => ({ ...x, days: daysUntil(x.win.start) }))
+    .filter(x => x.days !== null && x.days >= -7)
+    .sort((a, b) => a.days - b.days)
+    .slice(0, 8);
+
+  // Stuck projects — haven't moved in 21+ days, or contract phase with no install date
+  const stuckProjects = activeProjects.filter(p => {
+    if (p.stage === 'contract' && !getInstallWindow(p)) return true;
+    const lastActivity = state.recentActivity?.[p.id];
+    if (!lastActivity) return false;
+    const days = (Date.now() - new Date(lastActivity).getTime()) / 86400000;
+    return days > 21;
+  }).slice(0, 6);
+
+  // Cross-project flag rollup — projects with flags, grouped
+  const flaggedProjects = activeProjects
+    .map(p => ({ p, flags: computeProjectFlags(p) }))
+    .filter(x => x.flags.total > 0)
+    .sort((a, b) => b.flags.total - a.flags.total);
+  const totalFlags = flaggedProjects.reduce((s, x) => s + x.flags.total, 0);
+
+  // Ready for install — gated projects that have hit the Mark Ready button
+  const readyForInstall = activeProjects.filter(p => isMarkedReadyForInstall(p.id));
+
+  // Projects currently in install
+  const inInstall = activeProjects.filter(p => {
+    const installPhase = PHASES.find(ph => ph.key === 'install');
+    const pct = phaseProgress(p, installPhase);
+    return pct > 0 && pct < 1;
+  });
+
+  return `
+    <!-- Hero metrics row -->
+    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:12px;margin-bottom:20px">
+      <div class="metric-card">
+        <div class="metric-label">Pipeline Value</div>
+        <div class="metric-value">${fmt(totalValue)}</div>
+        <div class="metric-sub">${activeProjects.length} active projects</div>
+      </div>
+      <div class="metric-card" style="${likelyCount > 0 ? 'border-color:#238636' : ''}">
+        <div class="metric-label">Likely to Close</div>
+        <div class="metric-value" style="${likelyCount > 0 ? 'color:#3FB950' : ''}">${fmt(likelyValue)}</div>
+        <div class="metric-sub">${likelyCount} project${likelyCount !== 1 ? 's' : ''} flagged</div>
+      </div>
+      <div class="metric-card" style="${closeRate !== null && closeRate >= 50 ? 'border-color:#238636' : ''}">
+        <div class="metric-label">Close Rate</div>
+        <div class="metric-value" style="${closeRate !== null && closeRate >= 50 ? 'color:#3FB950' : ''}">${closeRate !== null ? closeRate + '%' : '—'}</div>
+        <div class="metric-sub">${wonCount} won · ${lostCount} lost</div>
+      </div>
+      <div class="metric-card" style="${reviewCount > 0 ? 'border-color:#DA3633' : ''}">
+        <div class="metric-label">Needs Review</div>
+        <div class="metric-value" style="${reviewCount > 0 ? 'color:#F85149' : ''}">${reviewCount}</div>
+        <div class="metric-sub">${contractedCount} contracted total</div>
+      </div>
+    </div>
+
+    <!-- Two-column layout: Install pipeline + Project status -->
+    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(360px,1fr));gap:14px;margin-bottom:20px">
+      <!-- Pipeline by stage -->
+      <div class="dashboard-card">
+        <div class="dashboard-card-title">Pipeline by Stage</div>
+        ${STAGES.map(s => {
+          const count = byStage[s.key];
+          const pct = activeProjects.length > 0 ? (count / activeProjects.length) * 100 : 0;
+          return `
+            <div style="margin-bottom:8px">
+              <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:3px">
+                <span style="font-size:12px;color:#C9D1D9">${s.label}</span>
+                <span style="font-size:11px;color:#6E7681">${count}</span>
+              </div>
+              <div style="height:5px;background:#0D1117;border:1px solid #1C2333;border-radius:3px;overflow:hidden">
+                <div style="height:100%;width:${pct}%;background:var(--status-${s.color}, #58A6FF);transition:width 0.3s ease"></div>
+              </div>
+            </div>
+          `;
+        }).join('')}
+      </div>
+
+      <!-- Upcoming installs -->
+      <div class="dashboard-card">
+        <div class="dashboard-card-title">Upcoming Installs</div>
+        ${upcomingInstalls.length === 0 ? `
+          <div style="font-size:12px;color:#6E7681;font-style:italic;padding:10px 0">No installs scheduled in the near term</div>
+        ` : upcomingInstalls.map(({ p, win, days }) => {
+          const cdClass = countdownClass(win.start);
+          return `
+            <div onclick="openProject(${p.id})" style="display:flex;align-items:center;justify-content:space-between;padding:8px 10px;border-radius:6px;cursor:pointer;background:#0D1117;border:1px solid #1C2333;margin-bottom:5px;-webkit-tap-highlight-color:transparent">
+              <div style="flex:1;min-width:0">
+                <div style="font-size:12px;color:#E6EDF3;font-weight:500;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${esc(p.name)}</div>
+                <div style="font-size:10px;color:#6E7681;margin-top:1px">${esc(p.client_name || '')}${win.source === 'booked' ? ' · Booked' : ' · Estimated'}</div>
+              </div>
+              <span class="countdown-pill ${cdClass}" style="flex-shrink:0">${fmtCountdown(win.start)}</span>
+            </div>
+          `;
+        }).join('')}
+      </div>
+    </div>
+
+    <!-- Full-width attention section -->
+    ${(stuckProjects.length > 0 || flaggedProjects.length > 0 || readyForInstall.length > 0) ? `
+      <div class="dashboard-card" style="margin-bottom:20px">
+        <div class="dashboard-card-title">Attention &amp; Action</div>
+        <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:14px">
+          ${readyForInstall.length > 0 ? `
+            <div>
+              <div style="font-size:11px;font-weight:700;color:#3FB950;text-transform:uppercase;letter-spacing:0.06em;margin-bottom:6px">Ready for Install · ${readyForInstall.length}</div>
+              ${readyForInstall.slice(0, 5).map(p => `
+                <div onclick="openProject(${p.id})" style="font-size:12px;color:#C9D1D9;padding:4px 0;cursor:pointer;-webkit-tap-highlight-color:transparent;border-bottom:1px solid #1C2333">${esc(p.name)}</div>
+              `).join('')}
+            </div>
+          ` : ''}
+          ${inInstall.length > 0 ? `
+            <div>
+              <div style="font-size:11px;font-weight:700;color:#F85149;text-transform:uppercase;letter-spacing:0.06em;margin-bottom:6px">In Install · ${inInstall.length}</div>
+              ${inInstall.slice(0, 5).map(p => {
+                const installPhase = PHASES.find(ph => ph.key === 'install');
+                const pct = Math.round(phaseProgress(p, installPhase) * 100);
+                return `<div onclick="openProject(${p.id})" style="font-size:12px;color:#C9D1D9;padding:4px 0;cursor:pointer;-webkit-tap-highlight-color:transparent;border-bottom:1px solid #1C2333;display:flex;align-items:center;justify-content:space-between"><span>${esc(p.name)}</span><span style="font-size:10px;color:#6E7681">${pct}%</span></div>`;
+              }).join('')}
+            </div>
+          ` : ''}
+          ${stuckProjects.length > 0 ? `
+            <div>
+              <div style="font-size:11px;font-weight:700;color:#D29922;text-transform:uppercase;letter-spacing:0.06em;margin-bottom:6px">Stuck · ${stuckProjects.length}</div>
+              ${stuckProjects.slice(0, 5).map(p => {
+                const stg = STAGES.find(s => s.key === p.stage);
+                return `<div onclick="openProject(${p.id})" style="font-size:12px;color:#C9D1D9;padding:4px 0;cursor:pointer;-webkit-tap-highlight-color:transparent;border-bottom:1px solid #1C2333;display:flex;align-items:center;justify-content:space-between"><span>${esc(p.name)}</span><span style="font-size:10px;color:#6E7681">${stg?.label || ''}</span></div>`;
+              }).join('')}
+            </div>
+          ` : ''}
+          ${flaggedProjects.length > 0 ? `
+            <div>
+              <div style="font-size:11px;font-weight:700;color:#F85149;text-transform:uppercase;letter-spacing:0.06em;margin-bottom:6px">Flagged Issues · ${totalFlags}</div>
+              ${flaggedProjects.slice(0, 5).map(({ p, flags }) => `
+                <div onclick="openProject(${p.id})" style="font-size:12px;color:#C9D1D9;padding:4px 0;cursor:pointer;-webkit-tap-highlight-color:transparent;border-bottom:1px solid #1C2333;display:flex;align-items:center;justify-content:space-between"><span>${esc(p.name)}</span><span style="font-size:10px;color:#F85149">${flags.total}</span></div>
+              `).join('')}
+            </div>
+          ` : ''}
+        </div>
+      </div>
+    ` : ''}
+
+    <!-- Archive summary -->
+    <div class="archive-row" style="margin-top:4px">
+      ${ARCHIVE_BINS.map(b => {
+        const count = getArchivedProjects(b.key).length;
+        return '<div class="archive-bin" ondragover="onDragOver(event)" ondragleave="onDragLeave(event)" ondrop="onDropArchive(event, \'' + b.key + '\')"><span class="archive-icon">' + b.icon + '</span><span class="archive-label">' + b.label + '</span>' + (count > 0 ? '<span class="archive-count" onclick="toggleArchiveExpand(\'' + b.key + '\')">' + count + '</span>' : '') + '</div>';
+      }).join('')}
+    </div>
+    <div id="archive-expanded"></div>
+    ${renderRecentActivity()}
+  `;
+}
+
+function renderPipelineDashboard(projects) {
   const byStage = {};
   STAGES.forEach(s => byStage[s.key] = []);
   projects.forEach(p => {
@@ -2616,11 +3024,11 @@ function renderDashboard(c) {
   const archivedCount = state.projects.filter(p => p.archived).length;
   const likelyValue = getLikelyToCloseTotal();
   const likelyCount = projects.filter(p => isLikelyToClose(p.id)).length;
+  const closeRate = getCloseRate();
 
   const activeView = state.dashboardView || currentUserRole;
   const activeMember = getTeamMember(getActiveTeamMemberId());
   const userAccess = activeMember?.access || ['admin'];
-  document.getElementById('page-title').textContent = getDashboardTitle();
 
   const viewTabs = userAccess.length > 1 ? `
     <div style="display:flex;gap:4px;margin-bottom:12px;overflow-x:auto;-webkit-overflow-scrolling:touch;padding-bottom:2px">
@@ -2633,22 +3041,22 @@ function renderDashboard(c) {
     </div>
   ` : '';
 
-  const closeRate = getCloseRate();
-
-  c.innerHTML = `
+  return `
     ${viewTabs}
     <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-bottom:20px;align-items:start">
       <div class="metrics-grid" style="margin-bottom:0">
-        <div class="metric-card">
-          <div class="metric-label">Pipeline Value</div>
-          <div class="metric-value">${fmt(totalValue)}</div>
-          <div class="metric-sub">${projects.length} projects${archivedCount > 0 ? ', ' + archivedCount + ' archived' : ''}</div>
-        </div>
-        <div class="metric-card" style="${likelyCount > 0 ? 'border-color:#238636' : ''}">
-          <div class="metric-label">Likely to Close</div>
-          <div class="metric-value" style="${likelyCount > 0 ? 'color:#3FB950' : ''}">${fmt(likelyValue)}</div>
-          <div class="metric-sub">${likelyCount} project${likelyCount !== 1 ? 's' : ''} flagged</div>
-        </div>
+        ${canSee('financials') ? `
+          <div class="metric-card">
+            <div class="metric-label">Pipeline Value</div>
+            <div class="metric-value">${fmt(totalValue)}</div>
+            <div class="metric-sub">${projects.length} projects${archivedCount > 0 ? ', ' + archivedCount + ' archived' : ''}</div>
+          </div>
+          <div class="metric-card" style="${likelyCount > 0 ? 'border-color:#238636' : ''}">
+            <div class="metric-label">Likely to Close</div>
+            <div class="metric-value" style="${likelyCount > 0 ? 'color:#3FB950' : ''}">${fmt(likelyValue)}</div>
+            <div class="metric-sub">${likelyCount} project${likelyCount !== 1 ? 's' : ''} flagged</div>
+          </div>
+        ` : ''}
         <div class="metric-card">
           <div class="metric-label">Contracted</div>
           <div class="metric-value">${activeCount}</div>
@@ -2886,7 +3294,11 @@ function renderProjectPage(c) {
         <div class="project-page-top">
           <button class="project-back-btn" onclick="closeProjectPage()">
             <svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M9 2L4 7l5 5" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>
-            <span>Back</span>
+            <span>${(() => {
+              const origin = state.projectOrigin || 'dashboard';
+              const labels = { dashboard: 'Dashboard', projects: 'Projects', calendar: 'Calendar', shopwork: 'Shop Work', vendors: 'Vendors' };
+              return labels[origin] || 'Back';
+            })()}</span>
           </button>
           <div class="project-page-title-block">
             <div class="project-page-name">${esc(p.name)}</div>
@@ -2896,7 +3308,6 @@ function renderProjectPage(c) {
             ${projectTypeBadgeHTML(p)}
             <span class="status-pill status-${stg.color}">${stg.label}</span>
             ${gbbTier ? `<span style="font-size:10px;font-weight:600;padding:3px 8px;border-radius:3px;${gbbBadgeStyle}">${gbbTier.toUpperCase()}</span>` : ''}
-            <button class="btn btn-sm" onclick="toggleLikelyToClose(${p.id})" title="${likely ? 'Remove Likely to Close' : 'Mark Likely to Close'}" style="${likely ? 'background:#0D1A0E;border-color:#238636;color:#3FB950' : ''};min-height:32px;padding:4px 10px"><span style="font-size:14px">★</span></button>
           </div>
         </div>
         ${p.systems.length ? `<div class="project-page-tags">${p.systems.map(systemTagHTML).join('')}</div>` : ''}
@@ -3216,6 +3627,48 @@ function renderProjectOverviewHTML(p) {
         <div style="font-size:11px;color:#6E7681;margin-top:4px">Set this when the contract is signed</div>
       `}
     </div>
+
+    <!-- Shop Work card -->
+    ${(() => {
+      const tasks = getShopWorkForProject(p.id);
+      const openTasks = tasks.filter(t => t.status !== 'done');
+      const doneTasks = tasks.filter(t => t.status === 'done');
+      return `
+        <div class="dashboard-card" style="margin-bottom:14px">
+          <div class="dashboard-card-title" style="display:flex;align-items:center;justify-content:space-between">
+            <span>Shop Work${tasks.length > 0 ? ` · ${doneTasks.length}/${tasks.length}` : ''}</span>
+            <button class="btn btn-sm" onclick="showShopWorkDialog();setTimeout(()=>{const sel=document.getElementById('sw-project');if(sel)sel.value='${p.id}'},50)" style="font-size:11px;padding:4px 10px">+ Add</button>
+          </div>
+          ${tasks.length === 0 ? `
+            <div style="font-size:13px;color:#6E7681;font-style:italic">No shop tasks linked to this project yet</div>
+            <div style="font-size:11px;color:#6E7681;margin-top:4px">Examples: build rack, prewire, pre-program DSP, tag cables</div>
+          ` : `
+            <div style="display:flex;flex-direction:column;gap:4px">
+              ${tasks.map(t => {
+                const assignee = t.assignee_id ? getTeamMember(t.assignee_id) : null;
+                const priorityColors = { high: '#F85149', med: '#D29922', low: '#6E7681' };
+                const priorityColor = priorityColors[t.priority] || '#6E7681';
+                const isDone = t.status === 'done';
+                return `
+                  <div style="display:flex;align-items:center;gap:8px;padding:6px 8px;background:#0D1117;border:1px solid #1C2333;border-radius:4px;${isDone ? 'opacity:0.5' : ''}">
+                    <div style="width:6px;height:6px;border-radius:50%;background:${priorityColor};flex-shrink:0"></div>
+                    <div style="flex:1;min-width:0">
+                      <div style="font-size:12px;color:#E6EDF3;${isDone ? 'text-decoration:line-through' : ''}">${esc(t.text)}</div>
+                      ${assignee ? `<div style="font-size:10px;color:#6E7681;margin-top:1px">${esc(assignee.name)}</div>` : '<div style="font-size:10px;color:#D29922;margin-top:1px">Unassigned</div>'}
+                    </div>
+                    ${!isDone ? `<button class="btn btn-sm" onclick="completeShopWork(${t.id})" style="font-size:10px;padding:3px 8px;color:#3FB950">Done</button>` : ''}
+                  </div>
+                `;
+              }).join('')}
+            </div>
+          `}
+        </div>
+      `;
+    })()}
+
+    <div style="display:none"><!-- spacer; legacy marker --></div>
+
+<!-- LEGACY_ANCHOR -->
 
     <!-- Proposal activity (only in proposal stage) -->
     ${p.stage === 'proposal' && p.jb_price_valid_until ? (() => {
@@ -4956,53 +5409,254 @@ function calToday() {
   renderCalendar(document.getElementById('content'));
 }
 // ── Shop Work ──
+// Shape: { id, text, assignee_id, priority, project_id, status: 'open'|'done', created, completed }
+function migrateShopWork() {
+  let changed = false;
+  state.shopwork.forEach(t => {
+    if (!t.id) { t.id = Date.now() + Math.random(); changed = true; }
+    if (t.assignee && !t.assignee_id) {
+      // Try to match by name
+      const m = state.team.find(tm => tm.name === t.assignee);
+      if (m) { t.assignee_id = m.id; changed = true; }
+    }
+    if (!t.status) { t.status = 'open'; changed = true; }
+    if (t.project && typeof t.project === 'string' && !t.project_id) {
+      const p = state.projects.find(pr => pr.name === t.project);
+      if (p) { t.project_id = p.id; changed = true; }
+    }
+  });
+  if (changed) save('vi_shopwork', state.shopwork);
+}
+
+function getShopWorkForProject(projectId) {
+  return state.shopwork.filter(t => t.project_id === projectId);
+}
+
+function areAllShopTasksDoneForProject(projectId) {
+  const tasks = getShopWorkForProject(projectId);
+  if (tasks.length === 0) return false;
+  return tasks.every(t => t.status === 'done');
+}
+
 function renderShopWork(c) {
+  migrateShopWork();
   const tasks = state.shopwork;
+  const filter = state.shopWorkFilter || 'open';
+  const activeMember = getTeamMember(getActiveTeamMemberId());
+
+  let visible = tasks;
+  if (filter === 'open') visible = tasks.filter(t => t.status !== 'done');
+  else if (filter === 'done') visible = tasks.filter(t => t.status === 'done');
+  else if (filter === 'unassigned') visible = tasks.filter(t => !t.assignee_id && t.status !== 'done');
+  else if (filter === 'mine') visible = tasks.filter(t => t.assignee_id === activeMember?.id && t.status !== 'done');
+
+  const openCount = tasks.filter(t => t.status !== 'done').length;
+  const myOpenCount = tasks.filter(t => t.assignee_id === activeMember?.id && t.status !== 'done').length;
+  const unassignedCount = tasks.filter(t => !t.assignee_id && t.status !== 'done').length;
+  const doneCount = tasks.filter(t => t.status === 'done').length;
+
   c.innerHTML = `
-    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:16px">
-      <div class="section-title">Shop Work Queue</div>
-      <button class="btn-primary" onclick="addShopWork()">+ Add Task</button>
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px;flex-wrap:wrap;gap:10px">
+      <div class="section-title" style="margin:0">Shop Work Queue</div>
+      <button class="btn-primary" onclick="showShopWorkDialog()" style="padding:8px 14px;font-size:13px">+ Add Task</button>
     </div>
-    <div class="card">
-      ${tasks.length === 0 ? '<div class="empty-state"><span class="empty-icon">🔧</span>No shop work tasks. Add tasks for the team when installs get moved or cancelled.</div>' : ''}
-      ${tasks.map((t, i) => `
-        <div class="shopwork-item">
-          <div class="shopwork-priority priority-${t.priority || 'low'}"></div>
-          <div style="flex:1">
-            <div class="shopwork-text">${esc(t.text)}</div>
-            <div class="shopwork-assignee">${esc(t.assignee || 'Unassigned')} ${t.project ? '· ' + esc(t.project) : ''}</div>
-          </div>
-          <div style="display:flex;gap:6px">
-            <button class="btn btn-sm" onclick="completeShopWork(${i})">Done</button>
-            <button class="btn btn-sm btn-danger" onclick="removeShopWork(${i})">✕</button>
-          </div>
+
+    <!-- Filter tabs -->
+    <div style="display:flex;gap:4px;margin-bottom:14px;flex-wrap:wrap">
+      ${[
+        { key: 'open', label: 'Open', count: openCount, color: '#58A6FF' },
+        { key: 'mine', label: 'Mine', count: myOpenCount, color: '#3FB950' },
+        { key: 'unassigned', label: 'Unassigned', count: unassignedCount, color: '#D29922' },
+        { key: 'done', label: 'Done', count: doneCount, color: '#6E7681' },
+        { key: 'all', label: 'All', count: tasks.length, color: '#8B949E' }
+      ].map(f => `
+        <div onclick="state.shopWorkFilter='${f.key}';renderShopWork(document.getElementById('content'))" style="padding:6px 12px;font-size:11px;font-weight:500;border-radius:6px;cursor:pointer;background:${filter === f.key ? f.color + '22' : '#161B22'};color:${filter === f.key ? f.color : '#8B949E'};border:1px solid ${filter === f.key ? f.color + '66' : '#1C2333'};-webkit-tap-highlight-color:transparent">
+          ${f.label}${f.count > 0 ? ` <span style="opacity:0.7;margin-left:3px">${f.count}</span>` : ''}
         </div>
       `).join('')}
+    </div>
+
+    ${visible.length === 0 ? `
+      <div class="card" style="padding:40px 20px;text-align:center">
+        <div style="font-size:32px;opacity:0.4;margin-bottom:8px">🔧</div>
+        <div style="font-size:14px;color:#8B949E">${filter === 'open' ? 'No open shop work tasks' : filter === 'mine' ? 'Nothing assigned to you' : filter === 'unassigned' ? 'Everything is assigned' : filter === 'done' ? 'No completed tasks' : 'No shop work tasks'}</div>
+      </div>
+    ` : `
+      <div style="display:flex;flex-direction:column;gap:6px">
+        ${visible.map(t => renderShopWorkItem(t)).join('')}
+      </div>
+    `}
+  `;
+}
+
+function renderShopWorkItem(t) {
+  const assignee = t.assignee_id ? getTeamMember(t.assignee_id) : null;
+  const project = t.project_id ? state.projects.find(p => p.id === t.project_id) : null;
+  const priorityColors = { high: '#F85149', med: '#D29922', low: '#6E7681' };
+  const priorityColor = priorityColors[t.priority] || '#6E7681';
+  const isDone = t.status === 'done';
+
+  return `
+    <div style="display:flex;align-items:center;gap:10px;padding:10px 12px;background:#161B22;border:1px solid #1C2333;border-radius:6px;${isDone ? 'opacity:0.5' : ''}">
+      <!-- Priority dot -->
+      <div style="width:8px;height:8px;border-radius:50%;background:${priorityColor};flex-shrink:0" title="${t.priority || 'low'} priority"></div>
+
+      <!-- Main content -->
+      <div style="flex:1;min-width:0">
+        <div style="font-size:13px;color:#E6EDF3;${isDone ? 'text-decoration:line-through' : ''}">${esc(t.text)}</div>
+        <div style="display:flex;gap:10px;margin-top:3px;font-size:11px;color:#6E7681;flex-wrap:wrap">
+          ${assignee ? `<span>${esc(assignee.name)}</span>` : '<span style="color:#D29922">Unassigned</span>'}
+          ${project ? `<span onclick="openProject(${project.id})" style="color:#58A6FF;cursor:pointer;-webkit-tap-highlight-color:transparent">${esc(project.name)}</span>` : ''}
+        </div>
+      </div>
+
+      <!-- Actions -->
+      <div style="display:flex;gap:4px;flex-shrink:0">
+        <button class="btn btn-sm" onclick="showShopWorkDialog(${t.id})" style="font-size:11px;padding:4px 8px">Edit</button>
+        ${!isDone ? `<button class="btn btn-sm" onclick="completeShopWork(${t.id})" style="font-size:11px;padding:4px 8px;color:#3FB950;border-color:#238636">Done</button>` : `<button class="btn btn-sm" onclick="reopenShopWork(${t.id})" style="font-size:11px;padding:4px 8px">Reopen</button>`}
+        <button class="btn btn-sm" onclick="removeShopWork(${t.id})" style="font-size:11px;padding:4px 8px;color:#8B949E" title="Delete">×</button>
+      </div>
     </div>
   `;
 }
 
-function addShopWork() {
-  const text = prompt('Task description:');
-  if (!text) return;
-  const assignee = prompt('Assign to (name):') || '';
-  const priority = prompt('Priority (high/med/low):') || 'low';
-  state.shopwork.push({ text, assignee, priority, project: '', created: new Date().toISOString() });
-  save('vi_shopwork', state.shopwork);
-  renderShopWork(document.getElementById('content'));
+function showShopWorkDialog(taskId) {
+  const task = taskId ? state.shopwork.find(t => t.id === taskId) : null;
+  const isEdit = !!task;
+  document.getElementById('shopwork-dialog')?.remove();
+  const modal = document.createElement('div');
+  modal.id = 'shopwork-dialog';
+  modal.className = 'modal-overlay';
+
+  const activeProjects = state.projects.filter(p => !p.archived);
+
+  modal.innerHTML = `
+    <div class="modal-container" style="max-width:480px">
+      <div class="modal-header">
+        <div>
+          <div class="modal-title">${isEdit ? 'Edit' : 'New'} Shop Work Task</div>
+          <div class="modal-sub">Shop tasks can be assigned to a team member and linked to a project</div>
+        </div>
+        <button class="modal-close" onclick="document.getElementById('shopwork-dialog')?.remove()">&times;</button>
+      </div>
+      <div class="modal-body">
+        <label style="font-size:11px;color:#8B949E;font-weight:500;display:block;margin-bottom:4px">Task</label>
+        <textarea id="sw-text" class="form-textarea" rows="2" placeholder="What needs to happen..." style="width:100%;margin-bottom:12px">${esc(task?.text || '')}</textarea>
+
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:12px">
+          <div>
+            <label style="font-size:11px;color:#8B949E;font-weight:500;display:block;margin-bottom:4px">Assigned to</label>
+            <select id="sw-assignee" class="form-input" style="width:100%">
+              <option value="">Unassigned</option>
+              ${state.team.filter(m => m.status !== 'inactive').map(m => `
+                <option value="${m.id}" ${task?.assignee_id === m.id ? 'selected' : ''}>${esc(m.name)}</option>
+              `).join('')}
+            </select>
+          </div>
+          <div>
+            <label style="font-size:11px;color:#8B949E;font-weight:500;display:block;margin-bottom:4px">Priority</label>
+            <select id="sw-priority" class="form-input" style="width:100%">
+              <option value="low" ${(!task || task.priority === 'low') ? 'selected' : ''}>Low</option>
+              <option value="med" ${task?.priority === 'med' ? 'selected' : ''}>Medium</option>
+              <option value="high" ${task?.priority === 'high' ? 'selected' : ''}>High</option>
+            </select>
+          </div>
+        </div>
+
+        <label style="font-size:11px;color:#8B949E;font-weight:500;display:block;margin-bottom:4px">Project (optional)</label>
+        <select id="sw-project" class="form-input" style="width:100%;margin-bottom:14px">
+          <option value="">— No specific project (general shop work) —</option>
+          ${activeProjects.map(p => `
+            <option value="${p.id}" ${task?.project_id === p.id ? 'selected' : ''}>${esc(p.name)} · ${esc(p.client_name || '')}</option>
+          `).join('')}
+        </select>
+        <div style="font-size:10px;color:#6E7681;margin-top:-10px;margin-bottom:14px">When linked to a project, this task shows up on the project page and contributes to its Shop Work milestone.</div>
+
+        <div style="display:flex;gap:8px">
+          <button class="btn" style="flex:1" onclick="document.getElementById('shopwork-dialog')?.remove()">Cancel</button>
+          <button class="btn-primary" style="flex:1" onclick="saveShopWork(${taskId || 'null'})">${isEdit ? 'Save' : 'Add Task'}</button>
+        </div>
+      </div>
+    </div>
+  `;
+  document.body.appendChild(modal);
 }
 
-function completeShopWork(i) {
-  state.shopwork.splice(i, 1);
+function saveShopWork(taskId) {
+  const text = document.getElementById('sw-text')?.value?.trim();
+  if (!text) { alert('Task description required'); return; }
+  const assigneeVal = document.getElementById('sw-assignee')?.value;
+  const priority = document.getElementById('sw-priority')?.value || 'low';
+  const projectVal = document.getElementById('sw-project')?.value;
+  const assignee_id = assigneeVal ? parseInt(assigneeVal) : null;
+  const project_id = projectVal ? parseInt(projectVal) : null;
+
+  if (taskId) {
+    const task = state.shopwork.find(t => t.id === taskId);
+    if (task) {
+      task.text = text;
+      task.assignee_id = assignee_id;
+      task.priority = priority;
+      task.project_id = project_id;
+    }
+  } else {
+    state.shopwork.push({
+      id: Date.now() + Math.random(),
+      text, assignee_id, priority, project_id,
+      status: 'open',
+      created: new Date().toISOString()
+    });
+  }
   save('vi_shopwork', state.shopwork);
-  renderShopWork(document.getElementById('content'));
+
+  // Auto-check milestone if applicable
+  if (project_id) checkShopWorkMilestone(project_id);
+
+  document.getElementById('shopwork-dialog')?.remove();
+  renderCurrentPage();
 }
 
-function removeShopWork(i) {
+function checkShopWorkMilestone(projectId) {
+  // If all shop tasks for this project are done (and there's at least 1), check the milestone
+  if (areAllShopTasksDoneForProject(projectId)) {
+    setMilestone(projectId, 'install', 'shop_work_done', true);
+  } else {
+    // If there are shop tasks but not all done, uncheck the milestone
+    const tasks = getShopWorkForProject(projectId);
+    if (tasks.length > 0) {
+      setMilestone(projectId, 'install', 'shop_work_done', false);
+    }
+  }
+}
+
+function completeShopWork(taskId) {
+  const task = state.shopwork.find(t => t.id === taskId);
+  if (!task) return;
+  task.status = 'done';
+  task.completed = new Date().toISOString();
+  save('vi_shopwork', state.shopwork);
+  if (task.project_id) checkShopWorkMilestone(task.project_id);
+  renderCurrentPage();
+}
+
+function reopenShopWork(taskId) {
+  const task = state.shopwork.find(t => t.id === taskId);
+  if (!task) return;
+  task.status = 'open';
+  delete task.completed;
+  save('vi_shopwork', state.shopwork);
+  if (task.project_id) checkShopWorkMilestone(task.project_id);
+  renderCurrentPage();
+}
+
+function removeShopWork(taskId) {
   if (!confirm('Remove this task?')) return;
-  state.shopwork.splice(i, 1);
+  const task = state.shopwork.find(t => t.id === taskId);
+  const projectId = task?.project_id;
+  state.shopwork = state.shopwork.filter(t => t.id !== taskId);
   save('vi_shopwork', state.shopwork);
-  renderShopWork(document.getElementById('content'));
+  if (projectId) checkShopWorkMilestone(projectId);
+  renderCurrentPage();
 }
 
 // ── Vendors ──
