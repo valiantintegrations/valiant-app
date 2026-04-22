@@ -1030,6 +1030,121 @@ td.today .cal-day-num {
 }
 
 /* ═══════════════════════════════════════════════════════════
+   STAGE C PASS 3B — Expanded role assignments
+   ═══════════════════════════════════════════════════════════ */
+
+/* Team slots on Overview card */
+.team-slots {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+}
+.team-slot-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 10px 0;
+  border-bottom: 1px solid #1C2333;
+}
+.team-slot-row:last-child { border-bottom: none; }
+.team-slot-role {
+  min-width: 100px;
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  padding-top: 4px;
+  flex-shrink: 0;
+}
+.team-slot-empty {
+  font-size: 12px;
+  color: #6E7681;
+  font-style: italic;
+  padding-top: 4px;
+}
+.team-slot-members {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  flex: 1;
+}
+.team-slot-pill {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 10px 3px 3px;
+  background: #161B22;
+  border: 1px solid #30363D;
+  border-radius: 20px;
+}
+.team-slot-pill.is-lead {
+  background: #1C2333;
+  border-color: #3FB950;
+}
+.team-slot-avatar {
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  border: 1px solid;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 10px;
+  font-weight: 600;
+  flex-shrink: 0;
+}
+.team-slot-pill span {
+  font-size: 12px;
+  color: #C9D1D9;
+  font-weight: 500;
+}
+.team-slot-lead-badge {
+  font-size: 9px;
+  font-weight: 700;
+  padding: 2px 5px;
+  border: 1px solid;
+  border-radius: 3px;
+  letter-spacing: 0.06em;
+  margin-left: 2px;
+}
+
+/* Assign Team dialog */
+.assign-role-block {
+  padding: 12px 14px;
+  background: #0D1117;
+  border: 1px solid #1C2333;
+  border-radius: 6px;
+  margin-bottom: 10px;
+}
+.assign-role-block:last-child { margin-bottom: 0; }
+.assign-chip {
+  display: flex;
+  align-items: center;
+  background: #161B22;
+  border: 1px solid #1C2333;
+  border-radius: 20px;
+  overflow: hidden;
+  transition: all 0.12s;
+}
+.assign-chip:hover {
+  border-color: #30363D;
+}
+.assign-chip.active.lead {
+  box-shadow: 0 0 0 1px currentColor;
+}
+
+@media (max-width: 640px) {
+  .team-slot-row {
+    flex-direction: column;
+    gap: 6px;
+  }
+  .team-slot-role {
+    min-width: 0;
+    padding-top: 0;
+  }
+}
+
+/* ═══════════════════════════════════════════════════════════
    STAGE C PASS 2A — Segmented progress map + milestone actions
    ═══════════════════════════════════════════════════════════ */
 
