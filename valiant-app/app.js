@@ -3168,7 +3168,7 @@ function renderProjectOverviewHTML(p) {
         <div style="padding:12px;background:#0D1117;border-radius:8px;border:1px solid #1C2333">
           <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px">
             <div style="font-size:10px;color:#6E7681;text-transform:uppercase;letter-spacing:0.06em">Estimated (from Jetbuilt)</div>
-            <button class="btn btn-sm" onclick="showEstimatedInstallDialog(${p.id})" style="font-size:10px;padding:3px 8px">Edit</button>
+            ${currentUserHasPermission('projects.edit') ? `<button class="btn btn-sm" onclick="showEstimatedInstallDialog(${p.id})" style="font-size:10px;padding:3px 8px">Edit</button>` : ''}
           </div>
           ${(() => {
             const est = getEstimatedInstall(p);
@@ -3184,7 +3184,7 @@ function renderProjectOverviewHTML(p) {
         <div style="padding:12px;background:${getBookedTimeline(p.id) ? '#0D1A0E' : '#0D1117'};border-radius:8px;border:1px solid ${getBookedTimeline(p.id) ? '#238636' : '#1C2333'}">
           <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px">
             <div style="font-size:10px;color:#6E7681;text-transform:uppercase;letter-spacing:0.06em">Booked Install Window</div>
-            <button class="btn btn-sm" onclick="showSetBookedDatesDialog(${p.id})" style="font-size:10px;padding:3px 8px">${getBookedTimeline(p.id) ? 'Edit' : 'Book'}</button>
+            ${currentUserHasPermission('projects.edit') ? `<button class="btn btn-sm" onclick="showSetBookedDatesDialog(${p.id})" style="font-size:10px;padding:3px 8px">${getBookedTimeline(p.id) ? 'Edit' : 'Book'}</button>` : ''}
           </div>
           ${(() => {
             const b = getBookedTimeline(p.id);
@@ -3204,9 +3204,9 @@ function renderProjectOverviewHTML(p) {
     <div class="dashboard-card" style="margin-bottom:14px">
       <div class="dashboard-card-title" style="display:flex;align-items:center;justify-content:space-between">
         <span>Contract</span>
-        <button class="btn btn-sm" onclick="showContractDateDialog(${p.id})" style="font-size:11px;padding:4px 10px">
+        ${currentUserHasPermission('projects.edit') ? `<button class="btn btn-sm" onclick="showContractDateDialog(${p.id})" style="font-size:11px;padding:4px 10px">
           ${contractDate ? 'Edit' : 'Set date'}
-        </button>
+        </button>` : ''}
       </div>
       ${contractDate ? `
         <div style="font-size:20px;font-weight:600;color:#E6EDF3;line-height:1.1">${fmtDate(contractDate)}</div>
@@ -3312,7 +3312,6 @@ function renderProjectOverviewHTML(p) {
                     <div class="team-slot-pill${x.lead ? ' is-lead' : ''}" title="${x.lead ? 'Lead — ' : ''}${esc(m.name)}">
                       <div class="team-slot-avatar" style="background:${color}22;border-color:${color};color:${color}">${esc(m.initials || m.name.slice(0,2).toUpperCase())}</div>
                       <span>${esc(m.name)}</span>
-                      ${x.lead ? `<span class="team-slot-lead-badge" style="color:${r.color};border-color:${r.color}66">LEAD</span>` : ''}
                     </div>
                   `;
                 }).join('')}
@@ -3354,7 +3353,7 @@ function renderProjectOverviewHTML(p) {
               `).join('')}
             </div>
             <div style="margin-top:10px;font-size:11px;color:#6E7681">&#9733; Pipeline value uses the Better amount</div>
-            <button class="btn btn-sm btn-danger" onclick="showGBBLinkDialog(${p.id})" style="margin-top:8px">Manage GBB Link</button>
+            ${currentUserHasPermission('projects.edit') ? `<button class="btn btn-sm btn-danger" onclick="showGBBLinkDialog(${p.id})" style="margin-top:8px">Manage GBB Link</button>` : ''}
           </div>`;
       } else {
         return '';
@@ -3377,7 +3376,7 @@ function showAssignTeamDialog(projectId) {
       <div class="modal-header">
         <div>
           <div class="modal-title">Project Team: ${esc(p.name)}</div>
-          <div class="modal-sub">Assign team members to each role. Star marks the Lead.</div>
+          <div class="modal-sub">Assign team members to each role. Click the circle to mark someone as Lead.</div>
         </div>
         <button class="modal-close" onclick="document.getElementById('assign-team-dialog')?.remove()">&times;</button>
       </div>
@@ -3418,8 +3417,8 @@ function renderAssignTeamBody(projectId) {
                   <span style="font-size:12px;color:${isAssigned ? '#E6EDF3' : '#8B949E'};font-weight:${isAssigned ? '500' : '400'}">${esc(m.name)}</span>
                 </div>
                 ${isAssigned ? `
-                  <button onclick="setRoleLead(${projectId},'${r.key}',${m.id});refreshAssignTeamBody(${projectId})" title="${isLead ? 'Lead' : 'Make Lead'}" style="background:transparent;border:none;padding:3px 8px 3px 4px;cursor:pointer;color:${isLead ? r.color : '#6E7681'};-webkit-tap-highlight-color:transparent">
-                    <svg width="12" height="12" viewBox="0 0 12 12" fill="${isLead ? r.color : 'none'}" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"><path d="M6 1l1.5 3 3.5.5-2.5 2.5.5 3.5L6 9l-3 1.5.5-3.5L1 4.5 4.5 4z"/></svg>
+                  <button onclick="setRoleLead(${projectId},'${r.key}',${m.id});refreshAssignTeamBody(${projectId})" title="${isLead ? 'Lead' : 'Make Lead'}" style="background:transparent;border:none;padding:3px 10px 3px 4px;cursor:pointer;-webkit-tap-highlight-color:transparent">
+                    <span style="display:inline-block;width:10px;height:10px;border-radius:50%;background:${isLead ? r.color : 'transparent'};border:1.5px solid ${isLead ? r.color : '#6E7681'}"></span>
                   </button>
                 ` : ''}
               </div>
@@ -4745,6 +4744,7 @@ function renderProjectFilesHTML(p) {
   const driveUrl = getProjectDriveUrl(p.id);
   const folderId = extractDriveFolderId(driveUrl);
   const files = getProjectFiles(p.id);
+  const canEdit = currentUserHasPermission('projects.edit');
 
   const categories = [
     { key: 'renders', label: 'Renders', icon: 'image', desc: 'Sales renders and layout visuals shared with the client' },
@@ -4760,12 +4760,14 @@ function renderProjectFilesHTML(p) {
         <span>Google Drive Folder</span>
         ${driveUrl ? `<a href="${esc(driveUrl)}" target="_blank" rel="noopener" class="btn btn-sm" style="text-decoration:none;font-size:11px;color:#58A6FF;border-color:#1565C0">Open in Drive &rarr;</a>` : ''}
       </div>
-      <div style="display:flex;gap:8px;align-items:stretch">
-        <input class="form-input" id="drive-url-input" placeholder="Paste Google Drive folder URL..."
-          value="${esc(driveUrl)}" style="flex:1;font-size:13px"
-          onkeydown="if(event.key==='Enter')saveProjectDriveUrl(${p.id})">
-        <button class="btn-primary" onclick="saveProjectDriveUrl(${p.id})" style="padding:10px 16px;font-size:13px;flex-shrink:0">Save</button>
-      </div>
+      ${canEdit ? `
+        <div style="display:flex;gap:8px;align-items:stretch">
+          <input class="form-input" id="drive-url-input" placeholder="Paste Google Drive folder URL..."
+            value="${esc(driveUrl)}" style="flex:1;font-size:13px"
+            onkeydown="if(event.key==='Enter')saveProjectDriveUrl(${p.id})">
+          <button class="btn-primary" onclick="saveProjectDriveUrl(${p.id})" style="padding:10px 16px;font-size:13px;flex-shrink:0">Save</button>
+        </div>
+      ` : (driveUrl ? '' : `<div style="font-size:12px;color:#6E7681;font-style:italic">No Drive folder linked. Ask a project editor to set one up.</div>`)}
       ${driveUrl && !folderId ? `
         <div style="margin-top:10px;padding:10px 12px;background:#1A150D;border:1px solid #9E6A03;border-radius:6px;font-size:12px;color:#D29922">
           Unable to parse folder ID from URL. Make sure it&rsquo;s a Drive <strong>folder</strong> link (contains /folders/...), not a single file.
@@ -4813,7 +4815,7 @@ function renderProjectFilesHTML(p) {
               <span>${cat.label}</span>
               ${items.length > 0 ? `<span style="margin-left:6px;font-size:10px;color:#6E7681;font-weight:400">${items.length}</span>` : ''}
             </div>
-            <button class="btn btn-sm" onclick="promptAddFile(${p.id}, '${cat.key}')" style="font-size:11px;padding:5px 10px">+ Add</button>
+            <button class="btn btn-sm" ${canEdit ? `onclick="promptAddFile(${p.id}, '${cat.key}')"` : 'disabled style="opacity:0.4;cursor:not-allowed"'} style="font-size:11px;padding:5px 10px">+ Add</button>
           </div>
           <div style="font-size:11px;color:#6E7681;margin-bottom:8px">${cat.desc}</div>
           ${items.length === 0 ? `
@@ -4836,7 +4838,7 @@ function renderProjectFilesHTML(p) {
                       <a href="${esc(item.url)}" target="_blank" rel="noopener" style="font-size:13px;color:#E6EDF3;text-decoration:none;display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(item.label)}</a>
                       <div style="font-size:10px;color:#6E7681;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(item.url)}</div>
                     </div>
-                    <button onclick="confirmRemoveFile(${p.id}, '${cat.key}', ${item.id})" style="background:none;border:none;color:#6E7681;cursor:pointer;padding:4px 8px;font-size:16px;line-height:1;flex-shrink:0" title="Remove">&times;</button>
+                    ${canEdit ? `<button onclick="confirmRemoveFile(${p.id}, '${cat.key}', ${item.id})" style="background:none;border:none;color:#6E7681;cursor:pointer;padding:4px 8px;font-size:16px;line-height:1;flex-shrink:0" title="Remove">&times;</button>` : ''}
                   </div>
                 `;
               }).join('')}
@@ -6117,6 +6119,16 @@ async function fetchProjectDetail(projectId) {
 // Refresh Team + Admin nav items based on current user's permissions
 function refreshAdminNav() {
   const toolsSection = document.querySelectorAll('.nav-section')[1];
+  // Gate the top-bar "+ New Intake" button by projects.create permission
+  const intakeButtons = document.querySelectorAll('button[onclick*="startNewIntake"]');
+  const canCreate = currentUserHasPermission('projects.create');
+  intakeButtons.forEach(btn => {
+    btn.style.display = canCreate ? '' : 'none';
+  });
+  // Gate the "+ New Intake" nav link (if the current user can't create)
+  const intakeNav = document.querySelector('[data-page="intake"]');
+  if (intakeNav) intakeNav.style.display = canCreate ? '' : 'none';
+
   if (!toolsSection) return;
   const activeMember = getTeamMember(getActiveTeamMemberId());
   // Team nav — legacy admin gate
