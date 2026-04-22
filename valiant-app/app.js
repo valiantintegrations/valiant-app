@@ -175,10 +175,7 @@ const DEFAULT_BUNDLES = {
   }
 };
 
-// Load bundles (editable by Master Admin later)
-state.bundles = JSON.parse(localStorage.getItem('vi_bundles') || 'null') || JSON.parse(JSON.stringify(DEFAULT_BUNDLES));
-state.userPermissions = JSON.parse(localStorage.getItem('vi_user_perms') || '{}');
-// Shape of state.userPermissions: { [memberId]: { bundle: 'master_admin', overrides: { 'financials.view_margins': true } } }
+// state.bundles and state.userPermissions are initialized after state is declared (see below)
 
 function getUserPermissions(memberId) {
   const up = state.userPermissions[memberId];
@@ -320,7 +317,9 @@ const state = {
   meetingLogs: JSON.parse(localStorage.getItem('vi_meeting_logs') || '{}'),
   planningAssignments: JSON.parse(localStorage.getItem('vi_planning_assignments') || '{}'),
   vehicles: JSON.parse(localStorage.getItem('vi_vehicles') || '[]'),
-  tools: JSON.parse(localStorage.getItem('vi_tools') || '[]')
+  tools: JSON.parse(localStorage.getItem('vi_tools') || '[]'),
+  bundles: JSON.parse(localStorage.getItem('vi_bundles') || 'null') || JSON.parse(JSON.stringify(DEFAULT_BUNDLES)),
+  userPermissions: JSON.parse(localStorage.getItem('vi_user_perms') || '{}')
 };
 
 // ── Team Roster ──
