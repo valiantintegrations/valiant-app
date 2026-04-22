@@ -426,6 +426,11 @@ function switchUser(memberId) {
 
   state.dashboardView = member.primaryRole || member.access[0];
 
+  // Re-evaluate nav visibility (Team/Admin show/hide based on new user)
+  document.querySelector('[data-page="team"]')?.remove();
+  document.querySelector('[data-page="admin"]')?.remove();
+  if (typeof refreshAdminNav === 'function') refreshAdminNav();
+
   renderCurrentPage();
 }
 
@@ -5094,10 +5099,21 @@ function showUserPermissionsDialog(memberId) {
         <label style="font-size:11px;color:#8B949E;font-weight:500;display:block;margin-bottom:4px">Permission Bundle</label>
         <select id="perm-bundle-select" class="form-input" style="width:100%;margin-bottom:16px" onchange="previewBundleChange(${memberId}, this.value)">
           ${Object.entries(state.bundles).map(([key, b]) => {
-            const disabled = key === 'master_admin' && !isMasterAdmin;
-            return `<option value="${key}" ${up.bundle === key ? 'selected' : ''} ${disabled ? 'disabled' : ''}>${esc(b.label)}${disabled ? ' (Master Admin only)' : ''}</option>`;
+            // Non-master-admins can't grant master_admin
+            // And non-master-admins can't grant a bundle that contains permissions they don't have themselves
+            let disabled = key === 'master_admin' && !isMasterAdmin;
+            let disabledReason = disabled ? 'Master Admin only' : '';
+            if (!disabled && !isMasterAdmin) {
+              const missingPerms = b.permissions.filter(p => !activePerms.has(p));
+              if (missingPerms.length > 0) {
+                disabled = true;
+                disabledReason = `Exceeds your permissions (${missingPerms.length} flag${missingPerms.length === 1 ? '' : 's'})`;
+              }
+            }
+            return `<option value="${key}" ${up.bundle === key ? 'selected' : ''} ${disabled ? 'disabled' : ''}>${esc(b.label)}${disabledReason ? ' — ' + disabledReason : ''}</option>`;
           }).join('')}
         </select>
+        ${!isMasterAdmin ? '<div style="font-size:11px;color:#6E7681;margin-top:-10px;margin-bottom:14px;padding:8px 10px;background:#0D1117;border:1px solid #1C2333;border-radius:4px">You can only grant permissions and bundles that you hold yourself. Bundles you don&rsquo;t qualify to grant are greyed out.</div>' : ''}
 
         <div style="font-size:11px;color:#8B949E;font-weight:500;margin-bottom:8px">Individual Permissions</div>
         <div style="font-size:11px;color:#6E7681;margin-bottom:10px">Checkmark = granted. Toggles that differ from bundle default are marked as overrides.</div>
@@ -5131,6 +5147,9 @@ function renderPermissionList(memberId) {
   const bundle = state.bundles[up.bundle];
   const bundleSet = new Set(bundle?.permissions || []);
   const overrides = up.overrides || {};
+  // Grantor's permissions — used to gate what checkboxes can be toggled
+  const grantorPerms = getEffectivePermissions(getActiveTeamMemberId());
+  const grantorIsMasterAdmin = grantorPerms.has('admin.system');
   // Group permissions by prefix
   const groups = {};
   PERMISSION_KEYS.forEach(k => {
@@ -5151,12 +5170,14 @@ function renderPermissionList(memberId) {
         const override = overrides[k];
         const effective = override === true || (override !== false && inBundle);
         const isCustom = override !== undefined;
+        // Grantor can toggle this permission ONLY if they hold it themselves (or are Master Admin)
+        const canGrant = grantorIsMasterAdmin || grantorPerms.has(k);
         return `
-          <div style="display:flex;align-items:center;gap:10px;padding:6px 10px;border-radius:4px;background:${isCustom ? '#1A150D' : 'transparent'};border:1px solid ${isCustom ? '#9E6A03' : '#1C2333'};margin-bottom:3px">
-            <input type="checkbox" data-perm="${k}" ${effective ? 'checked' : ''} onchange="onPermToggle('${k}', ${memberId}, this.checked)" style="margin:0">
+          <div style="display:flex;align-items:center;gap:10px;padding:6px 10px;border-radius:4px;background:${isCustom ? '#1A150D' : 'transparent'};border:1px solid ${isCustom ? '#9E6A03' : '#1C2333'};margin-bottom:3px;opacity:${canGrant ? '1' : '0.5'}">
+            <input type="checkbox" data-perm="${k}" ${effective ? 'checked' : ''} ${canGrant ? '' : 'disabled'} onchange="onPermToggle('${k}', ${memberId}, this.checked)" style="margin:0">
             <div style="flex:1;min-width:0">
               <div style="font-size:12px;color:#E6EDF3;font-family:monospace">${k}</div>
-              ${isCustom ? '<div style="font-size:10px;color:#D29922;margin-top:2px">Override</div>' : (inBundle ? '<div style="font-size:10px;color:#6E7681;margin-top:2px">From bundle</div>' : '<div style="font-size:10px;color:#6E7681;margin-top:2px">Not in bundle</div>')}
+              ${!canGrant ? '<div style="font-size:10px;color:#F85149;margin-top:2px">You cannot grant this &mdash; not in your permissions</div>' : (isCustom ? '<div style="font-size:10px;color:#D29922;margin-top:2px">Override</div>' : (inBundle ? '<div style="font-size:10px;color:#6E7681;margin-top:2px">From bundle</div>' : '<div style="font-size:10px;color:#6E7681;margin-top:2px">Not in bundle</div>'))}
             </div>
           </div>
         `;
@@ -5173,6 +5194,14 @@ function previewBundleChange(memberId, bundleKey) {
 }
 
 function onPermToggle(permKey, memberId, checked) {
+  // Defensive check — grantor must hold the permission (or be Master Admin) to toggle it
+  const grantorPerms = getEffectivePermissions(getActiveTeamMemberId());
+  if (!grantorPerms.has('admin.system') && !grantorPerms.has(permKey)) {
+    // Revert the checkbox visually and bail
+    const listEl = document.getElementById('perm-list');
+    if (listEl) listEl.innerHTML = renderPermissionList(memberId);
+    return;
+  }
   if (!state.userPermissions[memberId]) state.userPermissions[memberId] = { bundle: 'installer', overrides: {} };
   const up = state.userPermissions[memberId];
   if (!up.overrides) up.overrides = {};
@@ -5812,6 +5841,33 @@ async function fetchProjectDetail(projectId) {
 }
 
 // ── Init ──
+// Refresh Team + Admin nav items based on current user's permissions
+function refreshAdminNav() {
+  const toolsSection = document.querySelectorAll('.nav-section')[1];
+  if (!toolsSection) return;
+  const activeMember = getTeamMember(getActiveTeamMemberId());
+  // Team nav — legacy admin gate
+  if (activeMember && activeMember.access.includes('admin')) {
+    if (!document.querySelector('[data-page="team"]')) {
+      const teamLink = document.createElement('a');
+      teamLink.className = 'nav-item';
+      teamLink.dataset.page = 'team';
+      teamLink.onclick = () => navigate('team');
+      teamLink.innerHTML = '<svg width="16" height="16" viewBox="0 0 16 16" fill="none"><circle cx="6" cy="5" r="2.5" stroke="currentColor" stroke-width="1.2"/><circle cx="11" cy="5" r="2" stroke="currentColor" stroke-width="1.2"/><path d="M1 14c0-2.761 2.239-4.5 5-4.5s5 1.739 5 4.5" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/><path d="M11 9.5c1.933 0 3.5 1.119 3.5 3" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/></svg><span>Team</span>';
+      toolsSection.appendChild(teamLink);
+    }
+  }
+  // Admin nav — gated by new permission system
+  if (!document.querySelector('[data-page="admin"]') && currentUserHasPermission('admin.view_users')) {
+    const adminLink = document.createElement('a');
+    adminLink.className = 'nav-item';
+    adminLink.dataset.page = 'admin';
+    adminLink.onclick = () => navigate('admin');
+    adminLink.innerHTML = '<svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M8 2l5 2.5v3c0 3-2.2 5.5-5 6.5-2.8-1-5-3.5-5-6.5v-3L8 2z" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round"/><path d="M6 8l1.5 1.5L10 7" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/></svg><span>Admin</span>';
+    toolsSection.appendChild(adminLink);
+  }
+}
+
 async function init() {
   // Seed default vehicles and tools on first load (can be edited later via Team/Settings)
   if (!state.vehicles || state.vehicles.length === 0) {
@@ -5859,26 +5915,7 @@ async function init() {
   injectBottomNav();
   injectRightPanel();
   const activeMemberInit = getTeamMember(getActiveTeamMemberId());
-  if (activeMemberInit && activeMemberInit.access.includes('admin')) {
-    const toolsSection = document.querySelectorAll('.nav-section')[1];
-    if (toolsSection && !document.querySelector('[data-page="team"]')) {
-      const teamLink = document.createElement('a');
-      teamLink.className = 'nav-item';
-      teamLink.dataset.page = 'team';
-      teamLink.onclick = () => navigate('team');
-      teamLink.innerHTML = '<svg width="16" height="16" viewBox="0 0 16 16" fill="none"><circle cx="6" cy="5" r="2.5" stroke="currentColor" stroke-width="1.2"/><circle cx="11" cy="5" r="2" stroke="currentColor" stroke-width="1.2"/><path d="M1 14c0-2.761 2.239-4.5 5-4.5s5 1.739 5 4.5" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/><path d="M11 9.5c1.933 0 3.5 1.119 3.5 3" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/></svg><span>Team</span>';
-      toolsSection.appendChild(teamLink);
-    }
-    // Inject Admin nav item for users with admin.view_users permission
-    if (toolsSection && !document.querySelector('[data-page="admin"]') && currentUserHasPermission('admin.view_users')) {
-      const adminLink = document.createElement('a');
-      adminLink.className = 'nav-item';
-      adminLink.dataset.page = 'admin';
-      adminLink.onclick = () => navigate('admin');
-      adminLink.innerHTML = '<svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M8 2l5 2.5v3c0 3-2.2 5.5-5 6.5-2.8-1-5-3.5-5-6.5v-3L8 2z" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round"/><path d="M6 8l1.5 1.5L10 7" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/></svg><span>Admin</span>';
-      toolsSection.appendChild(adminLink);
-    }
-  }
+  refreshAdminNav();
   try {
     const cached = localStorage.getItem('vi_projects_cache');
     if (cached) {
