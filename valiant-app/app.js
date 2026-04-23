@@ -367,6 +367,7 @@ const state = {
   templateCustomizations: JSON.parse(localStorage.getItem('vi_template_customizations') || '{}'),
   projectPins: JSON.parse(localStorage.getItem('vi_project_pins') || '{}'),
   projectSiteNotes: JSON.parse(localStorage.getItem('vi_project_site_notes') || '{}'),
+  closeoutChecklist: JSON.parse(localStorage.getItem('vi_closeout_checklist') || '{}'),
   mapsApiKey: null,
   mapsApiLoaded: false
 };
@@ -2677,31 +2678,37 @@ function renderDashboard(c) {
 
   const canSeeAllProjects = currentUserHasPermission('projects.view_all');
   const isMasterAdmin = currentUserHasPermission('admin.system');
+  const isInstallAdmin = currentUserHasPermission('install.manage_crew');
 
   // Determine which view mode to show
-  // Default: Master Admin → executive, others → mine
-  let dashboardMode = state.dashboardMode || (isMasterAdmin ? 'executive' : 'mine');
-  // If user explicitly set executive but lost Master Admin perm, fall back
-  if (dashboardMode === 'executive' && !isMasterAdmin) dashboardMode = 'mine';
-  // If user explicitly set pipeline but lost view_all perm, fall back
+  // Default priority: Master Admin → executive, Install Admin → install, others → mine
+  let dashboardMode = state.dashboardMode || (isMasterAdmin ? 'executive' : isInstallAdmin ? 'install' : 'mine');
+  // Fallbacks if user lost permissions since last choice
+  if (dashboardMode === 'executive' && !isMasterAdmin) dashboardMode = isInstallAdmin ? 'install' : 'mine';
   if (dashboardMode === 'pipeline' && !canSeeAllProjects) dashboardMode = 'mine';
+  if (dashboardMode === 'install' && !isInstallAdmin) dashboardMode = 'mine';
 
   // Compute my assignments across all active projects
   const activeProjects = state.projects.filter(p => !p.archived);
   const myAssignments = computeMyAssignments(memberId, activeProjects);
   const totalMyWork = Object.values(myAssignments).reduce((n, arr) => n + arr.length, 0);
+  const myCloseoutCount = getMyCloseoutProjects(memberId).length;
 
   // Build mode toggle — tabs visible based on permissions
   const tabs = [];
   if (isMasterAdmin) tabs.push({ key: 'executive', label: 'Executive' });
-  tabs.push({ key: 'mine', label: 'My Work', badge: totalMyWork });
+  tabs.push({ key: 'mine', label: 'My Work', badge: totalMyWork, alertBadge: myCloseoutCount });
+  if (isInstallAdmin) {
+    const installAlertCount = getProjectsNeedingCloseout().length;
+    tabs.push({ key: 'install', label: 'Install Admin', alertBadge: installAlertCount });
+  }
   if (canSeeAllProjects) tabs.push({ key: 'pipeline', label: 'Full Pipeline' });
 
   const modeToggle = tabs.length > 1 ? `
     <div style="display:inline-flex;background:#0D1117;border:1px solid #30363D;border-radius:6px;overflow:hidden;font-size:12px;margin-bottom:14px">
       ${tabs.map(t => `
-        <div onclick="setDashboardMode('${t.key}')" style="padding:7px 14px;cursor:pointer;transition:all 0.15s;${dashboardMode === t.key ? 'background:#1565C0;color:#58A6FF;font-weight:500' : 'color:#8B949E'};-webkit-tap-highlight-color:transparent">
-          ${t.label}${t.badge > 0 ? ` <span style="opacity:0.7;margin-left:4px">${t.badge}</span>` : ''}
+        <div onclick="setDashboardMode('${t.key}')" style="padding:7px 14px;cursor:pointer;transition:all 0.15s;${dashboardMode === t.key ? 'background:#1565C0;color:#58A6FF;font-weight:500' : 'color:#8B949E'};-webkit-tap-highlight-color:transparent;display:inline-flex;align-items:center;gap:5px">
+          ${t.label}${t.badge > 0 ? ` <span style="opacity:0.7;margin-left:2px">${t.badge}</span>` : ''}${t.alertBadge > 0 ? `<span style="background:#DA3633;color:#fff;font-size:9px;font-weight:700;padding:1px 5px;border-radius:8px">${t.alertBadge}</span>` : ''}
         </div>
       `).join('')}
     </div>
@@ -2709,6 +2716,8 @@ function renderDashboard(c) {
 
   if (dashboardMode === 'executive') {
     c.innerHTML = modeToggle + renderExecutiveDashboard(activeProjects);
+  } else if (dashboardMode === 'install') {
+    c.innerHTML = modeToggle + renderInstallAdminDashboard(activeProjects);
   } else if (dashboardMode === 'mine') {
     c.innerHTML = modeToggle + renderMyWorkDashboard(memberId, activeProjects, myAssignments, activeMember);
   } else {
@@ -2755,9 +2764,10 @@ function sortByUrgency(projects) {
 
 function renderMyWorkDashboard(memberId, activeProjects, myAssignments, activeMember) {
   const totalAssigned = Object.values(myAssignments).reduce((n, arr) => n + arr.length, 0);
+  const myCloseoutProjects = getMyCloseoutProjects(memberId);
 
-  // If no assignments at all and user is Master Admin / has view_all → suggest switching to pipeline
-  if (totalAssigned === 0) {
+  // If no assignments at all AND no closeouts waiting, show empty state
+  if (totalAssigned === 0 && myCloseoutProjects.length === 0) {
     const canSeeAll = currentUserHasPermission('projects.view_all');
     return `
       <div style="max-width:520px;margin:60px auto;text-align:center;padding:40px 20px">
@@ -2771,6 +2781,38 @@ function renderMyWorkDashboard(memberId, activeProjects, myAssignments, activeMe
     `;
   }
 
+  // Closeout banner — sticky at top if any projects are waiting
+  const closeoutBanner = myCloseoutProjects.length > 0 ? `
+    <div class="dashboard-card" style="margin-bottom:16px;border-left:3px solid #DA3633;background:#1A0D0D">
+      <div class="dashboard-card-title">
+        <span style="color:#F85149;display:flex;align-items:center;gap:6px">
+          <svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M7 1L1 12h12L7 1zM7 5v3M7 10v.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
+          Closeout Review Needed &middot; ${myCloseoutProjects.length}
+        </span>
+      </div>
+      <div style="font-size:12px;color:#8B949E;margin-bottom:10px">Booked install end date has passed. Confirm the project is wrapped up or extend the install window.</div>
+      <div style="display:flex;flex-direction:column;gap:6px">
+        ${myCloseoutProjects.map(p => {
+          const win = getInstallWindow(p);
+          const daysOver = win?.end ? Math.abs(daysUntil(win.end)) : 0;
+          const checklist = getCloseoutChecklist(p.id);
+          const doneCount = CLOSEOUT_ITEMS.filter(ci => checklist[ci.key]?.checked).length;
+          return `
+            <div style="display:flex;align-items:center;gap:12px;padding:10px 12px;background:#0D1117;border:1px solid #1C2333;border-radius:5px">
+              <div style="flex:1;min-width:0">
+                <div style="font-size:13px;font-weight:500;color:#E6EDF3;cursor:pointer" onclick="openProject(${p.id})">${esc(p.name)}</div>
+                <div style="font-size:11px;color:#8B949E;margin-top:2px">${esc(p.client_name || '')} &middot; ${daysOver} day${daysOver === 1 ? '' : 's'} past end date${doneCount > 0 ? ` &middot; <span style="color:#3FB950">${doneCount}/4 confirmed</span>` : ''}</div>
+              </div>
+              <button class="btn-primary" onclick="openCloseoutDialog(${p.id})" style="padding:6px 12px;font-size:12px;background:#238636;flex-shrink:0">
+                Close Out &rarr;
+              </button>
+            </div>
+          `;
+        }).join('')}
+      </div>
+    </div>
+  ` : '';
+
   // Compute overall readiness metrics relevant to this user
   const allMyProjects = new Set();
   Object.values(myAssignments).forEach(arr => arr.forEach(a => allMyProjects.add(a.project.id)));
@@ -2782,6 +2824,11 @@ function renderMyWorkDashboard(memberId, activeProjects, myAssignments, activeMe
     return days !== null && days >= 0 && days <= 14;
   });
   const flaggedProjects = myProjects.filter(p => computeProjectFlags(p).total > 0);
+
+  // If there are no other assignments but there's a closeout, just show the banner
+  if (totalAssigned === 0) {
+    return closeoutBanner;
+  }
 
   // Build summary row
   const summaryRow = `
@@ -2841,6 +2888,7 @@ function renderMyWorkDashboard(memberId, activeProjects, myAssignments, activeMe
   }).join('');
 
   return `
+    ${closeoutBanner}
     ${summaryRow}
     ${sections}
   `;
@@ -3486,6 +3534,30 @@ function renderProjectOverviewHTML(p) {
   const marked = isMarkedReadyForInstall(p.id);
 
   return `
+    ${isProjectInCloseout(p) ? (() => {
+      const win = getInstallWindow(p);
+      const daysOver = win?.end ? Math.abs(daysUntil(win.end)) : 0;
+      const checklist = getCloseoutChecklist(p.id);
+      const doneCount = CLOSEOUT_ITEMS.filter(ci => checklist[ci.key]?.checked).length;
+      const canEdit = currentUserHasPermission('install.edit');
+      return `
+        <div class="dashboard-card" style="margin-bottom:14px;border-left:3px solid #DA3633;background:#1A0D0D">
+          <div style="display:flex;align-items:flex-start;gap:12px;flex-wrap:wrap">
+            <div style="width:36px;height:36px;border-radius:50%;background:#DA363322;border:1.5px solid #DA3633;display:flex;align-items:center;justify-content:center;flex-shrink:0">
+              <svg width="18" height="18" viewBox="0 0 14 14" fill="none"><path d="M7 1L1 12h12L7 1zM7 5v3M7 10v.5" stroke="#F85149" stroke-width="1.5" stroke-linecap="round"/></svg>
+            </div>
+            <div style="flex:1;min-width:200px">
+              <div style="font-size:14px;font-weight:600;color:#F85149">Closeout Review Needed</div>
+              <div style="font-size:12px;color:#C9D1D9;margin-top:3px">Booked install ended ${daysOver} day${daysOver === 1 ? '' : 's'} ago. Confirm wrap-up or extend the window.${doneCount > 0 ? ` <span style="color:#3FB950">${doneCount}/4 confirmed</span>` : ''}</div>
+            </div>
+            ${canEdit ? `
+              <button class="btn-primary" onclick="openCloseoutDialog(${p.id})" style="padding:8px 16px;font-size:12px;background:#238636;flex-shrink:0">Close Out &rarr;</button>
+            ` : ''}
+          </div>
+        </div>
+      `;
+    })() : ''}
+
     <!-- Overall progress + segmented linear map -->
     <div class="dashboard-card" style="margin-bottom:14px">
       <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px">
@@ -6597,6 +6669,439 @@ function buildStaticMapHTML(address, pins, apiKey) {
     return '<div class="map-placeholder">Too many pins to render in a single briefing image. Consider consolidating pins or printing a higher-scale view.</div>';
   }
   return `<img src="${url}" alt="Site layout map" onerror="this.parentElement.innerHTML='<div class=\\'map-placeholder\\'>Map image failed to load. Verify the Maps Static API is enabled in Google Cloud.</div>'">`;
+}
+
+// ═══════════════════════════════════════════════════════════════
+// INSTALL CLOSEOUT SYSTEM (Stage E)
+// When a booked install end date passes, the PM Lead and Install
+// Admin get a notification asking them to confirm closeout.
+// ═══════════════════════════════════════════════════════════════
+
+const CLOSEOUT_ITEMS = [
+  { key: 'installed',    label: 'Installation complete' },
+  { key: 'commissioned', label: 'Commissioned with client' },
+  { key: 'signed_off',   label: 'Client signed off on final acceptance' },
+  { key: 'de_prepped',   label: 'Unloaded, de-prepped, truck and shop tidy' }
+];
+
+function getCloseoutChecklist(projectId) {
+  return state.closeoutChecklist[projectId] || {};
+}
+
+function setCloseoutItem(projectId, itemKey, checked) {
+  if (!state.closeoutChecklist[projectId]) state.closeoutChecklist[projectId] = {};
+  if (checked) {
+    state.closeoutChecklist[projectId][itemKey] = {
+      checked: true,
+      checkedBy: getActiveTeamMemberId(),
+      checkedAt: new Date().toISOString()
+    };
+  } else {
+    delete state.closeoutChecklist[projectId][itemKey];
+  }
+  save('vi_closeout_checklist', state.closeoutChecklist);
+}
+
+function isCloseoutComplete(projectId) {
+  const cl = getCloseoutChecklist(projectId);
+  return CLOSEOUT_ITEMS.every(item => cl[item.key]?.checked);
+}
+
+// Is this project past its booked install end date and still in install stage?
+function isProjectInCloseout(p) {
+  if (p.stage !== 'install') return false;
+  const win = getInstallWindow(p);
+  if (!win || win.source !== 'booked' || !win.end) return false;
+  // Past if end date < today
+  const end = new Date(win.end);
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  end.setHours(0, 0, 0, 0);
+  return end < today;
+}
+
+// Returns all projects currently needing closeout review
+function getProjectsNeedingCloseout() {
+  return state.projects.filter(p => !p.archived && isProjectInCloseout(p));
+}
+
+// Which projects does the current user personally own for closeout?
+// PM Lead primary; if no PM on project, Install Admin catches it.
+function getMyCloseoutProjects(memberId) {
+  const installAdmin = currentUserHasPermission('install.manage_crew');
+  return getProjectsNeedingCloseout().filter(p => {
+    const assignment = getProjectAssignment(p.id);
+    const pmPeople = assignment.pm || [];
+    const pmLead = pmPeople.find(x => x.lead);
+    // I'm PM Lead on this one
+    if (pmLead?.id === memberId) return true;
+    // No PM assigned at all, and I have Install Admin permissions
+    if (pmPeople.length === 0 && installAdmin) return true;
+    return false;
+  });
+}
+
+// ── Closeout confirmation dialog ──
+function openCloseoutDialog(projectId) {
+  const p = state.projects.find(x => x.id === projectId);
+  if (!p) return;
+  const canEdit = currentUserHasPermission('install.edit');
+  const checklist = getCloseoutChecklist(projectId);
+
+  document.getElementById('closeout-dialog')?.remove();
+  const modal = document.createElement('div');
+  modal.id = 'closeout-dialog';
+  modal.className = 'modal-overlay';
+
+  const win = getInstallWindow(p);
+  const endLabel = win?.end ? fmtDate(win.end) : 'unknown';
+
+  modal.innerHTML = `
+    <div class="modal-container" style="max-width:520px">
+      <div class="modal-header" style="background:#0D1117;border-bottom:1px solid #30363D">
+        <div>
+          <div class="modal-title" style="display:flex;align-items:center;gap:8px">
+            <svg width="18" height="18" viewBox="0 0 20 20" fill="none" style="flex-shrink:0"><circle cx="10" cy="10" r="8" stroke="#3FB950" stroke-width="1.5"/><path d="M6 10l3 3 5-6" stroke="#3FB950" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
+            Close Out ${esc(p.name)}
+          </div>
+          <div class="modal-sub">Booked install ended ${esc(endLabel)}. Confirm the install is wrapped up.</div>
+        </div>
+        <button class="modal-close" onclick="document.getElementById('closeout-dialog')?.remove()">&times;</button>
+      </div>
+      <div class="modal-body">
+        <div style="font-size:11px;color:#8B949E;font-weight:500;text-transform:uppercase;letter-spacing:0.08em;margin-bottom:10px">Closeout Checklist</div>
+        <div id="closeout-items" style="display:flex;flex-direction:column;gap:6px">
+          ${renderCloseoutItems(projectId, canEdit)}
+        </div>
+
+        <div style="margin-top:18px;padding:12px;background:#0D1117;border:1px solid #1C2333;border-radius:5px">
+          <div style="font-size:11px;color:#8B949E;margin-bottom:8px">If the install isn&rsquo;t actually done yet:</div>
+          <button class="btn btn-sm" onclick="document.getElementById('closeout-dialog')?.remove();extendInstallFromCloseout(${projectId})" style="font-size:12px;padding:6px 12px">
+            <svg width="11" height="11" viewBox="0 0 12 12" fill="none" style="vertical-align:-1px;margin-right:4px"><path d="M2 6h8M7 3l3 3-3 3" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+            Extend install window
+          </button>
+          <div style="font-size:10px;color:#6E7681;margin-top:6px">Your checklist progress will be saved.</div>
+        </div>
+
+        <div id="closeout-footer" style="margin-top:18px">
+          ${renderCloseoutFooter(projectId, canEdit)}
+        </div>
+      </div>
+    </div>
+  `;
+  document.body.appendChild(modal);
+}
+
+function renderCloseoutItems(projectId, canEdit) {
+  const checklist = getCloseoutChecklist(projectId);
+  return CLOSEOUT_ITEMS.map(item => {
+    const entry = checklist[item.key];
+    const isChecked = !!entry?.checked;
+    const checkedBy = entry?.checkedBy ? getTeamMember(entry.checkedBy) : null;
+    return `
+      <div onclick="${canEdit ? `toggleCloseoutItem(${projectId}, '${item.key}')` : ''}"
+        style="display:flex;align-items:center;gap:12px;padding:10px 12px;background:${isChecked ? '#0D1A0E' : '#0D1117'};border:1px solid ${isChecked ? '#238636' : '#1C2333'};border-radius:5px;cursor:${canEdit ? 'pointer' : 'default'};-webkit-tap-highlight-color:transparent;transition:all 0.15s">
+        <div style="width:20px;height:20px;border-radius:4px;border:1.5px solid ${isChecked ? '#3FB950' : (canEdit ? '#58A6FF' : '#30363D')};background:${isChecked ? '#3FB950' : 'transparent'};display:flex;align-items:center;justify-content:center;flex-shrink:0">
+          ${isChecked ? '<svg width="12" height="12" viewBox="0 0 12 12" fill="none"><path d="M2 6.5l2.5 2.5L10 3.5" stroke="#fff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>' : ''}
+        </div>
+        <div style="flex:1;min-width:0">
+          <div style="font-size:13px;color:#E6EDF3;${isChecked ? 'text-decoration:line-through;opacity:0.75' : ''}">${esc(item.label)}</div>
+          ${isChecked && checkedBy ? `<div style="font-size:10px;color:#6E7681;margin-top:2px">${esc(checkedBy.name)} · ${fmtDate(entry.checkedAt)}</div>` : ''}
+        </div>
+      </div>
+    `;
+  }).join('');
+}
+
+function renderCloseoutFooter(projectId, canEdit) {
+  const complete = isCloseoutComplete(projectId);
+  if (!complete) {
+    return `
+      <div style="font-size:11px;color:#6E7681;text-align:center;padding:10px">
+        Check all four items to mark the project complete.
+      </div>
+    `;
+  }
+  return `
+    <div style="padding:12px;background:#0D1A0E;border:1px solid #238636;border-radius:5px;text-align:center">
+      <div style="font-size:12px;color:#3FB950;font-weight:500;margin-bottom:8px">All closeout items confirmed</div>
+      <button class="btn-primary" onclick="reviewAndCompleteProject(${projectId})" style="background:#238636;padding:8px 20px;font-size:13px">
+        Review milestones &amp; mark Complete &rarr;
+      </button>
+    </div>
+  `;
+}
+
+function toggleCloseoutItem(projectId, itemKey) {
+  if (!currentUserHasPermission('install.edit')) return;
+  const current = getCloseoutChecklist(projectId);
+  const isChecked = !!current[itemKey]?.checked;
+  setCloseoutItem(projectId, itemKey, !isChecked);
+  // Re-render only the inner parts of the dialog
+  const itemsEl = document.getElementById('closeout-items');
+  const footerEl = document.getElementById('closeout-footer');
+  if (itemsEl) itemsEl.innerHTML = renderCloseoutItems(projectId, true);
+  if (footerEl) footerEl.innerHTML = renderCloseoutFooter(projectId, true);
+}
+
+// "Extend install window" — reuses the existing booked install dialog
+function extendInstallFromCloseout(projectId) {
+  // Open project first so state.currentProject is set, then show dialog
+  openProject(projectId);
+  setTimeout(() => {
+    if (typeof showBookedInstallDialog === 'function') {
+      showBookedInstallDialog(projectId);
+    }
+  }, 100);
+}
+
+// ── Review & complete: final review dialog ──
+function reviewAndCompleteProject(projectId) {
+  const p = state.projects.find(x => x.id === projectId);
+  if (!p) return;
+  const installPhase = PHASES.find(ph => ph.key === 'install');
+  if (!installPhase) return;
+
+  document.getElementById('closeout-dialog')?.remove();
+  document.getElementById('review-complete-dialog')?.remove();
+
+  const modal = document.createElement('div');
+  modal.id = 'review-complete-dialog';
+  modal.className = 'modal-overlay';
+  modal.innerHTML = `
+    <div class="modal-container" style="max-width:560px">
+      <div class="modal-header">
+        <div>
+          <div class="modal-title">Review Install Milestones</div>
+          <div class="modal-sub">Confirm each milestone before marking ${esc(p.name)} as complete.</div>
+        </div>
+        <button class="modal-close" onclick="document.getElementById('review-complete-dialog')?.remove()">&times;</button>
+      </div>
+      <div class="modal-body">
+        <div style="font-size:11px;color:#6E7681;padding:8px 10px;background:#0D1117;border-left:2px solid #58A6FF;border-radius:2px;margin-bottom:14px">
+          Each item below will be marked complete when you click &ldquo;Mark Project Complete.&rdquo; Uncheck anything that genuinely wasn&rsquo;t done so the record is accurate.
+        </div>
+        <div id="review-milestones" style="display:flex;flex-direction:column;gap:6px">
+          ${renderReviewMilestones(p.id, installPhase)}
+        </div>
+        <div style="display:flex;gap:8px;margin-top:18px">
+          <button class="btn" style="flex:1" onclick="document.getElementById('review-complete-dialog')?.remove()">Cancel</button>
+          <button class="btn-primary" style="flex:2;background:#238636" onclick="finalizeProjectCompletion(${projectId})">Mark Project Complete</button>
+        </div>
+      </div>
+    </div>
+  `;
+  document.body.appendChild(modal);
+}
+
+function renderReviewMilestones(projectId, installPhase) {
+  const p = state.projects.find(x => x.id === projectId);
+  if (!p) return '';
+  return installPhase.milestones.map(m => {
+    const prog = milestoneProgress(p, installPhase, m);
+    const done = prog >= 1;
+    return `
+      <div onclick="toggleReviewMilestone(${projectId}, '${m.key}')"
+        style="display:flex;align-items:center;gap:10px;padding:8px 10px;background:${done ? '#0D1A0E' : '#0D1117'};border:1px solid ${done ? '#238636' : '#1C2333'};border-radius:5px;cursor:pointer;-webkit-tap-highlight-color:transparent">
+        <div style="width:18px;height:18px;border-radius:4px;border:1.5px solid ${done ? '#3FB950' : '#58A6FF'};background:${done ? '#3FB950' : 'transparent'};display:flex;align-items:center;justify-content:center;flex-shrink:0">
+          ${done ? '<svg width="10" height="10" viewBox="0 0 12 12" fill="none"><path d="M2 6.5l2.5 2.5L10 3.5" stroke="#fff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>' : ''}
+        </div>
+        <div style="font-size:12px;color:#E6EDF3;flex:1">${esc(m.label)}</div>
+        ${prog > 0 && prog < 1 ? `<span style="font-size:10px;color:#D29922">${Math.round(prog * 100)}%</span>` : ''}
+      </div>
+    `;
+  }).join('');
+}
+
+function toggleReviewMilestone(projectId, milestoneKey) {
+  const p = state.projects.find(x => x.id === projectId);
+  if (!p) return;
+  const installPhase = PHASES.find(ph => ph.key === 'install');
+  const m = installPhase.milestones.find(mi => mi.key === milestoneKey);
+  if (!m) return;
+  const current = milestoneProgress(p, installPhase, m) >= 1;
+  setMilestone(projectId, 'install', milestoneKey, !current);
+  const el = document.getElementById('review-milestones');
+  if (el) el.innerHTML = renderReviewMilestones(projectId, installPhase);
+}
+
+function finalizeProjectCompletion(projectId) {
+  const p = state.projects.find(x => x.id === projectId);
+  if (!p) return;
+  p.stage = 'complete';
+  // Log activity
+  if (!state.recentActivity) state.recentActivity = {};
+  state.recentActivity[projectId] = new Date().toISOString();
+  // Clear from currentProject if we're looking at it, to refresh display
+  save('vi_projects_cache', state.projects);
+  document.getElementById('review-complete-dialog')?.remove();
+  showToast(`${p.name} marked Complete`, 'success');
+  renderCurrentPage();
+}
+
+// ── Install Admin dashboard ──
+// For Clint: all install projects across the company, with closeout queue as the priority item
+function renderInstallAdminDashboard(activeProjects) {
+  const closeoutProjects = getProjectsNeedingCloseout();
+  const inInstall = activeProjects.filter(p => p.stage === 'install' && !isProjectInCloseout(p));
+  // Upcoming: booked install in next 14 days
+  const upcoming = activeProjects
+    .map(p => ({ p, win: getInstallWindow(p) }))
+    .filter(x => x.win && !isProjectInCloseout(x.p))
+    .map(x => ({ ...x, days: daysUntil(x.win.start) }))
+    .filter(x => x.days !== null && x.days >= -3 && x.days <= 14)
+    .sort((a, b) => a.days - b.days);
+  // Stuck: in install phase with no activity 14+ days (approximate via recentActivity)
+  const stuck = activeProjects.filter(p => {
+    if (p.stage !== 'install') return false;
+    if (isProjectInCloseout(p)) return false;
+    const la = state.recentActivity?.[p.id];
+    if (!la) return false;
+    const days = (Date.now() - new Date(la).getTime()) / 86400000;
+    return days > 14;
+  }).slice(0, 8);
+  // Shop work queue summary
+  const openShop = (state.shopwork || []).filter(t => t.status !== 'done');
+  const unassignedShop = openShop.filter(t => !t.assignee_id);
+
+  return `
+    <!-- Hero metrics -->
+    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:12px;margin-bottom:18px">
+      <div class="metric-card" style="${closeoutProjects.length > 0 ? 'border-color:#DA3633' : ''}">
+        <div class="metric-label">Closeout Queue</div>
+        <div class="metric-value" style="${closeoutProjects.length > 0 ? 'color:#F85149' : ''}">${closeoutProjects.length}</div>
+        <div class="metric-sub">${closeoutProjects.length > 0 ? 'past booked end date' : 'all installs current'}</div>
+      </div>
+      <div class="metric-card">
+        <div class="metric-label">In Install</div>
+        <div class="metric-value">${inInstall.length}</div>
+        <div class="metric-sub">active installs</div>
+      </div>
+      <div class="metric-card">
+        <div class="metric-label">Upcoming 14d</div>
+        <div class="metric-value">${upcoming.filter(u => u.days >= 0).length}</div>
+        <div class="metric-sub">scheduled</div>
+      </div>
+      <div class="metric-card" style="${unassignedShop.length > 0 ? 'border-color:#9E6A03' : ''}">
+        <div class="metric-label">Shop Work</div>
+        <div class="metric-value" style="${unassignedShop.length > 0 ? 'color:#D29922' : ''}">${openShop.length}</div>
+        <div class="metric-sub">${unassignedShop.length > 0 ? unassignedShop.length + ' unassigned' : 'all assigned'}</div>
+      </div>
+    </div>
+
+    <!-- Closeout Queue (most important if not empty) -->
+    ${closeoutProjects.length > 0 ? `
+      <div class="dashboard-card" style="margin-bottom:18px;border-left:3px solid #DA3633">
+        <div class="dashboard-card-title">
+          <span style="color:#F85149">Closeout Queue &middot; ${closeoutProjects.length}</span>
+          <span style="font-size:11px;color:#8B949E;font-weight:400">Projects past booked install end date</span>
+        </div>
+        <div style="display:flex;flex-direction:column;gap:6px">
+          ${closeoutProjects.map(p => {
+            const win = getInstallWindow(p);
+            const daysOver = win?.end ? Math.abs(daysUntil(win.end)) : 0;
+            const assignment = getProjectAssignment(p.id);
+            const pmLead = (assignment.pm || []).find(x => x.lead);
+            const pmName = pmLead ? getTeamMember(pmLead.id)?.name : 'No PM assigned';
+            const checklist = getCloseoutChecklist(p.id);
+            const doneCount = CLOSEOUT_ITEMS.filter(ci => checklist[ci.key]?.checked).length;
+            return `
+              <div style="display:flex;align-items:center;gap:12px;padding:10px 12px;background:#0D1117;border:1px solid #1C2333;border-radius:5px;border-left:2px solid #DA3633">
+                <div style="flex:1;min-width:0">
+                  <div style="font-size:13px;font-weight:500;color:#E6EDF3;cursor:pointer" onclick="openProject(${p.id})">${esc(p.name)}</div>
+                  <div style="font-size:11px;color:#8B949E;margin-top:2px">
+                    ${esc(p.client_name || '')} &middot; ${daysOver} day${daysOver === 1 ? '' : 's'} past end date &middot; PM: ${esc(pmName)}
+                  </div>
+                  ${doneCount > 0 ? `<div style="font-size:10px;color:#3FB950;margin-top:2px">${doneCount}/4 closeout items confirmed</div>` : ''}
+                </div>
+                <button class="btn-primary" onclick="openCloseoutDialog(${p.id})" style="padding:6px 12px;font-size:12px;background:#238636">
+                  Close Out &rarr;
+                </button>
+              </div>
+            `;
+          }).join('')}
+        </div>
+      </div>
+    ` : ''}
+
+    <!-- Two-column layout: In Install + Upcoming -->
+    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(340px,1fr));gap:14px;margin-bottom:18px">
+      <div class="dashboard-card">
+        <div class="dashboard-card-title">In Install &middot; ${inInstall.length}</div>
+        ${inInstall.length === 0 ? '<div style="font-size:12px;color:#6E7681;font-style:italic;padding:10px 0">No active installs</div>' : inInstall.slice(0, 8).map(p => {
+          const installPhase = PHASES.find(ph => ph.key === 'install');
+          const pct = Math.round(phaseProgress(p, installPhase) * 100);
+          const win = getInstallWindow(p);
+          return `
+            <div onclick="openProject(${p.id})" style="display:flex;align-items:center;gap:10px;padding:8px 10px;background:#0D1117;border:1px solid #1C2333;border-radius:5px;margin-bottom:5px;cursor:pointer;-webkit-tap-highlight-color:transparent">
+              <div style="flex:1;min-width:0">
+                <div style="font-size:12px;color:#E6EDF3;font-weight:500;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${esc(p.name)}</div>
+                <div style="font-size:10px;color:#6E7681;margin-top:1px">${esc(p.client_name || '')}${win?.end ? ' · ends ' + fmtDate(win.end) : ''}</div>
+              </div>
+              <div style="font-size:10px;color:${pct === 100 ? '#3FB950' : '#D29922'};font-weight:600;flex-shrink:0">${pct}%</div>
+            </div>
+          `;
+        }).join('')}
+      </div>
+
+      <div class="dashboard-card">
+        <div class="dashboard-card-title">Upcoming &middot; ${upcoming.length}</div>
+        ${upcoming.length === 0 ? '<div style="font-size:12px;color:#6E7681;font-style:italic;padding:10px 0">Nothing scheduled in the next 14 days</div>' : upcoming.slice(0, 8).map(({ p, win, days }) => {
+          const cdClass = countdownClass(win.start);
+          return `
+            <div onclick="openProject(${p.id})" style="display:flex;align-items:center;gap:10px;padding:8px 10px;background:#0D1117;border:1px solid #1C2333;border-radius:5px;margin-bottom:5px;cursor:pointer;-webkit-tap-highlight-color:transparent">
+              <div style="flex:1;min-width:0">
+                <div style="font-size:12px;color:#E6EDF3;font-weight:500;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${esc(p.name)}</div>
+                <div style="font-size:10px;color:#6E7681;margin-top:1px">${esc(p.client_name || '')}</div>
+              </div>
+              <span class="countdown-pill ${cdClass}" style="flex-shrink:0">${fmtCountdown(win.start)}</span>
+            </div>
+          `;
+        }).join('')}
+      </div>
+    </div>
+
+    <!-- Shop work and stuck installs -->
+    ${(openShop.length > 0 || stuck.length > 0) ? `
+      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(340px,1fr));gap:14px">
+        ${openShop.length > 0 ? `
+          <div class="dashboard-card">
+            <div class="dashboard-card-title" style="display:flex;align-items:center;justify-content:space-between">
+              <span>Shop Work Queue &middot; ${openShop.length}</span>
+              <button class="btn btn-sm" onclick="navigate('shopwork')" style="font-size:10px;padding:3px 8px">View all</button>
+            </div>
+            ${openShop.slice(0, 5).map(t => {
+              const assignee = t.assignee_id ? getTeamMember(t.assignee_id) : null;
+              const proj = t.project_id ? state.projects.find(p => p.id === t.project_id) : null;
+              const priorityColors = { high: '#F85149', med: '#D29922', low: '#6E7681' };
+              const pColor = priorityColors[t.priority] || '#6E7681';
+              return `
+                <div style="display:flex;align-items:center;gap:8px;padding:7px 10px;background:#0D1117;border:1px solid #1C2333;border-radius:4px;margin-bottom:4px">
+                  <div style="width:6px;height:6px;border-radius:50%;background:${pColor};flex-shrink:0"></div>
+                  <div style="flex:1;min-width:0">
+                    <div style="font-size:12px;color:#E6EDF3">${esc(t.text)}</div>
+                    <div style="font-size:10px;color:#6E7681;margin-top:1px">${assignee ? esc(assignee.name) : '<span style="color:#D29922">Unassigned</span>'}${proj ? ' &middot; ' + esc(proj.name) : ''}</div>
+                  </div>
+                </div>
+              `;
+            }).join('')}
+          </div>
+        ` : ''}
+
+        ${stuck.length > 0 ? `
+          <div class="dashboard-card" style="border-left:2px solid #D29922">
+            <div class="dashboard-card-title"><span style="color:#D29922">Stuck Installs &middot; ${stuck.length}</span></div>
+            ${stuck.map(p => `
+              <div onclick="openProject(${p.id})" style="display:flex;align-items:center;gap:10px;padding:7px 10px;background:#0D1117;border:1px solid #1C2333;border-radius:4px;margin-bottom:4px;cursor:pointer;-webkit-tap-highlight-color:transparent">
+                <div style="font-size:12px;color:#E6EDF3;flex:1;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${esc(p.name)}</div>
+                <div style="font-size:10px;color:#6E7681">no activity 14d+</div>
+              </div>
+            `).join('')}
+          </div>
+        ` : ''}
+      </div>
+    ` : ''}
+  `;
 }
 // ── Shop Work ──
 // Shape: { id, text, assignee_id, priority, project_id, status: 'open'|'done', created, completed }
