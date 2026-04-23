@@ -68,6 +68,8 @@ const PERMISSION_KEYS = [
   'financials.view_project_totals',  // Total value, equipment price, labor price per project
   'financials.view_margins',         // Margin %, cost basis, equipment cost vs price
   'financials.view_cashflow',        // Salary, direct costs, ops expenses — CFO / Owner tier
+  // Templates — Kris and others can suggest additions; reviewers accept/reject
+  'templates.review',             // Review incoming template suggestions and accept/reject them
   // Sales / client
   'sales.view_pipeline',
   'sales.send_proposals',
@@ -114,7 +116,8 @@ const DEFAULT_BUNDLES = {
       'vendors.view',
       'financials.view_project_totals',
       'design.view','design.assign_tasks',
-      'client.view_contact'
+      'client.view_contact',
+      'templates.review'
     ]
   },
   'design_admin': {
@@ -131,7 +134,8 @@ const DEFAULT_BUNDLES = {
       'purchasing.view','purchasing.edit',
       'vendors.view','vendors.manage',
       'financials.view_project_totals',
-      'client.view_contact'
+      'client.view_contact',
+      'templates.review'
     ]
   },
   'sales': {
@@ -358,7 +362,9 @@ const state = {
   bundles: JSON.parse(localStorage.getItem('vi_bundles') || 'null') || JSON.parse(JSON.stringify(DEFAULT_BUNDLES)),
   userPermissions: JSON.parse(localStorage.getItem('vi_user_perms') || '{}'),
   dashboardMode: localStorage.getItem('vi_dashboard_mode') || 'mine',
-  subtasks: JSON.parse(localStorage.getItem('vi_subtasks') || '{}')
+  subtasks: JSON.parse(localStorage.getItem('vi_subtasks') || '{}'),
+  templateSuggestions: JSON.parse(localStorage.getItem('vi_template_suggestions') || '[]'),
+  templateCustomizations: JSON.parse(localStorage.getItem('vi_template_customizations') || '{}')
 };
 
 // ── Team Roster ──
@@ -3388,6 +3394,15 @@ function renderProjectPage(c) {
             <button class="btn-primary" onclick="markContractReviewed(${p.id})" style="background:#238636;padding:6px 12px;font-size:12px;min-height:32px">&#10003; Mark Reviewed</button>
           </div>
         ` : ''}
+        ${p._stage_divergence ? `
+          <div style="display:flex;align-items:center;gap:10px;padding:8px 14px;background:#161B22;border:1px solid #30363D;border-left:3px solid #58A6FF;border-radius:4px;margin-top:8px">
+            <svg width="14" height="14" viewBox="0 0 16 16" fill="none" style="flex-shrink:0;color:#58A6FF"><path d="M8 2v4M8 10v.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/><circle cx="8" cy="8" r="6" stroke="currentColor" stroke-width="1.2"/></svg>
+            <div style="flex:1;min-width:0;font-size:11px;color:#C9D1D9">
+              Jetbuilt shows this project as <strong style="color:#58A6FF">${esc(p._stage_divergence.jb_stage)}</strong>. Valiant manages stage independently after contract.
+            </div>
+            <button class="btn btn-sm" onclick="dismissStageDivergence(${p.id})" style="font-size:10px;padding:3px 8px;color:#8B949E" title="Dismiss">&times;</button>
+          </div>
+        ` : ''}
       </div>
       <div class="project-page-body-wrap">
         <aside class="prail">${railHTML}</aside>
@@ -4078,11 +4093,13 @@ function renderChecklistTab(container, project, phase) {
   }
   container.innerHTML = subtasksHTML + systems.map(sys => {
     const template = TEMPLATES[phase][sys];
+    const items = getTemplateItems(phase, sys);
     const checkKey = `${project.id}_${phase}_${sys}`;
     const checks = state.checklists[checkKey] || {};
-    const total = template.items.length;
+    const total = items.length;
     const done = Object.values(checks).filter(Boolean).length;
     const pct = total > 0 ? Math.round((done / total) * 100) : 0;
+    const origCount = template.items.length;
     return `
       <div class="dashboard-card" style="margin-bottom:14px">
         <div class="dashboard-card-title">
@@ -4090,21 +4107,31 @@ function renderChecklistTab(container, project, phase) {
           <span style="font-size:12px;color:${pct === 100 ? '#3FB950' : '#8B949E'}">${done}/${total} (${pct}%)</span>
         </div>
         <div class="timeline-bar">
-          ${template.items.map((_, i) => `<div class="timeline-segment ${checks[i] ? 'done' : ''}"></div>`).join('')}
+          ${items.map((_, i) => `<div class="timeline-segment ${checks[i] ? 'done' : ''}"></div>`).join('')}
         </div>
-        ${template.items.map((item, i) => `
+        ${items.map((item, i) => {
+          const isCustom = i >= origCount;
+          return `
           <div class="checklist-item ${checks[i] ? 'checked' : ''}" onclick="toggleCheck(${project.id}, '${phase}', '${sys}', ${i})">
             <div class="checklist-box">
               <svg class="checklist-check" width="10" height="10" viewBox="0 0 10 10" fill="none">
                 <path d="M2 5l2.5 2.5L8 3" stroke="#fff" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
               </svg>
             </div>
-            <span class="checklist-label">${esc(item)}</span>
+            <span class="checklist-label">${esc(item)}${isCustom ? ' <span style="font-size:9px;color:#58A6FF;padding:1px 5px;border-radius:3px;background:#0D1626;border:1px solid #1565C0;margin-left:4px;vertical-align:middle">ADDED</span>' : ''}</span>
           </div>
-        `).join('')}
+        `;
+        }).join('')}
       </div>
     `;
   }).join('');
+}
+
+// Returns the effective items for a template: base items plus any accepted customizations
+function getTemplateItems(phase, scope) {
+  const base = TEMPLATES[phase]?.[scope]?.items || [];
+  const customs = state.templateCustomizations?.[`${phase}.${scope}`] || [];
+  return [...base, ...customs];
 }
 
 // ── Sub-tasks UI (Pass 4A) ──
@@ -4266,6 +4293,34 @@ function showSubtaskDialog(projectId, phase, taskId) {
         <label style="font-size:11px;color:#8B949E;font-weight:500;display:block;margin-bottom:4px">Due date (optional)</label>
         <input type="date" id="st-due" class="form-input" value="${esc(task?.due_date || '')}" style="width:100%;margin-bottom:14px">
 
+        ${!isEdit && (() => {
+          const p = state.projects.find(pr => pr.id === projectId);
+          const scopes = (p?.systems || []).filter(s => TEMPLATES[phase]?.[s]);
+          if (scopes.length === 0) return '';
+          return `
+            <div style="padding:10px 12px;background:#0D1117;border:1px solid #1C2333;border-radius:5px;margin-bottom:14px">
+              <div style="display:flex;align-items:flex-start;gap:8px;margin-bottom:6px">
+                <input type="checkbox" id="st-suggest-template" style="margin-top:3px">
+                <label for="st-suggest-template" style="font-size:12px;color:#C9D1D9;cursor:pointer">Also suggest adding this to a template</label>
+              </div>
+              <div id="st-suggest-scope-wrap" style="display:none;padding-left:24px;margin-top:6px">
+                <label style="font-size:10px;color:#8B949E;display:block;margin-bottom:3px">Which template?</label>
+                <select id="st-suggest-scope" class="form-input" style="width:100%;font-size:12px">
+                  ${scopes.map(s => `<option value="${s}">${esc(TEMPLATES[phase][s].name)}</option>`).join('')}
+                </select>
+                <div style="font-size:10px;color:#6E7681;margin-top:4px">A reviewer will approve or reject before it&rsquo;s added to the template for future projects.</div>
+              </div>
+            </div>
+            <script>
+              (function(){
+                const cb = document.getElementById('st-suggest-template');
+                const wrap = document.getElementById('st-suggest-scope-wrap');
+                if (cb && wrap) cb.onchange = () => { wrap.style.display = cb.checked ? 'block' : 'none'; };
+              })();
+            </script>
+          `;
+        })()}
+
         <div style="display:flex;gap:8px">
           <button class="btn" style="flex:1" onclick="document.getElementById('subtask-dialog')?.remove()">Cancel</button>
           <button class="btn-primary" style="flex:1" onclick="saveSubtask(${projectId}, '${phase}', ${taskId || 'null'})">${isEdit ? 'Save' : 'Add Task'}</button>
@@ -4291,15 +4346,91 @@ function saveSubtask(projectId, phase, taskId) {
     updateSubtask(projectId, phase, taskId, { text, assignee_id, priority, due_date });
   } else {
     addSubtask(projectId, phase, { text, assignee_id, priority, due_date });
+    // Check if template suggestion was requested
+    const suggestCb = document.getElementById('st-suggest-template');
+    if (suggestCb?.checked) {
+      const scope = document.getElementById('st-suggest-scope')?.value;
+      if (scope) createTemplateSuggestion({ phase, scope, text, project_id: projectId });
+    }
   }
   document.getElementById('subtask-dialog')?.remove();
   rerenderCurrentTab();
+}
+
+// ── Template suggestions (Pass 4B) ──
+function createTemplateSuggestion({ phase, scope, text, project_id }) {
+  const suggestion = {
+    id: Date.now() + Math.random(),
+    phase, scope, text, project_id,
+    suggested_by: getActiveTeamMemberId(),
+    created_at: new Date().toISOString(),
+    status: 'pending'
+  };
+  state.templateSuggestions.push(suggestion);
+  save('vi_template_suggestions', state.templateSuggestions);
+  // Brief confirmation — non-blocking
+  showToast(`Template suggestion submitted. A reviewer will decide whether to add it to the ${TEMPLATES[phase][scope]?.name || scope} template.`);
+}
+
+function getPendingSuggestions() {
+  return state.templateSuggestions.filter(s => s.status === 'pending');
+}
+
+function acceptTemplateSuggestion(suggestionId) {
+  const s = state.templateSuggestions.find(x => x.id === suggestionId);
+  if (!s) return;
+  if (!currentUserHasPermission('templates.review')) return;
+  // Add to template customizations
+  const key = `${s.phase}.${s.scope}`;
+  if (!state.templateCustomizations[key]) state.templateCustomizations[key] = [];
+  state.templateCustomizations[key].push(s.text);
+  save('vi_template_customizations', state.templateCustomizations);
+  s.status = 'accepted';
+  s.reviewed_by = getActiveTeamMemberId();
+  s.reviewed_at = new Date().toISOString();
+  save('vi_template_suggestions', state.templateSuggestions);
+  renderCurrentPage();
+}
+
+function rejectTemplateSuggestion(suggestionId) {
+  const s = state.templateSuggestions.find(x => x.id === suggestionId);
+  if (!s) return;
+  if (!currentUserHasPermission('templates.review')) return;
+  s.status = 'rejected';
+  s.reviewed_by = getActiveTeamMemberId();
+  s.reviewed_at = new Date().toISOString();
+  save('vi_template_suggestions', state.templateSuggestions);
+  renderCurrentPage();
+}
+
+// Toast helper (non-blocking confirmation)
+function showToast(msg, kind = 'info') {
+  const existing = document.getElementById('vi-toast');
+  if (existing) existing.remove();
+  const toast = document.createElement('div');
+  toast.id = 'vi-toast';
+  const colors = { info: '#1565C0', success: '#238636', warn: '#9E6A03', error: '#DA3633' };
+  toast.style.cssText = `position:fixed;bottom:24px;left:50%;transform:translateX(-50%);background:#161B22;color:#E6EDF3;padding:12px 18px;border-radius:6px;border:1px solid ${colors[kind] || colors.info};box-shadow:0 4px 20px rgba(0,0,0,0.4);font-size:13px;z-index:99999;max-width:420px;line-height:1.4`;
+  toast.textContent = msg;
+  document.body.appendChild(toast);
+  setTimeout(() => { toast.style.opacity = '0'; toast.style.transition = 'opacity 0.4s'; }, 3000);
+  setTimeout(() => toast.remove(), 3500);
 }
 
 function confirmDeleteSubtask(projectId, phase, taskId) {
   if (!confirm('Delete this task?')) return;
   deleteSubtask(projectId, phase, taskId);
   rerenderCurrentTab();
+}
+
+function dismissStageDivergence(projectId) {
+  const p = state.projects.find(pr => pr.id === projectId);
+  if (!p) return;
+  delete p._stage_divergence;
+  // Update the raw_stage so this project's current JB stage is treated as the baseline going forward
+  if (p._jb_stage_current) p.raw_stage = p._jb_stage_current;
+  try { localStorage.setItem('vi_projects_cache', JSON.stringify(state.projects)); } catch(e) {}
+  renderCurrentPage();
 }
 
 
@@ -5153,11 +5284,11 @@ function milestoneProgress(p, phase, milestone) {
     let totalItems = 0;
     let completedItems = 0;
     relevantSystems.forEach(sys => {
-      const tpl = TEMPLATES[milestone.linkedChecklist][sys];
+      const items = getTemplateItems(milestone.linkedChecklist, sys);
       const key = `${p.id}_${milestone.linkedChecklist}_${sys}`;
       const checks = state.checklists[key] || {};
-      totalItems += tpl.items.length;
-      completedItems += tpl.items.filter((_, i) => checks[i]).length;
+      totalItems += items.length;
+      completedItems += items.filter((_, i) => checks[i]).length;
     });
     return totalItems > 0 ? completedItems / totalItems : 0;
   }
@@ -6148,21 +6279,33 @@ function showEditMemberDialog(id) { showMemberDialog(id); }
 // ── Admin page (Pass 3A) ──
 function renderAdmin(c) {
   const activeMemberId = getActiveTeamMemberId();
-  if (!currentUserHasPermission('admin.view_users')) {
+  const canViewUsers = currentUserHasPermission('admin.view_users');
+  const canReviewTemplates = currentUserHasPermission('templates.review');
+  if (!canViewUsers && !canReviewTemplates) {
     c.innerHTML = `
       <div style="max-width:520px;margin:40px auto;text-align:center;padding:40px 24px">
         <div style="font-size:40px;margin-bottom:12px">🔒</div>
         <div style="font-size:16px;font-weight:600;color:#E6EDF3;margin-bottom:6px">Admin access required</div>
-        <div style="font-size:13px;color:#8B949E">You need the <code style="color:#58A6FF">admin.view_users</code> permission to see this page. Ask a Master Admin to grant it.</div>
+        <div style="font-size:13px;color:#8B949E">You need the <code style="color:#58A6FF">admin.view_users</code> or <code style="color:#58A6FF">templates.review</code> permission to see this page.</div>
       </div>
     `;
     return;
   }
   const canAssignPerms = currentUserHasPermission('admin.assign_permissions');
   const isMasterAdmin = currentUserHasPermission('admin.system');
-  // canEditUsers now depends on target user — check per user below
   const canEditAnyUser = _ALL_USER_EDIT_PERMS.some(k => currentUserHasPermission(k));
-  const adminTab = state.adminTab || 'users';
+
+  // Build tab list based on permissions
+  const tabs = [];
+  if (canViewUsers) tabs.push({ key: 'users', label: 'Users' });
+  if (canViewUsers) tabs.push({ key: 'bundles', label: 'Permission Bundles' });
+  if (canReviewTemplates) {
+    const pending = getPendingSuggestions().length;
+    tabs.push({ key: 'templates', label: 'Template Suggestions', badge: pending });
+  }
+  let adminTab = state.adminTab || tabs[0]?.key || 'users';
+  // Guard: fall back if user can't see selected tab
+  if (!tabs.find(t => t.key === adminTab)) adminTab = tabs[0]?.key;
 
   c.innerHTML = `
     <div style="max-width:880px;margin:0 auto">
@@ -6175,16 +6318,90 @@ function renderAdmin(c) {
       </div>
 
       <!-- Sub-tabs -->
-      <div style="display:flex;gap:2px;border-bottom:1px solid #1C2333;margin-bottom:16px">
-        ${['users','bundles'].map(t => {
-          const active = adminTab === t;
-          const label = t === 'users' ? 'Users' : 'Permission Bundles';
-          return `<div onclick="state.adminTab='${t}';renderCurrentPage()" style="padding:8px 14px;font-size:12px;font-weight:500;cursor:pointer;border-bottom:2px solid ${active ? '#58A6FF' : 'transparent'};color:${active ? '#58A6FF' : '#8B949E'};-webkit-tap-highlight-color:transparent">${label}</div>`;
+      <div style="display:flex;gap:2px;border-bottom:1px solid #1C2333;margin-bottom:16px;flex-wrap:wrap">
+        ${tabs.map(t => {
+          const active = adminTab === t.key;
+          return `<div onclick="state.adminTab='${t.key}';renderCurrentPage()" style="padding:8px 14px;font-size:12px;font-weight:500;cursor:pointer;border-bottom:2px solid ${active ? '#58A6FF' : 'transparent'};color:${active ? '#58A6FF' : '#8B949E'};-webkit-tap-highlight-color:transparent;display:flex;align-items:center;gap:6px">${t.label}${t.badge > 0 ? `<span style="font-size:9px;padding:1px 6px;border-radius:8px;background:#DA3633;color:#fff;font-weight:600">${t.badge}</span>` : ''}</div>`;
         }).join('')}
       </div>
 
-      ${adminTab === 'users' ? renderAdminUsers(activeMemberId, canEditAnyUser, canAssignPerms, isMasterAdmin) : renderAdminBundles(isMasterAdmin)}
+      ${adminTab === 'users' ? renderAdminUsers(activeMemberId, canEditAnyUser, canAssignPerms, isMasterAdmin)
+        : adminTab === 'bundles' ? renderAdminBundles(isMasterAdmin)
+        : adminTab === 'templates' ? renderAdminTemplateSuggestions()
+        : ''}
     </div>
+  `;
+}
+
+function renderAdminTemplateSuggestions() {
+  const pending = state.templateSuggestions.filter(s => s.status === 'pending');
+  const recent = state.templateSuggestions
+    .filter(s => s.status !== 'pending')
+    .sort((a, b) => new Date(b.reviewed_at || 0) - new Date(a.reviewed_at || 0))
+    .slice(0, 20);
+
+  return `
+    <div class="alert alert-info" style="margin-bottom:14px;font-size:12px">
+      <svg width="14" height="14" viewBox="0 0 16 16" fill="none"><circle cx="8" cy="8" r="6" stroke="currentColor" stroke-width="1.2"/><path d="M8 5v3M8 10v.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
+      <span>Team members in the field can flag design/install sub-tasks as suggested additions to a template. Accepted suggestions appear on all future projects with that scope.</span>
+    </div>
+
+    <div style="font-size:11px;font-weight:700;color:#D29922;text-transform:uppercase;letter-spacing:0.08em;margin-bottom:8px">Pending Review · ${pending.length}</div>
+    ${pending.length === 0 ? `
+      <div style="font-size:12px;color:#6E7681;font-style:italic;padding:14px;background:#0D1117;border:1px solid #1C2333;border-radius:6px;text-align:center">No pending suggestions</div>
+    ` : `
+      <div style="display:flex;flex-direction:column;gap:8px">
+        ${pending.map(s => {
+          const suggestedBy = getTeamMember(s.suggested_by);
+          const project = state.projects.find(p => p.id === s.project_id);
+          const templateName = TEMPLATES[s.phase]?.[s.scope]?.name || s.scope;
+          return `
+            <div style="padding:12px 14px;background:#161B22;border:1px solid #1C2333;border-radius:6px;border-left:3px solid #D29922">
+              <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:12px;margin-bottom:8px">
+                <div style="flex:1;min-width:0">
+                  <div style="font-size:13px;color:#E6EDF3;margin-bottom:4px">"${esc(s.text)}"</div>
+                  <div style="font-size:11px;color:#8B949E">
+                    Add to <strong style="color:#58A6FF">${esc(templateName)}</strong> (${s.phase})
+                  </div>
+                  <div style="font-size:10px;color:#6E7681;margin-top:4px">
+                    Suggested by ${esc(suggestedBy?.name || 'unknown')}${project ? ` · while on ${esc(project.name)}` : ''} · ${fmtDate(s.created_at)}
+                  </div>
+                </div>
+                <div style="display:flex;gap:6px;flex-shrink:0">
+                  <button class="btn-primary" style="padding:5px 12px;font-size:11px;background:#238636" onclick="acceptTemplateSuggestion(${s.id})">Accept</button>
+                  <button class="btn btn-sm" style="font-size:11px" onclick="rejectTemplateSuggestion(${s.id})">Reject</button>
+                </div>
+              </div>
+            </div>
+          `;
+        }).join('')}
+      </div>
+    `}
+
+    ${recent.length > 0 ? `
+      <div style="font-size:11px;font-weight:700;color:#6E7681;text-transform:uppercase;letter-spacing:0.08em;margin:20px 0 8px">Recently Reviewed</div>
+      <div style="display:flex;flex-direction:column;gap:5px">
+        ${recent.map(s => {
+          const suggestedBy = getTeamMember(s.suggested_by);
+          const reviewedBy = getTeamMember(s.reviewed_by);
+          const templateName = TEMPLATES[s.phase]?.[s.scope]?.name || s.scope;
+          const badgeColor = s.status === 'accepted' ? '#3FB950' : '#F85149';
+          return `
+            <div style="padding:8px 10px;background:#0D1117;border:1px solid #1C2333;border-radius:5px;opacity:0.75">
+              <div style="display:flex;align-items:center;justify-content:space-between;gap:8px">
+                <div style="flex:1;min-width:0">
+                  <div style="font-size:12px;color:#C9D1D9">"${esc(s.text)}"</div>
+                  <div style="font-size:10px;color:#6E7681;margin-top:2px">
+                    ${esc(templateName)} · by ${esc(suggestedBy?.name || 'unknown')}
+                  </div>
+                </div>
+                <span style="font-size:9px;padding:2px 6px;border-radius:3px;color:${badgeColor};border:1px solid ${badgeColor}66;font-weight:600;flex-shrink:0">${s.status.toUpperCase()}</span>
+              </div>
+            </div>
+          `;
+        }).join('')}
+      </div>
+    ` : ''}
   `;
 }
 
@@ -7054,7 +7271,26 @@ async function syncJetbuilt() {
       state.projects = projects.map(p => {
         const enriched = enrichProject(p);
         const existing = existingMap[enriched.id];
-        if (existing) enriched.archived = existing.archived;
+        if (existing) {
+          // Preserve Valiant-owned state on re-sync. Once a project exists in Valiant,
+          // Jetbuilt is only the source of truth for "who/what" fields — not "where is it in our process."
+          enriched.archived = existing.archived;
+          // Stage: Valiant owns this after initial import. Never let Jetbuilt overwrite.
+          enriched.stage = existing.stage;
+          // Preserve the raw Jetbuilt stage string for display/debugging, but don't act on it
+          enriched._jb_stage_current = enriched.raw_stage;
+          enriched.raw_stage = existing.raw_stage;
+          // Notify if Jetbuilt stage has diverged from Valiant stage (soft alert)
+          if (enriched._jb_stage_current && enriched._jb_stage_current !== existing.raw_stage) {
+            enriched._stage_divergence = {
+              jb_stage: enriched._jb_stage_current,
+              valiant_stage: existing.stage,
+              noticed_at: new Date().toISOString()
+            };
+          }
+        }
+        // New projects (no existing record) accept Jetbuilt's stage as-is — this is the
+        // "new project enters Valiant" flow. Once it's in, Valiant owns the stage forever.
         return enriched;
       });
       try {
