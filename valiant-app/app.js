@@ -7461,9 +7461,9 @@ function renderSalesMgmtDashboard(activeProjects) {
   `;
 }
 
-// ── Sales Department Kanban (4 stages only) ──
-// Shows Lead / Proposal / Sent / Contract (needs review only).
-// Uses the same full-size card style as Full Pipeline.
+// ── Sales Department Kanban (4 stages, VERTICAL layout) ──
+// Stages stack as rows; cards wrap horizontally within each row.
+// No horizontal scrolling — cards wrap to next line when row is full.
 function renderSalesKanban(activeProjects, needsReview) {
   const SALES_STAGES = STAGES.filter(s => ['lead','proposal','sent','contract'].includes(s.key));
   const byStage = {};
@@ -7471,14 +7471,14 @@ function renderSalesKanban(activeProjects, needsReview) {
 
   activeProjects.forEach(p => {
     if (p.stage === 'contract') {
-      // Contract column: only projects needing review (signed but not handed off)
+      // Contract row: only projects needing review (signed but not handed off)
       if (isContractNeedsReview(p)) byStage.contract.push(p);
     } else if (byStage[p.stage]) {
       byStage[p.stage].push(p);
     }
   });
 
-  // Sort each column the same way the full pipeline does
+  // Sort each row the same way the full pipeline does
   SALES_STAGES.forEach(s => {
     byStage[s.key] = sortByColumnOrder(byStage[s.key], s.key);
   });
@@ -7494,29 +7494,39 @@ function renderSalesKanban(activeProjects, needsReview) {
       </div>
     </div>
 
-    <div class="pipeline-grid sales-kanban" style="margin-bottom:16px">
+    <div class="sales-kanban-vertical" style="margin-bottom:16px">
       ${SALES_STAGES.map(s => {
         const col = byStage[s.key] || [];
-        const LIMIT = 10;
+        const LIMIT = 12;
         const expanded = !!state.expandedCols[s.key];
         const visible = expanded ? col : col.slice(0, LIMIT);
         const hiddenCount = col.length - LIMIT;
         const isContractCol = s.key === 'contract';
+        const stageColor = {
+          lead: '#8B949E',
+          proposal: '#D29922',
+          sent: '#D29922',
+          contract: '#58A6FF'
+        }[s.key] || '#8B949E';
         return `
-        <div class="pipeline-col" ondragover="onDragOver(event)" ondragleave="onDragLeave(event)" ondrop="onDropStage(event, '${s.key}')">
-          <div class="pipeline-col-header">
-            <span class="pipeline-col-name">${s.label}${isContractCol ? ' <span style="font-weight:400;color:#8B949E;font-size:10px">(needs review)</span>' : ''}</span>
-            <span class="pipeline-col-count">${col.length}</span>
+        <div class="sk-row" ondragover="onDragOver(event)" ondragleave="onDragLeave(event)" ondrop="onDropStage(event, '${s.key}')">
+          <div class="sk-row-header" style="border-left:3px solid ${stageColor}">
+            <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+              <span class="sk-row-name">${s.label}</span>
+              <span class="sk-row-count">${col.length}</span>
+              ${isContractCol ? '<span style="font-size:10px;color:#8B949E;font-weight:400">needs review only</span>' : ''}
+            </div>
+            ${!expanded && hiddenCount > 0 ? `<div onclick="event.stopPropagation();toggleColExpanded('${s.key}')" style="font-size:11px;color:#58A6FF;cursor:pointer;-webkit-tap-highlight-color:transparent">+${hiddenCount} more</div>` : ''}
+            ${expanded && col.length > LIMIT ? `<div onclick="event.stopPropagation();toggleColExpanded('${s.key}')" style="font-size:11px;color:#6E7681;cursor:pointer;-webkit-tap-highlight-color:transparent">Show less ↑</div>` : ''}
           </div>
-          ${visible.map(p => {
-            const gbbTier = getGBBTier(p.id);
-            const gbbBadge = gbbTier ? '<span style="font-size:9px;font-weight:600;padding:1px 5px;border-radius:3px;background:' + (gbbTier === 'better' ? '#0D1626;color:#58A6FF;border:1px solid #1565C0' : gbbTier === 'best' ? '#0D1A0E;color:#3FB950;border:1px solid #238636' : '#161B22;color:#6E7681;border:1px solid #30363D') + '">' + gbbTier.toUpperCase() + '</span>' : '';
-            const likely = isLikelyToClose(p.id);
-            return '<div class="project-card' + (likely ? ' likely-card' : '') + '" draggable="true" ondragstart="onReorderDragStart(event, ' + p.id + ', \'' + s.key + '\')" ondragend="onDragEnd(event)" ondragover="event.preventDefault()" ondrop="onReorderDrop(event, ' + p.id + ', \'' + s.key + '\')" onclick="openProject(' + p.id + ')" style="' + (isContractNeedsReview(p) ? 'border-color:#DA3633' : likely ? 'border-color:#238636' : '') + '">' + (likely ? '<div class="likely-badge">LIKELY TO CLOSE</div>' : '') + (isContractNeedsReview(p) ? '<div style="background:#DA3633;color:#fff;font-size:10px;font-weight:600;padding:4px 8px;border-radius:4px;margin-bottom:8px;text-align:center;letter-spacing:0.03em">REVIEW — SEND TO DESIGN & INSTALL</div>' : '') + '<div style="display:flex;justify-content:space-between;align-items:flex-start"><div class="project-card-name">' + esc(p.name) + '</div><div style="display:flex;gap:3px;align-items:center">' + gbbBadge + '</div></div><div class="project-card-client">' + esc(p.client_name || 'No client') + (p.city ? ' · ' + esc(p.city) + (p.state_abbr ? ', ' + esc(p.state_abbr) : '') : '') + '</div>' + (() => { const dt = getInstallDateDisplay(p); return '<div style="font-size:10px;color:' + dt.color + ';margin-top:3px"><span style="opacity:0.7">' + dt.label + ':</span> ' + dt.value + '</div>'; })() + '<div class="project-card-footer">' + (canSee('financials') ? '<span class="project-card-value">' + fmt(p.total) + '</span>' : '<span></span>') + '<div style="display:flex;align-items:center;gap:4px"><span class="status-pill status-' + s.color + '">' + s.label + '</span><button class="move-btn" onclick="event.stopPropagation();showMoveMenu(' + p.id + ', event)" title="Move">\u22EE</button></div></div>' + (p.systems.length ? '<div style="margin-top:6px">' + p.systems.map(systemTagHTML).join('') + '</div>' : '') + '</div>';
-          }).join('')}
-          ${col.length === 0 ? '<div class="empty-state" style="padding:20px 10px;font-size:12px">No projects</div>' : ''}
-          ${!expanded && hiddenCount > 0 ? `<div onclick="event.stopPropagation();toggleColExpanded('${s.key}')" style="text-align:center;padding:8px 6px;font-size:11px;color:#58A6FF;cursor:pointer;border-top:1px solid #1C2333;margin-top:4px;-webkit-tap-highlight-color:transparent">+${hiddenCount} more</div>` : ''}
-          ${expanded && col.length > LIMIT ? `<div onclick="event.stopPropagation();toggleColExpanded('${s.key}')" style="text-align:center;padding:8px 6px;font-size:11px;color:#6E7681;cursor:pointer;border-top:1px solid #1C2333;margin-top:4px;-webkit-tap-highlight-color:transparent">Show less ↑</div>` : ''}
+          <div class="sk-row-cards">
+            ${visible.length === 0 ? '<div class="sk-row-empty">No projects</div>' : visible.map(p => {
+              const gbbTier = getGBBTier(p.id);
+              const gbbBadge = gbbTier ? '<span style="font-size:9px;font-weight:600;padding:1px 5px;border-radius:3px;background:' + (gbbTier === 'better' ? '#0D1626;color:#58A6FF;border:1px solid #1565C0' : gbbTier === 'best' ? '#0D1A0E;color:#3FB950;border:1px solid #238636' : '#161B22;color:#6E7681;border:1px solid #30363D') + '">' + gbbTier.toUpperCase() + '</span>' : '';
+              const likely = isLikelyToClose(p.id);
+              return '<div class="project-card sk-card' + (likely ? ' likely-card' : '') + '" draggable="true" ondragstart="onReorderDragStart(event, ' + p.id + ', \'' + s.key + '\')" ondragend="onDragEnd(event)" ondragover="event.preventDefault()" ondrop="onReorderDrop(event, ' + p.id + ', \'' + s.key + '\')" onclick="openProject(' + p.id + ')" style="' + (isContractNeedsReview(p) ? 'border-color:#DA3633' : likely ? 'border-color:#238636' : '') + '">' + (likely ? '<div class="likely-badge">LIKELY TO CLOSE</div>' : '') + (isContractNeedsReview(p) ? '<div style="background:#DA3633;color:#fff;font-size:10px;font-weight:600;padding:4px 8px;border-radius:4px;margin-bottom:8px;text-align:center;letter-spacing:0.03em">REVIEW — SEND TO DESIGN & INSTALL</div>' : '') + '<div style="display:flex;justify-content:space-between;align-items:flex-start"><div class="project-card-name">' + esc(p.name) + '</div><div style="display:flex;gap:3px;align-items:center">' + gbbBadge + '</div></div><div class="project-card-client">' + esc(p.client_name || 'No client') + (p.city ? ' · ' + esc(p.city) + (p.state_abbr ? ', ' + esc(p.state_abbr) : '') : '') + '</div>' + (() => { const dt = getInstallDateDisplay(p); return '<div style="font-size:10px;color:' + dt.color + ';margin-top:3px"><span style="opacity:0.7">' + dt.label + ':</span> ' + dt.value + '</div>'; })() + '<div class="project-card-footer">' + (canSee('financials') ? '<span class="project-card-value">' + fmt(p.total) + '</span>' : '<span></span>') + '<div style="display:flex;align-items:center;gap:4px"><span class="status-pill status-' + s.color + '">' + s.label + '</span><button class="move-btn" onclick="event.stopPropagation();showMoveMenu(' + p.id + ', event)" title="Move">\u22EE</button></div></div>' + (p.systems.length ? '<div style="margin-top:6px">' + p.systems.map(systemTagHTML).join('') + '</div>' : '') + '</div>';
+            }).join('')}
+          </div>
         </div>`;
       }).join('')}
     </div>
