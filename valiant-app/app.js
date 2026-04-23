@@ -22,28 +22,44 @@ const PERMISSION_KEYS = [
   // Admin / users
   'admin.system',                 // Master Admin — can grant any permission
   'admin.view_users',             // See Admin > Users list
-  'admin.edit_users',             // Add / edit / remove users
   'admin.assign_permissions',     // Change what bundle or permissions another user has (capped to grantor's level)
   'admin.edit_bundles',           // Tune what each bundle includes (Master Admin only, practically)
+  // User management — granular by the bundle of the user being managed
+  // Each key grants add/edit/remove for users on that bundle
+  'admin.edit_users.installer',
+  'admin.edit_users.warehouse',
+  'admin.edit_users.designer',
+  'admin.edit_users.project_manager',
+  'admin.edit_users.sales',
+  'admin.edit_users.accountant',
+  'admin.edit_users.design_admin',
+  'admin.edit_users.install_admin',
+  'admin.edit_users.owner_cfo',
+  'admin.edit_users.master_admin',  // Only Master Admin should hold this
   // Projects
-  'projects.view_all',            // See every project; otherwise only assigned ones
+  'projects.view_all',
   'projects.create',
   'projects.edit',
   'projects.delete',
-  'projects.assign_team',         // Put people on a project's role slots
   'projects.change_stage',
+  // Team assignment — granular by role slot being filled
+  'projects.assign_team.sales',
+  'projects.assign_team.design',
+  'projects.assign_team.pm',
+  'projects.assign_team.install',
+  'projects.assign_team.warehouse',
   // Design
   'design.view',
   'design.edit',
   'design.assign_tasks',          // Assign sub-tasks within Design phase
   // Install
   'install.view',
-  'install.edit',                 // Modify install tasks, mark complete
-  'install.manage_crew',          // Put crew on installs
+  'install.edit',
+  'install.manage_crew',
   // Purchasing / warehouse
   'purchasing.view',
-  'purchasing.edit',              // Place orders, mark orders
-  'warehouse.receive',            // Mark items as arrived at warehouse
+  'purchasing.edit',
+  'warehouse.receive',
   'warehouse.view_inventory',
   // Vendors
   'vendors.view',
@@ -58,27 +74,41 @@ const PERMISSION_KEYS = [
   'client.view_contact'
 ];
 
+// Helper: all user-management permissions (used in Master Admin / Owner bundles)
+const _ALL_USER_EDIT_PERMS = [
+  'admin.edit_users.installer', 'admin.edit_users.warehouse', 'admin.edit_users.designer',
+  'admin.edit_users.project_manager', 'admin.edit_users.sales', 'admin.edit_users.accountant',
+  'admin.edit_users.design_admin', 'admin.edit_users.install_admin',
+  'admin.edit_users.owner_cfo', 'admin.edit_users.master_admin'
+];
+const _ALL_ASSIGN_TEAM_PERMS = [
+  'projects.assign_team.sales', 'projects.assign_team.design',
+  'projects.assign_team.pm', 'projects.assign_team.install', 'projects.assign_team.warehouse'
+];
+
 // Bundle presets — editable by Master Admin (future: via Admin > Bundles)
 const DEFAULT_BUNDLES = {
   'master_admin': {
     label: 'Master Admin',
     desc: 'Every permission. Only Master Admins can grant admin.system.',
     color: '#F85149',
-    permissions: [...PERMISSION_KEYS]  // literally everything
+    permissions: [...PERMISSION_KEYS]
   },
   'owner_cfo': {
     label: 'Owner / CFO',
     desc: 'Everything except granting Master Admin status',
     color: '#BC8CFF',
-    permissions: PERMISSION_KEYS.filter(k => k !== 'admin.system')
+    permissions: PERMISSION_KEYS.filter(k => k !== 'admin.system' && k !== 'admin.edit_users.master_admin')
   },
   'install_admin': {
     label: 'Install Admin',
-    desc: 'Install management + crew + basic project financials; no margins or cashflow',
+    desc: 'Manage install + warehouse users, assign install/warehouse teams, basic project financials',
     color: '#FF7B72',
     permissions: [
-      'admin.view_users','admin.edit_users','admin.assign_permissions',
-      'projects.view_all','projects.edit','projects.assign_team','projects.change_stage',
+      'admin.view_users','admin.assign_permissions',
+      'admin.edit_users.installer','admin.edit_users.warehouse',
+      'projects.view_all','projects.edit','projects.change_stage',
+      'projects.assign_team.install','projects.assign_team.warehouse',
       'install.view','install.edit','install.manage_crew',
       'purchasing.view','warehouse.receive','warehouse.view_inventory',
       'vendors.view',
@@ -89,11 +119,13 @@ const DEFAULT_BUNDLES = {
   },
   'design_admin': {
     label: 'Design Admin',
-    desc: 'Full design oversight + team management + project financials; no margins',
+    desc: 'Manage designers, assign design teams, design oversight, project financials (no margins)',
     color: '#D29922',
     permissions: [
-      'admin.view_users',
-      'projects.view_all','projects.edit','projects.assign_team',
+      'admin.view_users','admin.assign_permissions',
+      'admin.edit_users.designer',
+      'projects.view_all','projects.edit',
+      'projects.assign_team.design',
       'design.view','design.edit','design.assign_tasks',
       'install.view',
       'purchasing.view','purchasing.edit',
@@ -104,10 +136,11 @@ const DEFAULT_BUNDLES = {
   },
   'sales': {
     label: 'Sales',
-    desc: 'Pipeline + proposals + project financials + can assign design tasks',
+    desc: 'Pipeline, proposals, project financials, assign sales / design work',
     color: '#3FB950',
     permissions: [
       'projects.view_all','projects.create','projects.edit','projects.change_stage',
+      'projects.assign_team.sales',
       'design.view','design.assign_tasks',
       'install.view',
       'sales.view_pipeline','sales.send_proposals',
@@ -118,10 +151,11 @@ const DEFAULT_BUNDLES = {
   },
   'project_manager': {
     label: 'Project Manager',
-    desc: 'Cross-project oversight + team + project financials + can assign design tasks',
+    desc: 'Cross-project oversight, can assign all role slots, project financials',
     color: '#58A6FF',
     permissions: [
-      'projects.view_all','projects.edit','projects.assign_team','projects.change_stage',
+      'projects.view_all','projects.edit','projects.change_stage',
+      ..._ALL_ASSIGN_TEAM_PERMS,
       'design.view','design.assign_tasks',
       'install.view','install.edit','install.manage_crew',
       'purchasing.view','warehouse.view_inventory',
@@ -132,7 +166,7 @@ const DEFAULT_BUNDLES = {
   },
   'designer': {
     label: 'Designer',
-    desc: 'Assigned projects + design work + equipment visibility (no margins)',
+    desc: 'Design work on assigned projects, equipment visibility (no margins)',
     color: '#A371F7',
     permissions: [
       'design.view','design.edit','design.assign_tasks',
@@ -149,7 +183,7 @@ const DEFAULT_BUNDLES = {
     color: '#F0883E',
     permissions: [
       'install.view','install.edit',
-      'design.view'  // read-only so they can see drawings
+      'design.view'
     ]
   },
   'warehouse': {
@@ -247,14 +281,17 @@ function canSee(permission) {
     equipment_total:   'financials.view_project_totals',
     client_contact:    'client.view_contact',
     margins:           'financials.view_margins',
-    assign_team:       'projects.assign_team',
     change_stage:      'projects.change_stage',
     view_all_projects: 'projects.view_all'
   };
   const newKey = newMap[permission];
   const activeMember = getTeamMember(getActiveTeamMemberId());
-  if (activeMember && state.userPermissions[activeMember.id] && newKey) {
-    return currentUserHasPermission(newKey);
+  if (activeMember && state.userPermissions[activeMember.id]) {
+    if (newKey) return currentUserHasPermission(newKey);
+    // Special case: legacy 'assign_team' means "can assign to any role slot"
+    if (permission === 'assign_team') {
+      return _ALL_ASSIGN_TEAM_PERMS.some(k => currentUserHasPermission(k));
+    }
   }
   // Fall back to legacy role-based map
   const perms = {
@@ -342,6 +379,14 @@ state.team.forEach(m => {
 
 // Permissions bootstrap — migrate existing team to bundles on first load
 (function migrateUsersToBundles() {
+  // Detect stale bundles (old permission keys) and refresh to new DEFAULT_BUNDLES
+  // Check Master Admin bundle for the presence of old 'admin.edit_users' (without suffix)
+  const stale = state.bundles?.master_admin?.permissions?.includes('admin.edit_users');
+  if (stale) {
+    state.bundles = JSON.parse(JSON.stringify(DEFAULT_BUNDLES));
+    save('vi_bundles', state.bundles);
+  }
+
   let changed = false;
   const roleToBundle = {
     'admin': 'master_admin',
@@ -352,7 +397,6 @@ state.team.forEach(m => {
   };
   state.team.forEach(m => {
     if (!state.userPermissions[m.id]) {
-      // Jacob (id 1) gets Master Admin to bootstrap the system
       if (m.id === 1 || m.name === 'Jacob') {
         state.userPermissions[m.id] = { bundle: 'master_admin', overrides: {} };
       } else {
@@ -360,6 +404,16 @@ state.team.forEach(m => {
         state.userPermissions[m.id] = { bundle: bundleKey, overrides: {} };
       }
       changed = true;
+    }
+    // Clear stale permission overrides using old keys
+    if (state.userPermissions[m.id].overrides) {
+      const oldKeys = ['admin.edit_users','projects.assign_team'];
+      oldKeys.forEach(k => {
+        if (k in state.userPermissions[m.id].overrides) {
+          delete state.userPermissions[m.id].overrides[k];
+          changed = true;
+        }
+      });
     }
   });
   if (changed) save('vi_user_perms', state.userPermissions);
@@ -3741,7 +3795,7 @@ function renderProjectOverviewHTML(p) {
     <div class="dashboard-card" style="margin-top:14px">
       <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px">
         <div class="dashboard-card-title" style="margin-bottom:0">Project Team</div>
-        ${currentUserHasPermission('projects.assign_team') ? `<button class="btn btn-sm" onclick="showAssignTeamDialog(${p.id})" style="font-size:11px;padding:4px 10px">Manage</button>` : ''}
+        ${_ALL_ASSIGN_TEAM_PERMS.some(k => currentUserHasPermission(k)) ? `<button class="btn btn-sm" onclick="showAssignTeamDialog(${p.id})" style="font-size:11px;padding:4px 10px">Manage</button>` : ''}
       </div>
       ${(() => {
         const a = getProjectAssignment(p.id);
@@ -3819,7 +3873,8 @@ function renderProjectOverviewHTML(p) {
 function showAssignTeamDialog(projectId) {
   const p = state.projects.find(pr => pr.id === projectId);
   if (!p) return;
-  if (!currentUserHasPermission('projects.assign_team')) return;
+  // Allow if user can assign at least one role slot
+  if (!_ALL_ASSIGN_TEAM_PERMS.some(k => currentUserHasPermission(k))) return;
   document.getElementById('assign-team-dialog')?.remove();
   const modal = document.createElement('div');
   modal.id = 'assign-team-dialog';
@@ -3846,7 +3901,12 @@ function showAssignTeamDialog(projectId) {
 
 function renderAssignTeamBody(projectId) {
   const a = getProjectAssignment(projectId);
-  return ASSIGNMENT_ROLES.map(r => {
+  // Filter to roles the current user is allowed to assign
+  const allowedRoles = ASSIGNMENT_ROLES.filter(r => currentUserHasPermission(`projects.assign_team.${r.key}`));
+  if (allowedRoles.length === 0) {
+    return '<div style="padding:20px;text-align:center;color:#8B949E;font-size:13px">You don&rsquo;t have permission to assign any role slots on this project.</div>';
+  }
+  return allowedRoles.map(r => {
     const assigned = a[r.key] || [];
     const eligible = state.team.filter(m => m.status !== 'inactive');
     return `
@@ -5799,9 +5859,10 @@ function renderAdmin(c) {
     `;
     return;
   }
-  const canEditUsers = currentUserHasPermission('admin.edit_users');
   const canAssignPerms = currentUserHasPermission('admin.assign_permissions');
   const isMasterAdmin = currentUserHasPermission('admin.system');
+  // canEditUsers now depends on target user — check per user below
+  const canEditAnyUser = _ALL_USER_EDIT_PERMS.some(k => currentUserHasPermission(k));
   const adminTab = state.adminTab || 'users';
 
   c.innerHTML = `
@@ -5823,16 +5884,33 @@ function renderAdmin(c) {
         }).join('')}
       </div>
 
-      ${adminTab === 'users' ? renderAdminUsers(activeMemberId, canEditUsers, canAssignPerms, isMasterAdmin) : renderAdminBundles(isMasterAdmin)}
+      ${adminTab === 'users' ? renderAdminUsers(activeMemberId, canEditAnyUser, canAssignPerms, isMasterAdmin) : renderAdminBundles(isMasterAdmin)}
     </div>
   `;
 }
 
-function renderAdminUsers(activeMemberId, canEditUsers, canAssignPerms, isMasterAdmin) {
+function canManageUser(targetMemberId) {
+  // Returns true if current user can edit/remove target user's permissions
+  if (currentUserHasPermission('admin.system')) return true;
+  const targetUp = getUserPermissions(targetMemberId);
+  const targetBundle = targetUp?.bundle || 'installer';
+  return currentUserHasPermission(`admin.edit_users.${targetBundle}`);
+}
+
+function toggleAdvancedPerms() {
+  const content = document.getElementById('advanced-perms-content');
+  const arrow = document.getElementById('adv-perms-arrow');
+  if (!content) return;
+  const isOpen = content.style.display !== 'none';
+  content.style.display = isOpen ? 'none' : 'block';
+  if (arrow) arrow.style.transform = isOpen ? '' : 'rotate(90deg)';
+}
+
+function renderAdminUsers(activeMemberId, canEditAnyUser, canAssignPerms, isMasterAdmin) {
   return `
     <div class="alert alert-info" style="margin-bottom:14px;font-size:12px">
       <svg width="14" height="14" viewBox="0 0 16 16" fill="none"><circle cx="8" cy="8" r="6" stroke="currentColor" stroke-width="1.2"/><path d="M8 5v3M8 10v.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
-      <span>Each user has a permission bundle that determines what they can see and do. ${isMasterAdmin ? 'Click a user to edit their bundle or individual permissions.' : 'You can grant permissions up to your own level.'}</span>
+      <span>Each user has a permission bundle that determines what they can see and do. ${isMasterAdmin ? 'Click a user to edit their bundle or individual permissions.' : 'You can only manage users whose bundle you&rsquo;re authorized for.'}</span>
     </div>
 
     <div style="display:flex;flex-direction:column;gap:8px">
@@ -5844,6 +5922,7 @@ function renderAdminUsers(activeMemberId, canEditUsers, canAssignPerms, isMaster
         const isYou = m.id === activeMemberId;
         const hasOverrides = up?.overrides && Object.keys(up.overrides).length > 0;
         const primaryColor = bundle?.color || '#6E7681';
+        const canManage = canManageUser(m.id);
         return `
           <div class="card card-sm" style="${isYou ? 'border-color:#1565C0;background:#0D1626' : ''}">
             <div style="display:flex;align-items:center;gap:12px">
@@ -5858,7 +5937,7 @@ function renderAdminUsers(activeMemberId, canEditUsers, canAssignPerms, isMaster
                 <div style="font-size:11px;color:#6E7681;margin-top:3px">${effectivePerms.size} permission${effectivePerms.size === 1 ? '' : 's'}${m.email ? ' · ' + esc(m.email) : ''}</div>
               </div>
               <div style="display:flex;gap:6px;flex-shrink:0">
-                ${canAssignPerms ? `<button class="btn btn-sm" onclick="showUserPermissionsDialog(${m.id})">Permissions</button>` : ''}
+                ${canAssignPerms && canManage ? `<button class="btn btn-sm" onclick="showUserPermissionsDialog(${m.id})">Permissions</button>` : (!canManage ? `<span style="font-size:10px;color:#6E7681;padding:6px 8px" title="Your permissions don&rsquo;t include managing users on this bundle">Not authorized</span>` : '')}
               </div>
             </div>
           </div>
@@ -6044,11 +6123,19 @@ function showUserPermissionsDialog(memberId) {
         </select>
         ${!isMasterAdmin ? '<div style="font-size:11px;color:#6E7681;margin-top:-10px;margin-bottom:14px;padding:8px 10px;background:#0D1117;border:1px solid #1C2333;border-radius:4px">You can only grant permissions and bundles that you hold yourself. Bundles you don&rsquo;t qualify to grant are greyed out.</div>' : ''}
 
-        <div style="font-size:11px;color:#8B949E;font-weight:500;margin-bottom:8px">Individual Permissions</div>
-        <div style="font-size:11px;color:#6E7681;margin-bottom:10px">Checkmark = granted. Toggles that differ from bundle default are marked as overrides.</div>
-
-        <div id="perm-list" style="display:flex;flex-direction:column;gap:4px">
-          ${renderPermissionList(memberId)}
+        <!-- Advanced permissions expander — individual overrides are hidden by default -->
+        <div id="advanced-perms-section" style="margin-top:14px">
+          <div onclick="toggleAdvancedPerms()" style="display:flex;align-items:center;gap:6px;cursor:pointer;padding:8px 10px;background:#0D1117;border:1px solid #1C2333;border-radius:4px;-webkit-tap-highlight-color:transparent;user-select:none">
+            <svg id="adv-perms-arrow" width="10" height="10" viewBox="0 0 10 10" fill="none" style="transition:transform 0.2s"><path d="M3 2l4 3-4 3" stroke="#8B949E" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+            <span style="font-size:12px;font-weight:500;color:#C9D1D9">Advanced &mdash; Individual permission overrides</span>
+            <span style="font-size:10px;color:#6E7681;margin-left:auto">${(up.overrides && Object.keys(up.overrides).length) || 0} override${(up.overrides && Object.keys(up.overrides).length) === 1 ? '' : 's'}</span>
+          </div>
+          <div id="advanced-perms-content" style="display:none;margin-top:10px">
+            <div style="font-size:11px;color:#6E7681;margin-bottom:10px;padding:6px 10px;background:#0D1117;border-left:2px solid #D29922;border-radius:2px">Use these to grant or deny specific permissions beyond what the bundle provides. Overrides show as amber highlights.</div>
+            <div id="perm-list" style="display:flex;flex-direction:column;gap:4px">
+              ${renderPermissionList(memberId)}
+            </div>
+          </div>
         </div>
       </div>
       <div style="display:flex;gap:8px;padding:14px;border-top:1px solid #1C2333">
