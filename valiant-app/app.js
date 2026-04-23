@@ -6049,10 +6049,16 @@ async function renderGoogleMapForProject(project, canEdit) {
         <div style="font-size:14px;font-weight:600;color:#E6EDF3">Site Location</div>
         <div style="font-size:11px;color:#8B949E;margin-top:2px;word-break:break-word">${esc(address)} <a href="https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(address)}" target="_blank" style="color:#58A6FF;margin-left:6px;white-space:nowrap">Open in Maps &rarr;</a></div>
       </div>
-      <div style="display:flex;gap:4px;background:#0D1117;border:1px solid #30363D;border-radius:6px;overflow:hidden;font-size:11px;flex-shrink:0">
-        ${[{ k: 'hybrid', l: 'Satellite' }, { k: 'roadmap', l: 'Map' }].map(m => `
-          <div onclick="setMapViewType('${m.k}')" style="padding:6px 12px;cursor:pointer;transition:all 0.15s;${mapViewType === m.k ? 'background:#1565C0;color:#58A6FF;font-weight:500' : 'color:#8B949E'};-webkit-tap-highlight-color:transparent">${m.l}</div>
-        `).join('')}
+      <div style="display:flex;align-items:center;gap:6px;flex-shrink:0;flex-wrap:wrap">
+        <button onclick="openSiteBriefing(${project.id})" class="btn btn-sm" style="font-size:11px;padding:5px 12px;display:inline-flex;align-items:center;gap:5px">
+          <svg width="12" height="12" viewBox="0 0 14 14" fill="none"><path d="M4 3V1h6v2M4 10H2v-5h10v5h-2M4 8h6v5H4z" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          Print Briefing
+        </button>
+        <div style="display:flex;gap:4px;background:#0D1117;border:1px solid #30363D;border-radius:6px;overflow:hidden;font-size:11px">
+          ${[{ k: 'hybrid', l: 'Satellite' }, { k: 'roadmap', l: 'Map' }].map(m => `
+            <div onclick="setMapViewType('${m.k}')" style="padding:6px 12px;cursor:pointer;transition:all 0.15s;${mapViewType === m.k ? 'background:#1565C0;color:#58A6FF;font-weight:500' : 'color:#8B949E'};-webkit-tap-highlight-color:transparent">${m.l}</div>
+          `).join('')}
+        </div>
       </div>
     </div>
 
@@ -6292,6 +6298,305 @@ let _siteNotesTimer = null;
 function debouncedSaveSiteNotes(projectId, value) {
   if (_siteNotesTimer) clearTimeout(_siteNotesTimer);
   _siteNotesTimer = setTimeout(() => saveProjectSiteNotes(projectId, value), 400);
+}
+
+// ── Print Briefing ──
+// Opens a new window with a paper-sized pre-install briefing page ready to print or save as PDF.
+function openSiteBriefing(projectId) {
+  const p = state.projects.find(pr => pr.id === projectId);
+  if (!p) return;
+  const address = getProjectAddressString(p);
+  const pins = getProjectPins(projectId);
+  const siteNotes = getProjectSiteNotes(projectId);
+  const assignment = getProjectAssignment(projectId);
+  const win = getInstallWindow(p);
+
+  // Gather team by role
+  const teamByRole = ASSIGNMENT_ROLES.map(r => {
+    const people = (assignment[r.key] || []).map(entry => {
+      const m = getTeamMember(entry.id);
+      return { name: m?.name || 'Unknown', lead: entry.lead };
+    });
+    return { role: r, people };
+  }).filter(x => x.people.length > 0);
+
+  // Compose Jetbuilt link if we have a project ID
+  const jbId = p.jetbuilt_id || p.id;
+
+  // Must pass the key to the new window too — it can't share our runtime state
+  const apiKey = state.mapsApiKey || '';
+
+  const pinTypeMap = {};
+  PIN_TYPES.forEach(pt => { pinTypeMap[pt.key] = pt; });
+
+  const briefingWindow = window.open('', '_blank', 'width=900,height=1100');
+  if (!briefingWindow) {
+    alert('Popup blocked. Please allow popups for this site to print briefings.');
+    return;
+  }
+
+  const installWindowLine = win
+    ? `${fmtDate(win.start)}${win.end && win.end !== win.start ? ' – ' + fmtDate(win.end) : ''} <span style="color:#888;font-size:10pt">(${win.source === 'booked' ? 'Booked' : 'Estimated'})</span>`
+    : '<span style="color:#999">Not yet scheduled</span>';
+
+  const scopeLine = (p.systems || []).map(s => TAG_LABELS?.[s] || s).join(' · ') || 'General';
+  const clientName = p.client_name || 'No client';
+  const printedDate = new Date().toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' });
+
+  const html = `<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Site Briefing — ${esc(p.name)}</title>
+<style>
+  @page { size: letter portrait; margin: 0.4in; }
+  * { box-sizing: border-box; }
+  body {
+    font-family: 'Helvetica Neue', Arial, sans-serif;
+    color: #222;
+    margin: 0;
+    padding: 20px;
+    background: #fff;
+    font-size: 10.5pt;
+    line-height: 1.4;
+  }
+  .toolbar {
+    position: sticky; top: 0;
+    background: #f3f4f6; border: 1px solid #d1d5db;
+    padding: 10px 14px; margin: -20px -20px 16px;
+    display: flex; gap: 10px; align-items: center; justify-content: space-between;
+    z-index: 100;
+  }
+  .toolbar .title { font-size: 11pt; color: #374151; font-weight: 600; }
+  .toolbar button {
+    padding: 6px 14px; font-size: 11pt; font-weight: 600;
+    background: #1f4e79; color: #fff; border: none; border-radius: 4px; cursor: pointer;
+  }
+  .toolbar button.secondary {
+    background: #fff; color: #374151; border: 1px solid #d1d5db;
+  }
+  @media print {
+    .toolbar { display: none !important; }
+    body { padding: 0; }
+  }
+
+  .header {
+    border-bottom: 3px solid #1f4e79;
+    padding-bottom: 12px;
+    margin-bottom: 14px;
+  }
+  .header .eyebrow {
+    font-size: 8pt; font-weight: 700; letter-spacing: 0.15em;
+    color: #1f4e79; text-transform: uppercase;
+  }
+  .header h1 {
+    font-size: 20pt; margin: 4px 0 6px; color: #111;
+  }
+  .header .meta {
+    display: grid; grid-template-columns: 1fr 1fr; gap: 4px 16px;
+    font-size: 10pt; color: #444; margin-top: 6px;
+  }
+  .header .meta strong { color: #222; }
+
+  .section-title {
+    font-size: 9pt; font-weight: 700; letter-spacing: 0.12em;
+    text-transform: uppercase; color: #1f4e79;
+    border-bottom: 1px solid #d1d5db; padding-bottom: 3px;
+    margin: 14px 0 8px;
+  }
+
+  .map-wrap {
+    border: 1px solid #d1d5db;
+    border-radius: 4px;
+    overflow: hidden;
+    margin-bottom: 14px;
+    page-break-inside: avoid;
+  }
+  .map-wrap img { display: block; width: 100%; height: auto; }
+  .map-placeholder {
+    padding: 80px 20px;
+    text-align: center;
+    background: #f9fafb;
+    color: #6b7280;
+    font-size: 11pt;
+  }
+
+  .two-col {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 16px;
+    margin-bottom: 14px;
+    page-break-inside: avoid;
+  }
+
+  .pin-list { list-style: none; padding: 0; margin: 0; font-size: 10pt; }
+  .pin-list li {
+    display: flex; align-items: center; gap: 8px;
+    padding: 4px 0;
+    border-bottom: 1px dotted #e5e7eb;
+  }
+  .pin-list li:last-child { border-bottom: none; }
+  .pin-badge {
+    width: 20px; height: 20px; border-radius: 50%;
+    display: inline-flex; align-items: center; justify-content: center;
+    color: #fff; font-size: 9pt; font-weight: 700;
+    flex-shrink: 0;
+  }
+
+  .team-list { font-size: 10pt; }
+  .team-row {
+    padding: 4px 0;
+    border-bottom: 1px dotted #e5e7eb;
+  }
+  .team-row:last-child { border-bottom: none; }
+  .team-role {
+    font-size: 8pt; font-weight: 700; letter-spacing: 0.08em;
+    text-transform: uppercase; color: #6b7280;
+    margin-bottom: 2px;
+  }
+  .lead-tag {
+    display: inline-block;
+    font-size: 7pt; font-weight: 700;
+    padding: 1px 5px; background: #1f4e79; color: #fff;
+    border-radius: 2px; margin-left: 4px;
+    vertical-align: middle;
+  }
+
+  .notes-box {
+    background: #f9fafb;
+    border: 1px solid #d1d5db;
+    border-radius: 4px;
+    padding: 10px 12px;
+    font-size: 10pt;
+    white-space: pre-wrap;
+    min-height: 50px;
+    color: #222;
+  }
+  .notes-empty { color: #9ca3af; font-style: italic; }
+
+  .footer {
+    margin-top: 20px;
+    padding-top: 10px;
+    border-top: 1px solid #d1d5db;
+    font-size: 8pt;
+    color: #6b7280;
+    display: flex;
+    justify-content: space-between;
+  }
+
+  .scope-row {
+    font-size: 10pt;
+    padding: 6px 10px;
+    background: #f3f4f6;
+    border-left: 3px solid #1f4e79;
+    border-radius: 2px;
+    margin-bottom: 14px;
+  }
+  .scope-row strong { color: #1f4e79; margin-right: 6px; }
+</style>
+</head>
+<body>
+  <div class="toolbar">
+    <div class="title">Site Briefing — ${esc(p.name)}</div>
+    <div style="display:flex;gap:8px">
+      <button class="secondary" onclick="window.close()">Close</button>
+      <button onclick="window.print()">🖨 Print / Save as PDF</button>
+    </div>
+  </div>
+
+  <div class="header">
+    <div class="eyebrow">Site Briefing</div>
+    <h1>${esc(p.name)}</h1>
+    <div class="meta">
+      <div><strong>Client:</strong> ${esc(clientName)}</div>
+      <div><strong>Project #:</strong> ${esc(p.jb_custom_id || p.id)}</div>
+      <div><strong>Address:</strong> ${esc(address || 'Not set')}</div>
+      <div><strong>Install:</strong> ${installWindowLine}</div>
+    </div>
+  </div>
+
+  <div class="scope-row"><strong>Scope:</strong> ${esc(scopeLine)}</div>
+
+  <div class="section-title">Site Layout</div>
+  <div class="map-wrap" id="map-wrap">
+    ${address && apiKey ? buildStaticMapHTML(address, pins, apiKey) : '<div class="map-placeholder">Map not available — check that project has an address and Maps API key is configured.</div>'}
+  </div>
+
+  <div class="two-col">
+    <div>
+      <div class="section-title">Pin Legend</div>
+      ${pins.length === 0 ? '<div style="font-size:10pt;color:#9ca3af;font-style:italic">No pins placed on this site</div>' : `
+        <ul class="pin-list">
+          ${pins.map((pin, i) => {
+            const pt = pinTypeMap[pin.type] || pinTypeMap.custom;
+            return `<li>
+              <span class="pin-badge" style="background:${pt.color}">${i + 1}</span>
+              <span><strong>${esc(pin.label)}</strong> <span style="color:#6b7280;font-size:9pt">— ${esc(pt.label)}</span></span>
+            </li>`;
+          }).join('')}
+        </ul>
+      `}
+    </div>
+    <div>
+      <div class="section-title">Team</div>
+      ${teamByRole.length === 0 ? '<div style="font-size:10pt;color:#9ca3af;font-style:italic">No team assignments yet</div>' : `
+        <div class="team-list">
+          ${teamByRole.map(tr => `
+            <div class="team-row">
+              <div class="team-role">${esc(tr.role.label)}</div>
+              <div>${tr.people.map(pp => esc(pp.name) + (pp.lead ? '<span class="lead-tag">LEAD</span>' : '')).join(', ')}</div>
+            </div>
+          `).join('')}
+        </div>
+      `}
+    </div>
+  </div>
+
+  <div class="section-title">Site Notes</div>
+  <div class="notes-box">${siteNotes ? esc(siteNotes) : '<span class="notes-empty">No site notes recorded</span>'}</div>
+
+  <div class="footer">
+    <div>Valiant Integrations · Printed ${esc(printedDate)}</div>
+    <div>Project #${esc(p.jb_custom_id || p.id)}</div>
+  </div>
+</body>
+</html>`;
+
+  briefingWindow.document.write(html);
+  briefingWindow.document.close();
+}
+
+// Build the Static Maps image URL with pins overlaid
+function buildStaticMapHTML(address, pins, apiKey) {
+  // Escape address for URL and limit size
+  const base = 'https://maps.googleapis.com/maps/api/staticmap';
+  const params = new URLSearchParams();
+  params.set('size', '800x500');
+  params.set('scale', '2'); // retina for print clarity
+  params.set('maptype', 'hybrid');
+  params.set('center', address);
+  params.set('zoom', '19');
+  params.set('key', apiKey);
+  // Project-address marker (red, prominent)
+  params.append('markers', `color:red|size:mid|${address}`);
+  // Custom pins — Google Static accepts lat,lng directly
+  // Group by color since the API encodes them as separate markers parameters
+  const pinTypeMap = {};
+  PIN_TYPES.forEach(pt => { pinTypeMap[pt.key] = pt; });
+  pins.forEach((pin, i) => {
+    const pt = pinTypeMap[pin.type] || pinTypeMap.custom;
+    // Static API takes a hex color prefixed with 0x (no #), no alpha
+    const hex = pt.color.replace('#', '0x');
+    // Use a numeric label (1, 2, ...) matching the legend
+    const label = String(i + 1);
+    params.append('markers', `color:${hex}|label:${label}|${pin.lat},${pin.lng}`);
+  });
+  const url = `${base}?${params.toString()}`;
+  // Check URL length — Static Maps has an 8192 char limit
+  if (url.length > 8000) {
+    return '<div class="map-placeholder">Too many pins to render in a single briefing image. Consider consolidating pins or printing a higher-scale view.</div>';
+  }
+  return `<img src="${url}" alt="Site layout map" onerror="this.parentElement.innerHTML='<div class=\\'map-placeholder\\'>Map image failed to load. Verify the Maps Static API is enabled in Google Cloud.</div>'">`;
 }
 // ── Shop Work ──
 // Shape: { id, text, assignee_id, priority, project_id, status: 'open'|'done', created, completed }
