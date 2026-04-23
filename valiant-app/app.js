@@ -6882,4 +6882,79 @@ async function init() {
   }
 }
 
+// ── Dev override: always-available user switcher ──
+// Triggered by: triple-click on the "Valiant Integrations" sidebar header, or Ctrl+Shift+U
+function showDevUserSwitcher() {
+  document.getElementById('dev-switcher')?.remove();
+  const modal = document.createElement('div');
+  modal.id = 'dev-switcher';
+  modal.className = 'modal-overlay';
+  modal.innerHTML = `
+    <div class="modal-container" style="max-width:480px">
+      <div class="modal-header" style="background:#1A150D">
+        <div>
+          <div class="modal-title" style="color:#D29922">Dev User Switcher</div>
+          <div class="modal-sub">Override the active user regardless of permissions. Use this if you get locked out.</div>
+        </div>
+        <button class="modal-close" onclick="document.getElementById('dev-switcher')?.remove()">&times;</button>
+      </div>
+      <div class="modal-body">
+        <div style="display:flex;flex-direction:column;gap:6px">
+          ${state.team.map(m => {
+            const up = state.userPermissions[m.id];
+            const bundleKey = up?.bundle || 'installer';
+            const bundle = state.bundles[bundleKey];
+            const bundleColor = bundle?.color || '#6E7681';
+            const isActive = m.id === getActiveTeamMemberId();
+            return `
+              <div onclick="devSwitchToUser(${m.id})" style="display:flex;align-items:center;gap:10px;padding:10px 12px;background:${isActive ? '#0D1626' : '#0D1117'};border:1px solid ${isActive ? '#1565C0' : '#1C2333'};border-radius:6px;cursor:pointer;-webkit-tap-highlight-color:transparent">
+                <div style="width:32px;height:32px;border-radius:50%;background:${bundleColor}22;border:1.5px solid ${bundleColor};display:flex;align-items:center;justify-content:center;font-size:12px;font-weight:600;color:${bundleColor}">${esc(m.initials || getInitials(m.name))}</div>
+                <div style="flex:1;min-width:0">
+                  <div style="font-size:13px;font-weight:500;color:#E6EDF3">${esc(m.name)}${isActive ? ' <span style="font-size:10px;color:#58A6FF;font-weight:400;margin-left:4px">· active</span>' : ''}</div>
+                  <div style="font-size:11px;color:${bundleColor};margin-top:1px">${bundle?.label || bundleKey}</div>
+                </div>
+              </div>
+            `;
+          }).join('')}
+        </div>
+        <div style="margin-top:14px;padding:10px;background:#0D1117;border:1px solid #1C2333;border-radius:6px;font-size:11px;color:#6E7681">
+          <strong style="color:#8B949E">Keyboard shortcut:</strong> Ctrl+Shift+U (or Cmd+Shift+U on Mac) opens this dialog from anywhere.<br>
+          <strong style="color:#8B949E">Triple-click</strong> the "Valiant Integrations" header in the sidebar also works.
+        </div>
+      </div>
+    </div>
+  `;
+  document.body.appendChild(modal);
+}
+
+function devSwitchToUser(memberId) {
+  document.getElementById('dev-switcher')?.remove();
+  switchUser(memberId);
+}
+
+// Attach global listeners for dev override
+(function attachDevOverride() {
+  // Keyboard shortcut: Ctrl+Shift+U / Cmd+Shift+U
+  document.addEventListener('keydown', function(e) {
+    if ((e.ctrlKey || e.metaKey) && e.shiftKey && (e.key === 'U' || e.key === 'u')) {
+      e.preventDefault();
+      showDevUserSwitcher();
+    }
+  });
+  // Triple-click on sidebar header
+  let clickCount = 0;
+  let clickTimer = null;
+  document.addEventListener('click', function(e) {
+    const target = e.target.closest('.sidebar-header, .sidebar-logo, .nav-section:first-child');
+    if (!target) { clickCount = 0; return; }
+    clickCount++;
+    if (clickTimer) clearTimeout(clickTimer);
+    clickTimer = setTimeout(() => { clickCount = 0; }, 600);
+    if (clickCount >= 3) {
+      clickCount = 0;
+      showDevUserSwitcher();
+    }
+  });
+})();
+
 init();
