@@ -357,7 +357,8 @@ const state = {
   tools: JSON.parse(localStorage.getItem('vi_tools') || '[]'),
   bundles: JSON.parse(localStorage.getItem('vi_bundles') || 'null') || JSON.parse(JSON.stringify(DEFAULT_BUNDLES)),
   userPermissions: JSON.parse(localStorage.getItem('vi_user_perms') || '{}'),
-  dashboardMode: localStorage.getItem('vi_dashboard_mode') || 'mine'
+  dashboardMode: localStorage.getItem('vi_dashboard_mode') || 'mine',
+  subtasks: JSON.parse(localStorage.getItem('vi_subtasks') || '{}')
 };
 
 // ── Team Roster ──
@@ -2847,6 +2848,18 @@ function renderMyWorkCard(p, role, isLead) {
   const urgent = days !== null && days >= 0 && days <= 14;
   const stg = STAGES.find(s => s.key === p.stage) || STAGES[0];
 
+  // My sub-tasks in this phase (if role is design or install)
+  const activeId = getActiveTeamMemberId();
+  const subtaskPhase = role.key === 'design' ? 'design' : (role.key === 'install' ? 'install' : null);
+  let mySubtasksBadge = '';
+  if (subtaskPhase) {
+    const subtasks = getSubtasks(p.id, subtaskPhase);
+    const mine = subtasks.filter(t => t.assignee_id === activeId && t.status !== 'done');
+    if (mine.length > 0) {
+      mySubtasksBadge = `<span style="font-size:10px;padding:2px 6px;border-radius:3px;background:#0D1626;color:#58A6FF;border:1px solid #1565C0">${mine.length} task${mine.length === 1 ? '' : 's'}</span>`;
+    }
+  }
+
   return `
     <div class="mywork-card ${isLead ? 'is-lead' : ''} ${urgent ? 'urgent' : ''}" onclick="openProject(${p.id})" style="${isLead ? `border-left:3px solid ${role.color}` : ''}">
       <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:8px;margin-bottom:6px">
@@ -2874,7 +2887,8 @@ function renderMyWorkCard(p, role, isLead) {
 
       <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;margin-top:6px">
         <div style="font-size:11px;color:#8B949E">${doneMilestones}/${totalMilestones} milestones</div>
-        <div style="display:flex;align-items:center;gap:6px">
+        <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;justify-content:flex-end">
+          ${mySubtasksBadge}
           ${flags.total > 0 ? `<span style="font-size:10px;padding:2px 6px;border-radius:3px;background:#1A150D;color:#D29922;border:1px solid #9E6A03">${flags.total} flag${flags.total === 1 ? '' : 's'}</span>` : ''}
           ${win ? `<span class="countdown-pill ${cdClass}">${fmtCountdown(win.start)}</span>` : ''}
         </div>
@@ -4054,12 +4068,15 @@ function renderProjectProgressHTML(p) {
 }
 
 function renderChecklistTab(container, project, phase) {
+  // Sub-tasks section (Pass 4A) — top of every Design/Install tab
+  const subtasksHTML = renderSubtasksSection(project, phase);
+
   const systems = project.systems.filter(s => TEMPLATES[phase]?.[s]);
   if (systems.length === 0) {
-    container.innerHTML = `<div class="empty-state"><span class="empty-icon">${phase === 'design' ? '📐' : '🔧'}</span>No ${phase} checklists — scope tags haven't been detected for this project.<br><br><span style="font-size:11px;color:#6E7681">Checklists auto-generate from scope tags: LED Wall, PA/Audio, Lighting, Control, Streaming, Camera</span></div>`;
+    container.innerHTML = subtasksHTML + `<div class="empty-state"><span class="empty-icon">${phase === 'design' ? '📐' : '🔧'}</span>No ${phase} checklists — scope tags haven't been detected for this project.<br><br><span style="font-size:11px;color:#6E7681">Checklists auto-generate from scope tags: LED Wall, PA/Audio, Lighting, Control, Streaming, Camera</span></div>`;
     return;
   }
-  container.innerHTML = systems.map(sys => {
+  container.innerHTML = subtasksHTML + systems.map(sys => {
     const template = TEMPLATES[phase][sys];
     const checkKey = `${project.id}_${phase}_${sys}`;
     const checks = state.checklists[checkKey] || {};
@@ -4089,6 +4106,202 @@ function renderChecklistTab(container, project, phase) {
     `;
   }).join('');
 }
+
+// ── Sub-tasks UI (Pass 4A) ──
+function renderSubtasksSection(project, phase) {
+  const tasks = getSubtasks(project.id, phase);
+  const activeId = getActiveTeamMemberId();
+  const canManage = canCreateSubtasks(phase);
+  const doneCount = tasks.filter(t => t.status === 'done').length;
+  const openCount = tasks.length - doneCount;
+
+  // Sort: open first, then by priority (high>med>low), then by assignee (you first)
+  const priorityRank = { high: 0, med: 1, low: 2 };
+  const sorted = [...tasks].sort((a, b) => {
+    if (a.status !== b.status) return a.status === 'done' ? 1 : -1;
+    const pDiff = (priorityRank[a.priority] ?? 1) - (priorityRank[b.priority] ?? 1);
+    if (pDiff !== 0) return pDiff;
+    if (a.assignee_id === activeId && b.assignee_id !== activeId) return -1;
+    if (b.assignee_id === activeId && a.assignee_id !== activeId) return 1;
+    return 0;
+  });
+
+  const phaseRoleKey = phase === 'design' ? 'design' : 'install';
+  const leadInfo = getLeadForRole(project.id, phaseRoleKey);
+  const leadName = leadInfo ? getTeamMember(leadInfo.id)?.name : null;
+
+  return `
+    <div class="dashboard-card" style="margin-bottom:14px">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;flex-wrap:wrap;gap:8px">
+        <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+          <div class="dashboard-card-title" style="margin-bottom:0">${phase === 'design' ? 'Design' : 'Install'} Sub-tasks</div>
+          ${tasks.length > 0 ? `<span style="font-size:11px;color:#6E7681">${doneCount} of ${tasks.length} done</span>` : ''}
+          ${leadName ? `<span style="font-size:10px;padding:2px 7px;border-radius:3px;background:#0D1626;color:#58A6FF;border:1px solid #1565C0" title="Lead ${phase === 'design' ? 'Designer' : 'Installer'}">Lead: ${esc(leadName)}</span>` : ''}
+        </div>
+        ${canManage ? `<button class="btn-primary" onclick="showSubtaskDialog(${project.id}, '${phase}')" style="padding:6px 12px;font-size:12px">+ Add Task</button>` : ''}
+      </div>
+
+      ${tasks.length === 0 ? `
+        <div style="font-size:12px;color:#6E7681;font-style:italic;padding:8px 0">
+          ${canManage ? `No sub-tasks yet. Break up the ${phase} phase into work items and assign them to team members.` : `No sub-tasks yet. ${leadName ? leadName + ' (Lead) can' : 'The Lead can'} add tasks here.`}
+        </div>
+      ` : `
+        <div style="display:flex;flex-direction:column;gap:4px">
+          ${sorted.map(t => renderSubtaskRow(project.id, phase, t, activeId, canManage)).join('')}
+        </div>
+      `}
+    </div>
+  `;
+}
+
+function renderSubtaskRow(projectId, phase, task, activeId, canManage) {
+  const assignee = task.assignee_id ? getTeamMember(task.assignee_id) : null;
+  const isMine = task.assignee_id === activeId;
+  const isDone = task.status === 'done';
+  const priorityColors = { high: '#F85149', med: '#D29922', low: '#6E7681' };
+  const priorityColor = priorityColors[task.priority] || '#6E7681';
+  const canToggle = canManage || isMine;
+  const memberColor = assignee ? (DASHBOARD_ACCESS.find(d => d.key === assignee.primaryRole)?.color || '#6E7681') : '#6E7681';
+
+  // Due date pill
+  let duePill = '';
+  if (task.due_date && !isDone) {
+    const days = daysUntil(task.due_date);
+    const cdClass = countdownClass(task.due_date);
+    duePill = `<span class="countdown-pill ${cdClass}" style="font-size:10px">${fmtCountdown(task.due_date)}</span>`;
+  } else if (task.due_date && isDone) {
+    duePill = `<span style="font-size:10px;color:#6E7681">${fmtDate(task.due_date)}</span>`;
+  }
+
+  return `
+    <div class="subtask-row ${isDone ? 'done' : ''}" style="display:flex;align-items:center;gap:10px;padding:8px 10px;background:${isMine && !isDone ? '#0D1626' : '#0D1117'};border:1px solid ${isMine && !isDone ? '#1565C0' : '#1C2333'};border-radius:5px">
+      <!-- Checkbox -->
+      <div onclick="${canToggle ? `toggleSubtaskStatus(${projectId}, '${phase}', ${task.id})` : ''}"
+        style="width:18px;height:18px;border-radius:4px;border:1.5px solid ${isDone ? '#3FB950' : (canToggle ? '#58A6FF' : '#30363D')};background:${isDone ? '#3FB950' : 'transparent'};display:flex;align-items:center;justify-content:center;flex-shrink:0;cursor:${canToggle ? 'pointer' : 'not-allowed'};-webkit-tap-highlight-color:transparent">
+        ${isDone ? '<svg width="11" height="11" viewBox="0 0 11 11" fill="none"><path d="M2 5.5l2.5 2.5L9 3" stroke="#fff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>' : ''}
+      </div>
+
+      <!-- Priority dot -->
+      <div style="width:6px;height:6px;border-radius:50%;background:${priorityColor};flex-shrink:0" title="${task.priority} priority"></div>
+
+      <!-- Text + assignee -->
+      <div style="flex:1;min-width:0">
+        <div style="font-size:13px;color:#E6EDF3;${isDone ? 'text-decoration:line-through;opacity:0.6' : ''}">${esc(task.text)}</div>
+        <div style="display:flex;align-items:center;gap:8px;margin-top:3px;font-size:10px;color:#6E7681;flex-wrap:wrap">
+          ${assignee ? `
+            <span style="display:inline-flex;align-items:center;gap:4px">
+              <span style="width:14px;height:14px;border-radius:50%;background:${memberColor}22;border:1px solid ${memberColor};display:inline-flex;align-items:center;justify-content:center;font-size:8px;font-weight:600;color:${memberColor}">${esc(assignee.initials || assignee.name.slice(0,2).toUpperCase())}</span>
+              <span style="color:${isMine ? '#58A6FF' : '#8B949E'}">${esc(assignee.name)}${isMine ? ' (you)' : ''}</span>
+            </span>
+          ` : '<span style="color:#D29922">Unassigned</span>'}
+          ${duePill}
+        </div>
+      </div>
+
+      <!-- Edit/Delete (Lead / manager only) -->
+      ${canManage ? `
+        <div style="display:flex;gap:2px;flex-shrink:0">
+          <button class="btn btn-sm" onclick="showSubtaskDialog(${projectId}, '${phase}', ${task.id})" style="font-size:10px;padding:3px 7px">Edit</button>
+          <button class="btn btn-sm" onclick="confirmDeleteSubtask(${projectId}, '${phase}', ${task.id})" style="font-size:11px;padding:3px 7px;color:#8B949E" title="Delete">×</button>
+        </div>
+      ` : ''}
+    </div>
+  `;
+}
+
+function showSubtaskDialog(projectId, phase, taskId) {
+  const task = taskId ? getSubtasks(projectId, phase).find(t => t.id === taskId) : null;
+  const isEdit = !!task;
+  if (!canCreateSubtasks(phase)) return;
+
+  // Eligible assignees: everyone on the project in that phase role OR active team
+  const phaseRole = phase === 'design' ? 'design' : 'install';
+  const a = getProjectAssignment(projectId);
+  const assignedToRole = (a[phaseRole] || []).map(x => x.id);
+  const eligible = state.team.filter(m => m.status !== 'inactive');
+  // Sort: people assigned to this phase first
+  eligible.sort((x, y) => {
+    const xOn = assignedToRole.includes(x.id);
+    const yOn = assignedToRole.includes(y.id);
+    if (xOn !== yOn) return xOn ? -1 : 1;
+    return 0;
+  });
+
+  document.getElementById('subtask-dialog')?.remove();
+  const modal = document.createElement('div');
+  modal.id = 'subtask-dialog';
+  modal.className = 'modal-overlay';
+  modal.innerHTML = `
+    <div class="modal-container" style="max-width:480px">
+      <div class="modal-header">
+        <div>
+          <div class="modal-title">${isEdit ? 'Edit' : 'New'} ${phase === 'design' ? 'Design' : 'Install'} Task</div>
+          <div class="modal-sub">${isEdit ? 'Update task details' : 'Break up the work and assign it'}</div>
+        </div>
+        <button class="modal-close" onclick="document.getElementById('subtask-dialog')?.remove()">&times;</button>
+      </div>
+      <div class="modal-body">
+        <label style="font-size:11px;color:#8B949E;font-weight:500;display:block;margin-bottom:4px">Task</label>
+        <textarea id="st-text" class="form-textarea" rows="2" placeholder="${phase === 'design' ? 'e.g. Finalize DSP signal flow, deliver CAD set for LED wall...' : 'e.g. Pre-wire rack, tag cables, commission audio chain...'}" style="width:100%;margin-bottom:12px">${esc(task?.text || '')}</textarea>
+
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:12px">
+          <div>
+            <label style="font-size:11px;color:#8B949E;font-weight:500;display:block;margin-bottom:4px">Assign to</label>
+            <select id="st-assignee" class="form-input" style="width:100%">
+              <option value="">Unassigned</option>
+              ${assignedToRole.length > 0 ? `<optgroup label="On ${phase} team">${eligible.filter(m => assignedToRole.includes(m.id)).map(m => `<option value="${m.id}" ${task?.assignee_id === m.id ? 'selected' : ''}>${esc(m.name)}</option>`).join('')}</optgroup>` : ''}
+              <optgroup label="Other team members">${eligible.filter(m => !assignedToRole.includes(m.id)).map(m => `<option value="${m.id}" ${task?.assignee_id === m.id ? 'selected' : ''}>${esc(m.name)}</option>`).join('')}</optgroup>
+            </select>
+          </div>
+          <div>
+            <label style="font-size:11px;color:#8B949E;font-weight:500;display:block;margin-bottom:4px">Priority</label>
+            <select id="st-priority" class="form-input" style="width:100%">
+              <option value="low" ${task?.priority === 'low' ? 'selected' : ''}>Low</option>
+              <option value="med" ${(!task || task.priority === 'med') ? 'selected' : ''}>Medium</option>
+              <option value="high" ${task?.priority === 'high' ? 'selected' : ''}>High</option>
+            </select>
+          </div>
+        </div>
+
+        <label style="font-size:11px;color:#8B949E;font-weight:500;display:block;margin-bottom:4px">Due date (optional)</label>
+        <input type="date" id="st-due" class="form-input" value="${esc(task?.due_date || '')}" style="width:100%;margin-bottom:14px">
+
+        <div style="display:flex;gap:8px">
+          <button class="btn" style="flex:1" onclick="document.getElementById('subtask-dialog')?.remove()">Cancel</button>
+          <button class="btn-primary" style="flex:1" onclick="saveSubtask(${projectId}, '${phase}', ${taskId || 'null'})">${isEdit ? 'Save' : 'Add Task'}</button>
+        </div>
+      </div>
+    </div>
+  `;
+  document.body.appendChild(modal);
+  // Focus the textarea
+  setTimeout(() => document.getElementById('st-text')?.focus(), 50);
+}
+
+function saveSubtask(projectId, phase, taskId) {
+  const text = document.getElementById('st-text')?.value?.trim();
+  if (!text) { alert('Task description required'); return; }
+  const assigneeVal = document.getElementById('st-assignee')?.value;
+  const priority = document.getElementById('st-priority')?.value || 'med';
+  const dueVal = document.getElementById('st-due')?.value;
+  const assignee_id = assigneeVal ? parseInt(assigneeVal) : null;
+  const due_date = dueVal || null;
+
+  if (taskId) {
+    updateSubtask(projectId, phase, taskId, { text, assignee_id, priority, due_date });
+  } else {
+    addSubtask(projectId, phase, { text, assignee_id, priority, due_date });
+  }
+  document.getElementById('subtask-dialog')?.remove();
+  rerenderCurrentTab();
+}
+
+function confirmDeleteSubtask(projectId, phase, taskId) {
+  if (!confirm('Delete this task?')) return;
+  deleteSubtask(projectId, phase, taskId);
+  rerenderCurrentTab();
+}
+
 
 function toggleCheck(projectId, phase, sys, idx) {
   const checkKey = `${projectId}_${phase}_${sys}`;
@@ -4927,8 +5140,14 @@ function setMilestone(projectId, phaseKey, milestoneKey, value) {
 function milestoneProgress(p, phase, milestone) {
   const done = getMilestone(p.id, phase.key, milestone.key);
   if (done) return 1;
-  // If not manually checked but has a linked checklist, compute partial from checklist state
+  // Priority 1: Sub-tasks for the phase — if any exist, they drive progress for linkedChecklist milestones
   if (milestone.linkedChecklist) {
+    const subtasks = getSubtasks(p.id, milestone.linkedChecklist);
+    if (subtasks.length > 0) {
+      const doneCount = subtasks.filter(t => t.status === 'done').length;
+      return doneCount / subtasks.length;
+    }
+    // Priority 2: Fall back to linked scope checklists
     const relevantSystems = p.systems.filter(s => TEMPLATES[milestone.linkedChecklist]?.[s]);
     if (relevantSystems.length === 0) return 0;
     let totalItems = 0;
@@ -4943,6 +5162,86 @@ function milestoneProgress(p, phase, milestone) {
     return totalItems > 0 ? completedItems / totalItems : 0;
   }
   return 0;
+}
+
+// ── Sub-tasks (Pass 4A) ──
+// Shape: state.subtasks[projectId][phase] = [{id, text, assignee_id, status, due_date, priority, created_by, created_at, completed_at}]
+function getSubtasks(projectId, phase) {
+  return state.subtasks?.[projectId]?.[phase] || [];
+}
+
+function addSubtask(projectId, phase, taskData) {
+  if (!state.subtasks[projectId]) state.subtasks[projectId] = {};
+  if (!state.subtasks[projectId][phase]) state.subtasks[projectId][phase] = [];
+  const task = {
+    id: Date.now() + Math.random(),
+    text: taskData.text || '',
+    assignee_id: taskData.assignee_id || null,
+    status: 'open',
+    due_date: taskData.due_date || null,
+    priority: taskData.priority || 'med',
+    created_by: getActiveTeamMemberId(),
+    created_at: new Date().toISOString()
+  };
+  state.subtasks[projectId][phase].push(task);
+  save('vi_subtasks', state.subtasks);
+  return task;
+}
+
+function updateSubtask(projectId, phase, taskId, changes) {
+  const tasks = getSubtasks(projectId, phase);
+  const task = tasks.find(t => t.id === taskId);
+  if (!task) return;
+  Object.assign(task, changes);
+  if (changes.status === 'done' && !task.completed_at) {
+    task.completed_at = new Date().toISOString();
+  } else if (changes.status === 'open') {
+    delete task.completed_at;
+  }
+  save('vi_subtasks', state.subtasks);
+}
+
+function deleteSubtask(projectId, phase, taskId) {
+  if (!state.subtasks[projectId]?.[phase]) return;
+  state.subtasks[projectId][phase] = state.subtasks[projectId][phase].filter(t => t.id !== taskId);
+  save('vi_subtasks', state.subtasks);
+}
+
+function toggleSubtaskStatus(projectId, phase, taskId) {
+  const tasks = getSubtasks(projectId, phase);
+  const task = tasks.find(t => t.id === taskId);
+  if (!task) return;
+  // Permission check: user must be the assignee OR have design.assign_tasks
+  const activeId = getActiveTeamMemberId();
+  const canManage = currentUserHasPermission(phase === 'install' ? 'install.edit' : 'design.assign_tasks');
+  const isAssignee = task.assignee_id === activeId;
+  if (!canManage && !isAssignee) return;
+  updateSubtask(projectId, phase, taskId, { status: task.status === 'done' ? 'open' : 'done' });
+  rerenderCurrentTab();
+}
+
+function canCreateSubtasks(phase) {
+  // design.assign_tasks covers design phase; for install, use install.edit (will refine later)
+  if (phase === 'design') return currentUserHasPermission('design.assign_tasks');
+  if (phase === 'install') return currentUserHasPermission('install.edit');
+  return false;
+}
+
+function canEditSubtask(projectId, phase, task) {
+  if (canCreateSubtasks(phase)) return true;
+  // Assignees can toggle their own but not edit details
+  return false;
+}
+
+function rerenderCurrentTab() {
+  const p = state.currentProject;
+  if (!p) return;
+  const body = document.getElementById('project-page-body');
+  if (!body) return;
+  const tab = state.projectTab;
+  if (tab === 'design') { body.innerHTML = ''; renderChecklistTab(body, p, 'design'); }
+  else if (tab === 'install') { body.innerHTML = ''; renderChecklistTab(body, p, 'install'); }
+  else renderCurrentPage();
 }
 
 // Compute progress for a whole phase (0 to 1). Equal weight per milestone.
