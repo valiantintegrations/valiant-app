@@ -210,6 +210,83 @@ body {
 }
 .section-action:hover { text-decoration: underline; }
 
+/* ═══════════════════════════════════════════════════════════
+   SALES DEPT VERTICAL KANBAN
+   ═══════════════════════════════════════════════════════════ */
+
+.sales-kanban-vertical {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+.sk-row {
+  background: #0D1117;
+  border: 1px solid #1C2333;
+  border-radius: 10px;
+  padding: 12px 14px;
+  transition: border-color 0.15s;
+}
+.sk-row.drag-over {
+  border-color: #58A6FF;
+  border-style: dashed;
+  background: #0D1626;
+}
+.sk-row-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 10px;
+  padding: 2px 0 2px 10px;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+.sk-row-name {
+  font-size: 13px;
+  font-weight: 700;
+  color: #E6EDF3;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+.sk-row-count {
+  font-size: 11px;
+  color: #8B949E;
+  background: #161B22;
+  border: 1px solid #30363D;
+  padding: 1px 8px;
+  border-radius: 10px;
+  font-weight: 500;
+}
+.sk-row-cards {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.sk-card {
+  flex: 0 0 calc(25% - 6px);
+  min-width: 240px;
+  max-width: 320px;
+  box-sizing: border-box;
+}
+.sk-row-empty {
+  padding: 20px;
+  text-align: center;
+  color: #6E7681;
+  font-size: 12px;
+  font-style: italic;
+  width: 100%;
+}
+
+/* Responsive: fewer cards per row on narrower screens */
+@media (max-width: 1200px) {
+  .sk-card { flex: 0 0 calc(33.333% - 6px); }
+}
+@media (max-width: 900px) {
+  .sk-card { flex: 0 0 calc(50% - 4px); }
+}
+@media (max-width: 600px) {
+  .sk-card { flex: 0 0 100%; min-width: 0; max-width: none; }
+}
+
 /* ── Project Pipeline ── */
 .pipeline-grid {
   display: grid;
@@ -1028,6 +1105,81 @@ td.today .cal-day-num {
   border-radius: 2px;
   transition: width 0.3s ease;
 }
+
+/* ═══════════════════════════════════════════════════════════
+   STAGE C PASS 3C — Dynamic Dashboard (My Work view)
+   ═══════════════════════════════════════════════════════════ */
+
+.mywork-section {
+  margin-bottom: 20px;
+}
+.mywork-section-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 10px;
+  padding-bottom: 8px;
+  border-bottom: 1px solid #1C2333;
+}
+.mywork-section-title {
+  font-size: 13px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+.mywork-section-count {
+  font-size: 11px;
+  color: #6E7681;
+}
+.mywork-cards {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+  gap: 10px;
+}
+.mywork-card {
+  background: #161B22;
+  border: 1px solid #1C2333;
+  border-radius: 8px;
+  padding: 12px 14px;
+  cursor: pointer;
+  transition: all 0.15s;
+  -webkit-tap-highlight-color: transparent;
+}
+.mywork-card:hover {
+  border-color: #30363D;
+  background: #1C2333;
+}
+.mywork-card.urgent {
+  border-left: 3px solid #F85149;
+}
+.mywork-card.is-lead.urgent {
+  /* both left-border states collide — keep lead color, add subtle top glow for urgent */
+  box-shadow: 0 0 0 1px #F8514922;
+}
+
+/* Mini segmented progress map inside mywork cards */
+.mywork-pmap {
+  display: flex;
+  height: 5px;
+  background: #0D1117;
+  border-radius: 3px;
+  overflow: hidden;
+  margin-top: 8px;
+  border: 1px solid #1C2333;
+}
+.mywork-pmap-seg {
+  position: relative;
+  height: 100%;
+  background: #161B22;
+  border-right: 1px solid #0D1117;
+}
+.mywork-pmap-seg:last-child { border-right: none; }
+.mywork-pmap-fill {
+  height: 100%;
+  transition: width 0.3s ease;
+}
+
+/* Pass 3B: Expanded role assignments */
 
 /* ═══════════════════════════════════════════════════════════
    STAGE C PASS 3B — Expanded role assignments
