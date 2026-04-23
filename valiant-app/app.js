@@ -68,6 +68,10 @@ const PERMISSION_KEYS = [
   'financials.view_project_totals',  // Total value, equipment price, labor price per project
   'financials.view_margins',         // Margin %, cost basis, equipment cost vs price
   'financials.view_cashflow',        // Salary, direct costs, ops expenses — CFO / Owner tier
+  // Dashboard visibility — grants access to department management dashboards
+  'dashboards.install_mgmt',      // Installation Department Management dashboard
+  'dashboards.design_mgmt',       // Design Department Management dashboard
+  'dashboards.sales_mgmt',        // Sales Department Management dashboard
   // Templates — Kris and others can suggest additions; reviewers accept/reject
   'templates.review',             // Review incoming template suggestions and accept/reject them
   // Sales / client
@@ -117,7 +121,8 @@ const DEFAULT_BUNDLES = {
       'financials.view_project_totals',
       'design.view','design.assign_tasks',
       'client.view_contact',
-      'templates.review'
+      'templates.review',
+      'dashboards.install_mgmt'
     ]
   },
   'design_admin': {
@@ -135,7 +140,8 @@ const DEFAULT_BUNDLES = {
       'vendors.view','vendors.manage',
       'financials.view_project_totals',
       'client.view_contact',
-      'templates.review'
+      'templates.review',
+      'dashboards.design_mgmt'
     ]
   },
   'sales': {
@@ -150,7 +156,8 @@ const DEFAULT_BUNDLES = {
       'sales.view_pipeline','sales.send_proposals',
       'financials.view_project_totals',
       'client.view_contact',
-      'vendors.view'
+      'vendors.view',
+      'dashboards.sales_mgmt'
     ]
   },
   'project_manager': {
@@ -165,7 +172,8 @@ const DEFAULT_BUNDLES = {
       'purchasing.view','warehouse.view_inventory',
       'vendors.view',
       'financials.view_project_totals',
-      'client.view_contact'
+      'client.view_contact',
+      'dashboards.install_mgmt','dashboards.design_mgmt','dashboards.sales_mgmt'
     ]
   },
   'designer': {
@@ -2678,51 +2686,98 @@ function renderDashboard(c) {
 
   const canSeeAllProjects = currentUserHasPermission('projects.view_all');
   const isMasterAdmin = currentUserHasPermission('admin.system');
-  const isInstallAdmin = currentUserHasPermission('install.manage_crew');
+  const canSeeInstallMgmt = currentUserHasPermission('dashboards.install_mgmt');
+  const canSeeDesignMgmt = currentUserHasPermission('dashboards.design_mgmt');
+  const canSeeSalesMgmt = currentUserHasPermission('dashboards.sales_mgmt');
 
-  // Determine which view mode to show
-  // Default priority: Master Admin → executive, Install Admin → install, others → mine
-  let dashboardMode = state.dashboardMode || (isMasterAdmin ? 'executive' : isInstallAdmin ? 'install' : 'mine');
+  // Migrate legacy 'install' mode to 'install_mgmt'
+  let dashboardMode = state.dashboardMode;
+  if (dashboardMode === 'install') {
+    dashboardMode = 'install_mgmt';
+    state.dashboardMode = dashboardMode;
+    localStorage.setItem('vi_dashboard_mode', dashboardMode);
+  }
+
+  // Default ordering: Master Admin → executive, otherwise first available dept dashboard, otherwise mine
+  if (!dashboardMode) {
+    if (isMasterAdmin) dashboardMode = 'executive';
+    else if (canSeeSalesMgmt) dashboardMode = 'sales_mgmt';
+    else if (canSeeDesignMgmt) dashboardMode = 'design_mgmt';
+    else if (canSeeInstallMgmt) dashboardMode = 'install_mgmt';
+    else dashboardMode = 'mine';
+  }
   // Fallbacks if user lost permissions since last choice
-  if (dashboardMode === 'executive' && !isMasterAdmin) dashboardMode = isInstallAdmin ? 'install' : 'mine';
+  if (dashboardMode === 'executive' && !isMasterAdmin) dashboardMode = 'mine';
   if (dashboardMode === 'pipeline' && !canSeeAllProjects) dashboardMode = 'mine';
-  if (dashboardMode === 'install' && !isInstallAdmin) dashboardMode = 'mine';
+  if (dashboardMode === 'install_mgmt' && !canSeeInstallMgmt) dashboardMode = 'mine';
+  if (dashboardMode === 'design_mgmt' && !canSeeDesignMgmt) dashboardMode = 'mine';
+  if (dashboardMode === 'sales_mgmt' && !canSeeSalesMgmt) dashboardMode = 'mine';
 
-  // Compute my assignments across all active projects
   const activeProjects = state.projects.filter(p => !p.archived);
   const myAssignments = computeMyAssignments(memberId, activeProjects);
   const totalMyWork = Object.values(myAssignments).reduce((n, arr) => n + arr.length, 0);
   const myCloseoutCount = getMyCloseoutProjects(memberId).length;
 
-  // Build mode toggle — tabs visible based on permissions
+  // Build mode tabs
   const tabs = [];
   if (isMasterAdmin) tabs.push({ key: 'executive', label: 'Executive' });
   tabs.push({ key: 'mine', label: 'My Work', badge: totalMyWork, alertBadge: myCloseoutCount });
-  if (isInstallAdmin) {
-    const installAlertCount = getProjectsNeedingCloseout().length;
-    tabs.push({ key: 'install', label: 'Install Admin', alertBadge: installAlertCount });
+  if (canSeeSalesMgmt) {
+    const alerts = countSalesMgmtAlerts(activeProjects);
+    tabs.push({ key: 'sales_mgmt', label: 'Sales Dept', alertBadge: alerts });
+  }
+  if (canSeeDesignMgmt) {
+    const alerts = countDesignMgmtAlerts(activeProjects);
+    tabs.push({ key: 'design_mgmt', label: 'Design Dept', alertBadge: alerts });
+  }
+  if (canSeeInstallMgmt) {
+    const alerts = getProjectsNeedingCloseout().length;
+    tabs.push({ key: 'install_mgmt', label: 'Install Dept', alertBadge: alerts });
   }
   if (canSeeAllProjects) tabs.push({ key: 'pipeline', label: 'Full Pipeline' });
 
+  // Horizontally scrollable tab bar for mobile
   const modeToggle = tabs.length > 1 ? `
-    <div style="display:inline-flex;background:#0D1117;border:1px solid #30363D;border-radius:6px;overflow:hidden;font-size:12px;margin-bottom:14px">
-      ${tabs.map(t => `
-        <div onclick="setDashboardMode('${t.key}')" style="padding:7px 14px;cursor:pointer;transition:all 0.15s;${dashboardMode === t.key ? 'background:#1565C0;color:#58A6FF;font-weight:500' : 'color:#8B949E'};-webkit-tap-highlight-color:transparent;display:inline-flex;align-items:center;gap:5px">
-          ${t.label}${t.badge > 0 ? ` <span style="opacity:0.7;margin-left:2px">${t.badge}</span>` : ''}${t.alertBadge > 0 ? `<span style="background:#DA3633;color:#fff;font-size:9px;font-weight:700;padding:1px 5px;border-radius:8px">${t.alertBadge}</span>` : ''}
-        </div>
-      `).join('')}
+    <div class="dash-mode-scroll" style="overflow-x:auto;-webkit-overflow-scrolling:touch;margin:0 -4px 14px;padding:0 4px 2px">
+      <div style="display:inline-flex;background:#0D1117;border:1px solid #30363D;border-radius:6px;overflow:hidden;font-size:12px;white-space:nowrap">
+        ${tabs.map(t => `
+          <div onclick="setDashboardMode('${t.key}')" style="padding:7px 14px;cursor:pointer;transition:all 0.15s;${dashboardMode === t.key ? 'background:#1565C0;color:#58A6FF;font-weight:500' : 'color:#8B949E'};-webkit-tap-highlight-color:transparent;display:inline-flex;align-items:center;gap:5px;border-right:1px solid #30363D">
+            ${t.label}${t.badge > 0 ? `<span style="opacity:0.7;margin-left:2px">${t.badge}</span>` : ''}${t.alertBadge > 0 ? `<span style="background:#DA3633;color:#fff;font-size:9px;font-weight:700;padding:1px 5px;border-radius:8px">${t.alertBadge}</span>` : ''}
+          </div>
+        `).join('')}
+      </div>
     </div>
   ` : '';
 
   if (dashboardMode === 'executive') {
     c.innerHTML = modeToggle + renderExecutiveDashboard(activeProjects);
-  } else if (dashboardMode === 'install') {
-    c.innerHTML = modeToggle + renderInstallAdminDashboard(activeProjects);
+  } else if (dashboardMode === 'install_mgmt') {
+    c.innerHTML = modeToggle + renderInstallMgmtDashboard(activeProjects);
+  } else if (dashboardMode === 'design_mgmt') {
+    c.innerHTML = modeToggle + renderDesignMgmtDashboard(activeProjects);
+  } else if (dashboardMode === 'sales_mgmt') {
+    c.innerHTML = modeToggle + renderSalesMgmtDashboard(activeProjects);
   } else if (dashboardMode === 'mine') {
     c.innerHTML = modeToggle + renderMyWorkDashboard(memberId, activeProjects, myAssignments, activeMember);
   } else {
     c.innerHTML = modeToggle + renderPipelineDashboard(activeProjects);
   }
+}
+
+// Alert counts for tab badges
+function countSalesMgmtAlerts(projects) {
+  // Alerts = proposals sent 7+ days ago without response, or contracts needing review
+  let count = 0;
+  projects.forEach(p => {
+    if (isContractNeedsReview(p)) count++;
+  });
+  return count;
+}
+
+function countDesignMgmtAlerts(projects) {
+  // Alerts = designs past kickoff without activity, pending template suggestions
+  const pending = (state.templateSuggestions || []).filter(s => s.status === 'pending').length;
+  return pending;
 }
 
 function setDashboardMode(mode) {
@@ -3011,7 +3066,7 @@ function renderExecutiveDashboard(activeProjects) {
 
   return `
     <!-- Hero metrics row -->
-    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:12px;margin-bottom:20px">
+    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:10px;margin-bottom:20px">
       <div class="metric-card">
         <div class="metric-label">Pipeline Value</div>
         <div class="metric-value">${fmt(totalValue)}</div>
@@ -6939,9 +6994,9 @@ function finalizeProjectCompletion(projectId) {
   renderCurrentPage();
 }
 
-// ── Install Admin dashboard ──
-// For Clint: all install projects across the company, with closeout queue as the priority item
-function renderInstallAdminDashboard(activeProjects) {
+// ── Install Department Management dashboard ──
+// For Clint and other install leads: all install projects with closeout queue as priority
+function renderInstallMgmtDashboard(activeProjects) {
   const closeoutProjects = getProjectsNeedingCloseout();
   const inInstall = activeProjects.filter(p => p.stage === 'install' && !isProjectInCloseout(p));
   // Upcoming: booked install in next 14 days
@@ -6965,8 +7020,10 @@ function renderInstallAdminDashboard(activeProjects) {
   const unassignedShop = openShop.filter(t => !t.assignee_id);
 
   return `
+    ${renderDeptDashboardHeader('Installation Department Management', 'Install phase oversight across all active projects', '#F0883E')}
+
     <!-- Hero metrics -->
-    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:12px;margin-bottom:18px">
+    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:10px;margin-bottom:18px">
       <div class="metric-card" style="${closeoutProjects.length > 0 ? 'border-color:#DA3633' : ''}">
         <div class="metric-label">Closeout Queue</div>
         <div class="metric-value" style="${closeoutProjects.length > 0 ? 'color:#F85149' : ''}">${closeoutProjects.length}</div>
@@ -7101,6 +7158,348 @@ function renderInstallAdminDashboard(activeProjects) {
         ` : ''}
       </div>
     ` : ''}
+  `;
+}
+
+// ── Department dashboard header helper ──
+function renderDeptDashboardHeader(title, subtitle, color) {
+  return `
+    <div style="display:flex;align-items:center;gap:10px;margin-bottom:16px;padding-bottom:12px;border-bottom:1px solid #1C2333">
+      <div style="width:4px;height:28px;background:${color};border-radius:2px;flex-shrink:0"></div>
+      <div>
+        <div style="font-size:16px;font-weight:600;color:#E6EDF3">${esc(title)}</div>
+        <div style="font-size:11px;color:#6E7681;margin-top:1px">${esc(subtitle)}</div>
+      </div>
+    </div>
+  `;
+}
+
+// ── Design Department Management dashboard ──
+function renderDesignMgmtDashboard(activeProjects) {
+  // Projects currently in Design phase (parallel with Purchasing/Planning — projects that are past Contract but not yet Install)
+  const inDesign = activeProjects.filter(p => {
+    if (p.stage !== 'contract') return false;
+    const designPhase = PHASES.find(ph => ph.key === 'design');
+    if (!designPhase) return false;
+    const pct = phaseProgress(p, designPhase);
+    return pct > 0 && pct < 1;
+  });
+
+  // Pending kickoff: projects past contract stage where Design Kickoff hasn't been logged
+  const pendingKickoff = activeProjects.filter(p => {
+    if (p.stage !== 'contract') return false;
+    // Project must be past the contract milestones being complete
+    const contractPhase = PHASES.find(ph => ph.key === 'contract');
+    if (!contractPhase) return false;
+    const contractDone = phaseProgress(p, contractPhase) >= 1;
+    if (!contractDone) return false;
+    const designPhase = PHASES.find(ph => ph.key === 'design');
+    const kickoffMilestone = designPhase?.milestones.find(m => m.key === 'kickoff');
+    if (!kickoffMilestone) return false;
+    return milestoneProgress(p, designPhase, kickoffMilestone) < 1;
+  });
+
+  // Pending handoff: designs at or near 100% completed milestone but handoff milestone not checked
+  const pendingHandoff = activeProjects.filter(p => {
+    const designPhase = PHASES.find(ph => ph.key === 'design');
+    if (!designPhase) return false;
+    const completedMilestone = designPhase.milestones.find(m => m.key === 'completed');
+    const handoffMilestone = designPhase.milestones.find(m => m.key === 'handoff');
+    if (!completedMilestone || !handoffMilestone) return false;
+    const completedProg = milestoneProgress(p, designPhase, completedMilestone);
+    const handoffDone = milestoneProgress(p, designPhase, handoffMilestone) >= 1;
+    return completedProg >= 0.8 && !handoffDone;
+  });
+
+  // Stuck designs: in design phase, no sub-task activity 14+ days (use created_at as proxy for activity)
+  const stuckDesigns = inDesign.filter(p => {
+    const subtasks = getSubtasks(p.id, 'design');
+    if (subtasks.length === 0) return false;
+    const mostRecent = subtasks.reduce((latest, t) => {
+      const d = new Date(t.completed_at || t.created_at);
+      return d > latest ? d : latest;
+    }, new Date(0));
+    const days = (Date.now() - mostRecent.getTime()) / 86400000;
+    return days > 14;
+  });
+
+  // Pending template suggestions
+  const pendingSuggestions = (state.templateSuggestions || []).filter(s => s.status === 'pending');
+
+  // Total open design sub-tasks across all active projects (workload indicator)
+  let totalOpenTasks = 0;
+  activeProjects.forEach(p => {
+    const subtasks = getSubtasks(p.id, 'design');
+    totalOpenTasks += subtasks.filter(t => t.status !== 'done').length;
+  });
+
+  return `
+    ${renderDeptDashboardHeader('Design Department Management', 'Design phase oversight across all active projects', '#A371F7')}
+
+    <!-- Hero metrics -->
+    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:10px;margin-bottom:18px">
+      <div class="metric-card">
+        <div class="metric-label">In Design</div>
+        <div class="metric-value">${inDesign.length}</div>
+        <div class="metric-sub">active designs</div>
+      </div>
+      <div class="metric-card" style="${pendingKickoff.length > 0 ? 'border-color:#D29922' : ''}">
+        <div class="metric-label">Awaiting Kickoff</div>
+        <div class="metric-value" style="${pendingKickoff.length > 0 ? 'color:#D29922' : ''}">${pendingKickoff.length}</div>
+        <div class="metric-sub">contracts past ready</div>
+      </div>
+      <div class="metric-card" style="${pendingHandoff.length > 0 ? 'border-color:#3FB950' : ''}">
+        <div class="metric-label">Awaiting Handoff</div>
+        <div class="metric-value" style="${pendingHandoff.length > 0 ? 'color:#3FB950' : ''}">${pendingHandoff.length}</div>
+        <div class="metric-sub">ready for install handoff</div>
+      </div>
+      <div class="metric-card">
+        <div class="metric-label">Open Tasks</div>
+        <div class="metric-value">${totalOpenTasks}</div>
+        <div class="metric-sub">across all designs</div>
+      </div>
+    </div>
+
+    <!-- Template Suggestions (priority if any) -->
+    ${pendingSuggestions.length > 0 ? `
+      <div class="dashboard-card" style="margin-bottom:16px;border-left:3px solid #D29922">
+        <div class="dashboard-card-title" style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px">
+          <span style="color:#D29922">Template Suggestions &middot; ${pendingSuggestions.length}</span>
+          <button class="btn btn-sm" onclick="state.adminTab='templates';navigate('admin')" style="font-size:11px;padding:4px 10px">Review in Admin &rarr;</button>
+        </div>
+        <div style="font-size:11px;color:#8B949E;margin-bottom:8px">Team-suggested additions to design templates awaiting your review</div>
+        ${pendingSuggestions.slice(0, 3).map(s => {
+          const suggestedBy = getTeamMember(s.suggested_by);
+          const templateName = TEMPLATES[s.phase]?.[s.scope]?.name || s.scope;
+          return `
+            <div style="padding:8px 10px;background:#0D1117;border:1px solid #1C2333;border-radius:4px;margin-bottom:4px">
+              <div style="font-size:12px;color:#E6EDF3">"${esc(s.text)}"</div>
+              <div style="font-size:10px;color:#6E7681;margin-top:2px">For ${esc(templateName)} &middot; by ${esc(suggestedBy?.name || 'unknown')}</div>
+            </div>
+          `;
+        }).join('')}
+        ${pendingSuggestions.length > 3 ? `<div style="font-size:10px;color:#6E7681;text-align:center;padding:4px">+${pendingSuggestions.length - 3} more</div>` : ''}
+      </div>
+    ` : ''}
+
+    <!-- Pending Kickoff + Pending Handoff in 2-col -->
+    ${(pendingKickoff.length > 0 || pendingHandoff.length > 0) ? `
+      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(320px,1fr));gap:14px;margin-bottom:16px">
+        ${pendingKickoff.length > 0 ? `
+          <div class="dashboard-card" style="border-left:2px solid #D29922">
+            <div class="dashboard-card-title"><span style="color:#D29922">Awaiting Kickoff &middot; ${pendingKickoff.length}</span></div>
+            <div style="font-size:11px;color:#6E7681;margin-bottom:8px">Contracts ready but design hasn&rsquo;t started</div>
+            ${pendingKickoff.map(p => {
+              const assignment = getProjectAssignment(p.id);
+              const designLead = (assignment.design || []).find(x => x.lead);
+              const leadName = designLead ? getTeamMember(designLead.id)?.name : null;
+              return `
+                <div onclick="openProject(${p.id})" style="padding:8px 10px;background:#0D1117;border:1px solid #1C2333;border-radius:4px;margin-bottom:4px;cursor:pointer;-webkit-tap-highlight-color:transparent">
+                  <div style="font-size:12px;color:#E6EDF3;font-weight:500">${esc(p.name)}</div>
+                  <div style="font-size:10px;color:#6E7681;margin-top:2px">${esc(p.client_name || '')}${leadName ? ' &middot; Lead: ' + esc(leadName) : ' &middot; <span style="color:#D29922">No lead assigned</span>'}</div>
+                </div>
+              `;
+            }).join('')}
+          </div>
+        ` : ''}
+        ${pendingHandoff.length > 0 ? `
+          <div class="dashboard-card" style="border-left:2px solid #3FB950">
+            <div class="dashboard-card-title"><span style="color:#3FB950">Awaiting Handoff &middot; ${pendingHandoff.length}</span></div>
+            <div style="font-size:11px;color:#6E7681;margin-bottom:8px">Designs ready for install handoff meeting</div>
+            ${pendingHandoff.map(p => {
+              const designPhase = PHASES.find(ph => ph.key === 'design');
+              const completedMilestone = designPhase.milestones.find(m => m.key === 'completed');
+              const completedProg = Math.round(milestoneProgress(p, designPhase, completedMilestone) * 100);
+              return `
+                <div onclick="openProject(${p.id})" style="padding:8px 10px;background:#0D1117;border:1px solid #1C2333;border-radius:4px;margin-bottom:4px;cursor:pointer;-webkit-tap-highlight-color:transparent">
+                  <div style="font-size:12px;color:#E6EDF3;font-weight:500">${esc(p.name)}</div>
+                  <div style="font-size:10px;color:#6E7681;margin-top:2px">${esc(p.client_name || '')} &middot; ${completedProg}% design complete</div>
+                </div>
+              `;
+            }).join('')}
+          </div>
+        ` : ''}
+      </div>
+    ` : ''}
+
+    <!-- Design Queue: all projects currently in design -->
+    <div class="dashboard-card" style="margin-bottom:16px">
+      <div class="dashboard-card-title">Design Queue &middot; ${inDesign.length}</div>
+      ${inDesign.length === 0 ? '<div style="font-size:12px;color:#6E7681;font-style:italic;padding:10px 0">No designs currently in progress</div>' : inDesign.map(p => {
+        const designPhase = PHASES.find(ph => ph.key === 'design');
+        const pct = Math.round(phaseProgress(p, designPhase) * 100);
+        const assignment = getProjectAssignment(p.id);
+        const designPeople = assignment.design || [];
+        const designLead = designPeople.find(x => x.lead);
+        const leadName = designLead ? getTeamMember(designLead.id)?.name : null;
+        const openTasks = getSubtasks(p.id, 'design').filter(t => t.status !== 'done').length;
+        const isStuck = stuckDesigns.some(sp => sp.id === p.id);
+        return `
+          <div onclick="openProject(${p.id})" style="padding:10px 12px;background:#0D1117;border:1px solid ${isStuck ? '#9E6A03' : '#1C2333'};border-radius:5px;margin-bottom:5px;cursor:pointer;-webkit-tap-highlight-color:transparent;${isStuck ? 'border-left:2px solid #D29922' : ''}">
+            <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap">
+              <div style="flex:1;min-width:180px">
+                <div style="font-size:13px;color:#E6EDF3;font-weight:500">${esc(p.name)}</div>
+                <div style="font-size:10px;color:#6E7681;margin-top:2px">
+                  ${esc(p.client_name || '')}${leadName ? ' &middot; Lead: ' + esc(leadName) : ''}${designPeople.length > 1 ? ` &middot; ${designPeople.length} designers` : ''}${openTasks > 0 ? ` &middot; ${openTasks} task${openTasks === 1 ? '' : 's'}` : ''}${isStuck ? ' &middot; <span style="color:#D29922">no recent activity</span>' : ''}
+                </div>
+              </div>
+              <div style="font-size:11px;color:${pct === 100 ? '#3FB950' : '#A371F7'};font-weight:600">${pct}%</div>
+            </div>
+          </div>
+        `;
+      }).join('')}
+    </div>
+  `;
+}
+
+// ── Sales Department Management dashboard ──
+function renderSalesMgmtDashboard(activeProjects) {
+  const totalValue = getPipelineValue(activeProjects);
+  const likelyValue = getLikelyToCloseTotal();
+  const likelyCount = activeProjects.filter(p => isLikelyToClose(p.id)).length;
+  const closeRate = getCloseRate();
+
+  // Hot deals: likely to close
+  const hotDeals = activeProjects.filter(p => isLikelyToClose(p.id))
+    .sort((a, b) => (b.total || 0) - (a.total || 0));
+
+  // Proposals out: projects in proposal stage where proposal-sent milestone is complete
+  const proposalsOut = activeProjects.filter(p => {
+    if (p.stage !== 'proposal') return false;
+    const proposalPhase = PHASES.find(ph => ph.key === 'proposal');
+    if (!proposalPhase) return false;
+    const sentMilestone = proposalPhase.milestones.find(m => m.key === 'proposal_sent');
+    return sentMilestone && milestoneProgress(p, proposalPhase, sentMilestone) >= 1;
+  });
+
+  // Needs review: contract signed but not yet handed off to design
+  const needsReview = activeProjects.filter(p => isContractNeedsReview(p));
+
+  // Stalled leads: Lead stage with no activity 30+ days
+  const stalledLeads = activeProjects.filter(p => {
+    if (p.stage !== 'lead') return false;
+    const la = state.recentActivity?.[p.id];
+    if (!la) return false;
+    const days = (Date.now() - new Date(la).getTime()) / 86400000;
+    return days > 30;
+  });
+
+  // By Sales Lead: group by sales lead
+  const byLead = {};
+  activeProjects.forEach(p => {
+    const assignment = getProjectAssignment(p.id);
+    const salesLead = (assignment.sales || []).find(x => x.lead);
+    const leadId = salesLead?.id || 'unassigned';
+    if (!byLead[leadId]) byLead[leadId] = { id: leadId, projects: [], value: 0 };
+    byLead[leadId].projects.push(p);
+    byLead[leadId].value += (p.total || 0);
+  });
+  const leadSummary = Object.values(byLead).sort((a, b) => b.value - a.value);
+
+  return `
+    ${renderDeptDashboardHeader('Sales Department Management', 'Pipeline oversight and sales rep performance', '#3FB950')}
+
+    <!-- Hero metrics -->
+    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:10px;margin-bottom:18px">
+      <div class="metric-card">
+        <div class="metric-label">Pipeline Value</div>
+        <div class="metric-value">${fmt(totalValue)}</div>
+        <div class="metric-sub">${activeProjects.length} active</div>
+      </div>
+      <div class="metric-card" style="${likelyCount > 0 ? 'border-color:#238636' : ''}">
+        <div class="metric-label">Likely to Close</div>
+        <div class="metric-value" style="${likelyCount > 0 ? 'color:#3FB950' : ''}">${fmt(likelyValue)}</div>
+        <div class="metric-sub">${likelyCount} project${likelyCount === 1 ? '' : 's'}</div>
+      </div>
+      <div class="metric-card" style="${needsReview.length > 0 ? 'border-color:#DA3633' : ''}">
+        <div class="metric-label">Needs Review</div>
+        <div class="metric-value" style="${needsReview.length > 0 ? 'color:#F85149' : ''}">${needsReview.length}</div>
+        <div class="metric-sub">contracts to hand off</div>
+      </div>
+      <div class="metric-card" style="${closeRate !== null && closeRate >= 50 ? 'border-color:#238636' : ''}">
+        <div class="metric-label">Close Rate</div>
+        <div class="metric-value" style="${closeRate !== null && closeRate >= 50 ? 'color:#3FB950' : ''}">${closeRate !== null ? closeRate + '%' : '—'}</div>
+        <div class="metric-sub">all-time</div>
+      </div>
+    </div>
+
+    <!-- Needs Review (highest priority if any) -->
+    ${needsReview.length > 0 ? `
+      <div class="dashboard-card" style="margin-bottom:16px;border-left:3px solid #DA3633">
+        <div class="dashboard-card-title"><span style="color:#F85149">Contracts Awaiting Review &middot; ${needsReview.length}</span></div>
+        <div style="font-size:11px;color:#8B949E;margin-bottom:8px">Contracts signed but not yet handed off to design & install</div>
+        ${needsReview.map(p => `
+          <div onclick="openProject(${p.id})" style="padding:8px 10px;background:#0D1117;border:1px solid #1C2333;border-radius:4px;margin-bottom:4px;cursor:pointer;-webkit-tap-highlight-color:transparent">
+            <div style="font-size:12px;color:#E6EDF3;font-weight:500">${esc(p.name)}</div>
+            <div style="font-size:10px;color:#6E7681;margin-top:2px">${esc(p.client_name || '')} &middot; ${fmt(p.total || 0)}</div>
+          </div>
+        `).join('')}
+      </div>
+    ` : ''}
+
+    <!-- Hot Deals + Proposals Out in 2-col -->
+    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(320px,1fr));gap:14px;margin-bottom:16px">
+      <div class="dashboard-card" style="border-left:2px solid #3FB950">
+        <div class="dashboard-card-title"><span style="color:#3FB950">Hot Deals &middot; ${hotDeals.length}</span></div>
+        ${hotDeals.length === 0 ? '<div style="font-size:12px;color:#6E7681;font-style:italic;padding:10px 0">No deals flagged as likely to close</div>' : hotDeals.slice(0, 6).map(p => {
+          const stg = STAGES.find(s => s.key === p.stage) || STAGES[0];
+          return `
+            <div onclick="openProject(${p.id})" style="padding:8px 10px;background:#0D1117;border:1px solid #1C2333;border-radius:4px;margin-bottom:4px;cursor:pointer;-webkit-tap-highlight-color:transparent">
+              <div style="display:flex;justify-content:space-between;gap:8px;align-items:center;flex-wrap:wrap">
+                <div style="flex:1;min-width:0">
+                  <div style="font-size:12px;color:#E6EDF3;font-weight:500">${esc(p.name)}</div>
+                  <div style="font-size:10px;color:#6E7681;margin-top:2px">${esc(p.client_name || '')} &middot; ${stg.label}</div>
+                </div>
+                <span style="font-size:11px;color:#3FB950;font-weight:600">${fmt(p.total || 0)}</span>
+              </div>
+            </div>
+          `;
+        }).join('')}
+      </div>
+
+      <div class="dashboard-card">
+        <div class="dashboard-card-title">Proposals Out &middot; ${proposalsOut.length}</div>
+        ${proposalsOut.length === 0 ? '<div style="font-size:12px;color:#6E7681;font-style:italic;padding:10px 0">No proposals currently awaiting response</div>' : proposalsOut.map(p => `
+          <div onclick="openProject(${p.id})" style="padding:8px 10px;background:#0D1117;border:1px solid #1C2333;border-radius:4px;margin-bottom:4px;cursor:pointer;-webkit-tap-highlight-color:transparent">
+            <div style="font-size:12px;color:#E6EDF3;font-weight:500">${esc(p.name)}</div>
+            <div style="font-size:10px;color:#6E7681;margin-top:2px">${esc(p.client_name || '')} &middot; ${fmt(p.total || 0)}</div>
+          </div>
+        `).join('')}
+      </div>
+    </div>
+
+    <!-- Stalled leads -->
+    ${stalledLeads.length > 0 ? `
+      <div class="dashboard-card" style="margin-bottom:16px;border-left:2px solid #D29922">
+        <div class="dashboard-card-title"><span style="color:#D29922">Stalled Leads &middot; ${stalledLeads.length}</span></div>
+        <div style="font-size:11px;color:#6E7681;margin-bottom:8px">Lead stage projects with no activity 30+ days</div>
+        ${stalledLeads.slice(0, 6).map(p => `
+          <div onclick="openProject(${p.id})" style="padding:8px 10px;background:#0D1117;border:1px solid #1C2333;border-radius:4px;margin-bottom:4px;cursor:pointer;-webkit-tap-highlight-color:transparent">
+            <div style="font-size:12px;color:#E6EDF3;font-weight:500">${esc(p.name)}</div>
+            <div style="font-size:10px;color:#6E7681;margin-top:2px">${esc(p.client_name || '')}</div>
+          </div>
+        `).join('')}
+      </div>
+    ` : ''}
+
+    <!-- By Sales Lead -->
+    <div class="dashboard-card">
+      <div class="dashboard-card-title">By Sales Lead</div>
+      ${leadSummary.length === 0 ? '<div style="font-size:12px;color:#6E7681;font-style:italic;padding:10px 0">No sales leads assigned</div>' : leadSummary.map(group => {
+        const member = group.id === 'unassigned' ? null : getTeamMember(group.id);
+        const name = member?.name || 'Unassigned';
+        const activeCount = group.projects.filter(p => !['complete'].includes(p.stage)).length;
+        return `
+          <div style="display:flex;align-items:center;gap:10px;padding:8px 10px;background:#0D1117;border:1px solid #1C2333;border-radius:4px;margin-bottom:4px">
+            <div style="flex:1;min-width:0">
+              <div style="font-size:12px;color:#E6EDF3;font-weight:500">${esc(name)}</div>
+              <div style="font-size:10px;color:#6E7681;margin-top:2px">${activeCount} active project${activeCount === 1 ? '' : 's'}</div>
+            </div>
+            <div style="font-size:11px;color:#3FB950;font-weight:600">${fmt(group.value)}</div>
+          </div>
+        `;
+      }).join('')}
+    </div>
   `;
 }
 // ── Shop Work ──
