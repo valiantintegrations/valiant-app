@@ -364,7 +364,11 @@ const state = {
   dashboardMode: localStorage.getItem('vi_dashboard_mode') || 'mine',
   subtasks: JSON.parse(localStorage.getItem('vi_subtasks') || '{}'),
   templateSuggestions: JSON.parse(localStorage.getItem('vi_template_suggestions') || '[]'),
-  templateCustomizations: JSON.parse(localStorage.getItem('vi_template_customizations') || '{}')
+  templateCustomizations: JSON.parse(localStorage.getItem('vi_template_customizations') || '{}'),
+  projectPins: JSON.parse(localStorage.getItem('vi_project_pins') || '{}'),
+  projectSiteNotes: JSON.parse(localStorage.getItem('vi_project_site_notes') || '{}'),
+  mapsApiKey: null,
+  mapsApiLoaded: false
 };
 
 // ── Team Roster ──
@@ -3353,6 +3357,7 @@ function renderProjectPage(c) {
     { key: 'details',  label: 'Details'  },
     { key: 'design',   label: 'Design'   },
     { key: 'install',  label: 'Install'  },
+    { key: 'location', label: 'Location' },
     { key: 'files',    label: 'Files'    },
     { key: 'notes',    label: 'Notes'    }
   ];
@@ -3431,6 +3436,9 @@ function renderProjectTabContent() {
   } else if (tab === 'install') {
     body.innerHTML = '';
     renderChecklistTab(body, p, 'install');
+  } else if (tab === 'location') {
+    body.innerHTML = '';
+    renderLocationTab(body, p);
   } else if (tab === 'files') {
     body.innerHTML = renderProjectFilesHTML(p);
   } else if (tab === 'notes') {
@@ -5897,6 +5905,393 @@ function calNav(dir) {
 function calToday() {
   state.calendarDate = new Date();
   renderCalendar(document.getElementById('content'));
+}
+
+// ═══════════════════════════════════════════════════════════════
+// LOCATION TAB (Stage D)
+// Google Maps satellite view with click-to-place pin drops
+// per project, for site layout & crew briefings.
+// ═══════════════════════════════════════════════════════════════
+
+const PIN_TYPES = [
+  { key: 'parking',    label: 'Parking',        icon: 'P', color: '#58A6FF' },
+  { key: 'entrance',   label: 'Main Entrance',  icon: 'E', color: '#3FB950' },
+  { key: 'loading',    label: 'Loading Dock',   icon: 'L', color: '#F0883E' },
+  { key: 'power',      label: 'Power Panel',    icon: '⚡', color: '#D29922' },
+  { key: 'staging',    label: 'Staging Area',   icon: 'S', color: '#A371F7' },
+  { key: 'foh',        label: 'FOH Position',   icon: 'F', color: '#F85149' },
+  { key: 'rack',       label: 'Rack Location',  icon: 'R', color: '#BC8CFF' },
+  { key: 'custom',     label: 'Custom Note',    icon: '?', color: '#8B949E' }
+];
+
+function getProjectAddressString(p) {
+  const parts = [p.address, p.city, p.state_abbr, p.zip].filter(Boolean);
+  return parts.join(', ');
+}
+
+function getProjectPins(projectId) {
+  return state.projectPins[projectId] || [];
+}
+
+function saveProjectPins(projectId, pins) {
+  state.projectPins[projectId] = pins;
+  save('vi_project_pins', state.projectPins);
+}
+
+function getProjectSiteNotes(projectId) {
+  return state.projectSiteNotes[projectId] || '';
+}
+
+function saveProjectSiteNotes(projectId, notes) {
+  state.projectSiteNotes[projectId] = notes;
+  save('vi_project_site_notes', state.projectSiteNotes);
+}
+
+async function renderLocationTab(container, project) {
+  const address = getProjectAddressString(project);
+  const canEdit = currentUserHasPermission('projects.edit');
+
+  if (!address) {
+    container.innerHTML = `
+      <div class="dashboard-card">
+        <div class="dashboard-card-title">Location</div>
+        <div style="padding:20px;text-align:center;color:#8B949E;font-size:13px">
+          <div style="font-size:32px;opacity:0.4;margin-bottom:8px">📍</div>
+          <div style="margin-bottom:6px">No address set for this project</div>
+          <div style="font-size:11px;color:#6E7681">Add an address on the Details tab to enable site mapping.</div>
+        </div>
+      </div>
+    `;
+    return;
+  }
+
+  // Show scaffold immediately
+  container.innerHTML = `
+    <div id="location-tab-root">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;flex-wrap:wrap;gap:10px">
+        <div>
+          <div style="font-size:14px;font-weight:600;color:#E6EDF3">Site Location</div>
+          <div style="font-size:11px;color:#8B949E;margin-top:2px">${esc(address)} <a href="https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(address)}" target="_blank" style="color:#58A6FF;margin-left:6px">Open in Google Maps &rarr;</a></div>
+        </div>
+      </div>
+      <div id="map-loading" style="padding:60px 20px;text-align:center;background:#0D1117;border:1px solid #1C2333;border-radius:6px;color:#6E7681">
+        <div class="spinner" style="margin:0 auto 10px"></div>
+        <div style="font-size:12px">Loading satellite view…</div>
+      </div>
+      <div id="map-host" style="display:none"></div>
+    </div>
+  `;
+
+  // Load Google Maps API if we haven't already
+  try {
+    await ensureGoogleMapsLoaded();
+  } catch (err) {
+    const host = document.getElementById('map-loading');
+    if (host) {
+      host.innerHTML = `
+        <div style="font-size:32px;opacity:0.5;margin-bottom:8px">🗺️</div>
+        <div style="font-size:13px;color:#E6EDF3;margin-bottom:6px">Maps not configured</div>
+        <div style="font-size:11px;color:#8B949E;max-width:380px;margin:0 auto 14px">${esc(err.message || 'Google Maps API key is not set up yet.')}</div>
+        <a href="https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(address)}" target="_blank" class="btn-primary" style="padding:8px 16px;font-size:12px;text-decoration:none;display:inline-block">Open in Google Maps &rarr;</a>
+      `;
+    }
+    return;
+  }
+
+  // Render the map
+  renderGoogleMapForProject(project, canEdit);
+}
+
+async function ensureGoogleMapsLoaded() {
+  if (state.mapsApiLoaded && window.google?.maps) return;
+  // Fetch key from our serverless function
+  if (!state.mapsApiKey) {
+    const resp = await fetch('/api/maps-config');
+    const data = await resp.json();
+    if (!data.configured) {
+      throw new Error(data.error || 'Maps key not configured');
+    }
+    state.mapsApiKey = data.apiKey;
+  }
+  // Inject script tag if not already loaded
+  if (window.google?.maps) {
+    state.mapsApiLoaded = true;
+    return;
+  }
+  await new Promise((resolve, reject) => {
+    if (window._mapsLoadingPromise) {
+      window._mapsLoadingPromise.then(resolve).catch(reject);
+      return;
+    }
+    window._mapsLoadingPromise = new Promise((res, rej) => {
+      window._mapsOnLoad = () => { state.mapsApiLoaded = true; res(); };
+      const script = document.createElement('script');
+      script.src = `https://maps.googleapis.com/maps/api/js?key=${encodeURIComponent(state.mapsApiKey)}&callback=_mapsOnLoad&libraries=geocoding&loading=async`;
+      script.async = true;
+      script.defer = true;
+      script.onerror = () => rej(new Error('Failed to load Google Maps script'));
+      document.head.appendChild(script);
+    });
+    window._mapsLoadingPromise.then(resolve).catch(reject);
+  });
+}
+
+async function renderGoogleMapForProject(project, canEdit) {
+  const address = getProjectAddressString(project);
+  const host = document.getElementById('location-tab-root');
+  if (!host) return;
+
+  // Build map container
+  const mapViewType = state.mapViewType || 'hybrid';
+  host.innerHTML = `
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;flex-wrap:wrap;gap:10px">
+      <div style="min-width:0;flex:1">
+        <div style="font-size:14px;font-weight:600;color:#E6EDF3">Site Location</div>
+        <div style="font-size:11px;color:#8B949E;margin-top:2px;word-break:break-word">${esc(address)} <a href="https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(address)}" target="_blank" style="color:#58A6FF;margin-left:6px;white-space:nowrap">Open in Maps &rarr;</a></div>
+      </div>
+      <div style="display:flex;gap:4px;background:#0D1117;border:1px solid #30363D;border-radius:6px;overflow:hidden;font-size:11px;flex-shrink:0">
+        ${[{ k: 'hybrid', l: 'Satellite' }, { k: 'roadmap', l: 'Map' }].map(m => `
+          <div onclick="setMapViewType('${m.k}')" style="padding:6px 12px;cursor:pointer;transition:all 0.15s;${mapViewType === m.k ? 'background:#1565C0;color:#58A6FF;font-weight:500' : 'color:#8B949E'};-webkit-tap-highlight-color:transparent">${m.l}</div>
+        `).join('')}
+      </div>
+    </div>
+
+    ${canEdit ? `
+    <div style="display:flex;align-items:center;gap:6px;margin-bottom:10px;flex-wrap:wrap;padding:10px;background:#0D1117;border:1px solid #1C2333;border-radius:6px">
+      <div style="font-size:11px;color:#8B949E;font-weight:500;margin-right:4px">Add pin:</div>
+      ${PIN_TYPES.map(pt => `
+        <button onclick="startPinPlacement('${pt.key}')" id="pin-btn-${pt.key}" class="pin-type-btn" style="padding:4px 10px;font-size:11px;background:#161B22;border:1px solid ${pt.color}44;color:${pt.color};border-radius:4px;cursor:pointer;-webkit-tap-highlight-color:transparent;display:inline-flex;align-items:center;gap:5px">
+          <span style="width:14px;height:14px;border-radius:50%;background:${pt.color};color:#fff;display:inline-flex;align-items:center;justify-content:center;font-size:9px;font-weight:700">${pt.icon}</span>
+          ${pt.label}
+        </button>
+      `).join('')}
+    </div>
+    <div id="pin-placement-hint" style="display:none;padding:8px 12px;background:#0D1A0E;border:1px solid #238636;border-radius:5px;margin-bottom:10px;font-size:12px;color:#3FB950">
+      <span id="pin-placement-label"></span> &mdash; Click on the map where you want to place this pin. <a href="#" onclick="event.preventDefault();cancelPinPlacement()" style="color:#58A6FF;margin-left:8px">Cancel</a>
+    </div>
+    ` : ''}
+
+    <div id="project-map" style="width:100%;height:500px;border:1px solid #1C2333;border-radius:6px;overflow:hidden;background:#0D1117"></div>
+
+    <div class="dashboard-card" style="margin-top:14px">
+      <div class="dashboard-card-title">Site Notes</div>
+      ${canEdit ? `
+        <textarea id="site-notes-field" class="form-textarea" rows="4" placeholder="Alternate access, lift requirements, after-hours contact, parking restrictions, etc.&#10;&#10;These notes travel with the project — crew will see them before install day."
+          oninput="debouncedSaveSiteNotes(${project.id}, this.value)">${esc(getProjectSiteNotes(project.id))}</textarea>
+        <div style="margin-top:6px;font-size:11px;color:#6E7681">Notes save automatically</div>
+      ` : `
+        <div style="padding:10px;background:#0D1117;border:1px solid #1C2333;border-radius:5px;font-size:13px;color:#C9D1D9;white-space:pre-wrap;min-height:60px">${esc(getProjectSiteNotes(project.id)) || '<span style="color:#6E7681;font-style:italic">No site notes yet</span>'}</div>
+      `}
+    </div>
+  `;
+
+  // Geocode the address and build the map
+  const mapEl = document.getElementById('project-map');
+  if (!mapEl || !window.google?.maps) return;
+
+  const geocoder = new google.maps.Geocoder();
+  try {
+    const result = await new Promise((resolve, reject) => {
+      geocoder.geocode({ address }, (results, status) => {
+        if (status === 'OK' && results?.[0]) resolve(results[0]);
+        else reject(new Error(`Geocoding failed: ${status}`));
+      });
+    });
+    const loc = result.geometry.location;
+    const center = { lat: loc.lat(), lng: loc.lng() };
+
+    const map = new google.maps.Map(mapEl, {
+      center,
+      zoom: 19,
+      mapTypeId: mapViewType === 'roadmap' ? 'roadmap' : 'hybrid',
+      tilt: 0,
+      mapTypeControl: false,
+      streetViewControl: false,
+      fullscreenControl: true,
+      zoomControl: true
+    });
+
+    // Save map reference so view-type toggle can update it
+    state._currentMap = map;
+    state._currentMapProject = project;
+
+    // Place the project marker at the geocoded address
+    new google.maps.Marker({
+      position: center,
+      map,
+      title: project.name,
+      icon: {
+        path: google.maps.SymbolPath.CIRCLE,
+        scale: 8,
+        fillColor: '#DA3633',
+        fillOpacity: 1,
+        strokeColor: '#fff',
+        strokeWeight: 2
+      }
+    });
+
+    // Render existing pins
+    state._currentMapMarkers = [];
+    const pins = getProjectPins(project.id);
+    pins.forEach(pin => addPinMarkerToMap(map, project.id, pin, canEdit));
+
+    // Set up click-to-place
+    if (canEdit) {
+      map.addListener('click', (e) => {
+        if (!state._pendingPinType) return;
+        const pinType = state._pendingPinType;
+        const newPin = {
+          id: Date.now() + Math.random(),
+          type: pinType.key,
+          label: pinType.label,
+          lat: e.latLng.lat(),
+          lng: e.latLng.lng()
+        };
+        // For custom pins, prompt for label
+        if (pinType.key === 'custom') {
+          const custom = prompt('Label for this pin:');
+          if (!custom) { cancelPinPlacement(); return; }
+          newPin.label = custom;
+        }
+        const pins = getProjectPins(project.id);
+        pins.push(newPin);
+        saveProjectPins(project.id, pins);
+        addPinMarkerToMap(map, project.id, newPin, canEdit);
+        cancelPinPlacement();
+      });
+    }
+  } catch (err) {
+    mapEl.innerHTML = `
+      <div style="padding:40px 20px;text-align:center;color:#6E7681">
+        <div style="font-size:32px;opacity:0.5;margin-bottom:8px">🗺️</div>
+        <div style="font-size:13px;color:#E6EDF3;margin-bottom:6px">Could not find this address on the map</div>
+        <div style="font-size:11px;color:#8B949E;max-width:380px;margin:0 auto 14px">${esc(err.message || '')} — check that the address on the Details tab is complete and accurate.</div>
+        <a href="https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(address)}" target="_blank" class="btn" style="padding:6px 14px;font-size:12px;text-decoration:none;display:inline-block">Try in Google Maps &rarr;</a>
+      </div>
+    `;
+  }
+}
+
+function addPinMarkerToMap(map, projectId, pin, canEdit) {
+  const pinType = PIN_TYPES.find(pt => pt.key === pin.type) || PIN_TYPES[PIN_TYPES.length - 1];
+  const marker = new google.maps.Marker({
+    position: { lat: pin.lat, lng: pin.lng },
+    map,
+    title: pin.label,
+    draggable: canEdit,
+    label: {
+      text: pinType.icon,
+      color: '#fff',
+      fontSize: '11px',
+      fontWeight: '700'
+    },
+    icon: {
+      path: google.maps.SymbolPath.CIRCLE,
+      scale: 12,
+      fillColor: pinType.color,
+      fillOpacity: 1,
+      strokeColor: '#fff',
+      strokeWeight: 2
+    }
+  });
+
+  const infoContent = `
+    <div style="color:#333;font-size:13px;min-width:180px;padding:2px">
+      <div style="font-weight:600;margin-bottom:4px">${esc(pin.label)}</div>
+      <div style="font-size:11px;color:#666;margin-bottom:8px">${pinType.label}</div>
+      ${canEdit ? `
+        <div style="display:flex;gap:6px">
+          <button onclick="renamePinInline(${projectId}, ${pin.id})" style="padding:4px 8px;font-size:11px;background:#f3f4f6;border:1px solid #d1d5db;border-radius:3px;cursor:pointer">Rename</button>
+          <button onclick="deletePin(${projectId}, ${pin.id})" style="padding:4px 8px;font-size:11px;background:#fee2e2;color:#991b1b;border:1px solid #fca5a5;border-radius:3px;cursor:pointer">Delete</button>
+        </div>
+      ` : ''}
+    </div>
+  `;
+  const info = new google.maps.InfoWindow({ content: infoContent });
+  marker.addListener('click', () => info.open(map, marker));
+
+  if (canEdit) {
+    marker.addListener('dragend', (e) => {
+      const pins = getProjectPins(projectId);
+      const target = pins.find(p => p.id === pin.id);
+      if (target) {
+        target.lat = e.latLng.lat();
+        target.lng = e.latLng.lng();
+        saveProjectPins(projectId, pins);
+      }
+    });
+  }
+
+  state._currentMapMarkers.push({ id: pin.id, marker, info });
+}
+
+function startPinPlacement(typeKey) {
+  const pt = PIN_TYPES.find(x => x.key === typeKey);
+  if (!pt) return;
+  state._pendingPinType = pt;
+  const hint = document.getElementById('pin-placement-hint');
+  const label = document.getElementById('pin-placement-label');
+  if (hint) hint.style.display = 'block';
+  if (label) label.innerHTML = `Placing <strong>${esc(pt.label)}</strong>`;
+  // Highlight the active pin button
+  document.querySelectorAll('.pin-type-btn').forEach(btn => btn.style.outline = '');
+  const active = document.getElementById(`pin-btn-${typeKey}`);
+  if (active) active.style.outline = `2px solid ${pt.color}`;
+}
+
+function cancelPinPlacement() {
+  state._pendingPinType = null;
+  const hint = document.getElementById('pin-placement-hint');
+  if (hint) hint.style.display = 'none';
+  document.querySelectorAll('.pin-type-btn').forEach(btn => btn.style.outline = '');
+}
+
+function setMapViewType(type) {
+  state.mapViewType = type;
+  if (state._currentMap) {
+    state._currentMap.setMapTypeId(type === 'roadmap' ? 'roadmap' : 'hybrid');
+  }
+  // Re-render just the toggle buttons by re-rendering the whole tab
+  if (state.currentProject && state.projectTab === 'location') {
+    rerenderCurrentTab();
+  }
+}
+
+function renamePinInline(projectId, pinId) {
+  const pins = getProjectPins(projectId);
+  const pin = pins.find(p => p.id === pinId);
+  if (!pin) return;
+  const newLabel = prompt('New label:', pin.label);
+  if (!newLabel) return;
+  pin.label = newLabel;
+  saveProjectPins(projectId, pins);
+  // Update marker
+  const entry = state._currentMapMarkers?.find(m => m.id === pinId);
+  if (entry) {
+    entry.marker.setTitle(newLabel);
+    entry.info.close();
+  }
+  rerenderCurrentTab();
+}
+
+function deletePin(projectId, pinId) {
+  if (!confirm('Delete this pin?')) return;
+  const pins = getProjectPins(projectId).filter(p => p.id !== pinId);
+  saveProjectPins(projectId, pins);
+  // Remove marker
+  const entry = state._currentMapMarkers?.find(m => m.id === pinId);
+  if (entry) {
+    entry.marker.setMap(null);
+    entry.info.close();
+  }
+  state._currentMapMarkers = (state._currentMapMarkers || []).filter(m => m.id !== pinId);
+}
+
+// Debounced site notes saver
+let _siteNotesTimer = null;
+function debouncedSaveSiteNotes(projectId, value) {
+  if (_siteNotesTimer) clearTimeout(_siteNotesTimer);
+  _siteNotesTimer = setTimeout(() => saveProjectSiteNotes(projectId, value), 400);
 }
 // ── Shop Work ──
 // Shape: { id, text, assignee_id, priority, project_id, status: 'open'|'done', created, completed }
