@@ -7423,50 +7423,8 @@ function renderSalesMgmtDashboard(activeProjects) {
       </div>
     </div>
 
-    <!-- Needs Review (highest priority if any) -->
-    ${needsReview.length > 0 ? `
-      <div class="dashboard-card" style="margin-bottom:16px;border-left:3px solid #DA3633">
-        <div class="dashboard-card-title"><span style="color:#F85149">Contracts Awaiting Review &middot; ${needsReview.length}</span></div>
-        <div style="font-size:11px;color:#8B949E;margin-bottom:8px">Contracts signed but not yet handed off to design & install</div>
-        ${needsReview.map(p => `
-          <div onclick="openProject(${p.id})" style="padding:8px 10px;background:#0D1117;border:1px solid #1C2333;border-radius:4px;margin-bottom:4px;cursor:pointer;-webkit-tap-highlight-color:transparent">
-            <div style="font-size:12px;color:#E6EDF3;font-weight:500">${esc(p.name)}</div>
-            <div style="font-size:10px;color:#6E7681;margin-top:2px">${esc(p.client_name || '')} &middot; ${fmt(p.total || 0)}</div>
-          </div>
-        `).join('')}
-      </div>
-    ` : ''}
-
-    <!-- Hot Deals + Proposals Out in 2-col -->
-    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(320px,1fr));gap:14px;margin-bottom:16px">
-      <div class="dashboard-card" style="border-left:2px solid #3FB950">
-        <div class="dashboard-card-title"><span style="color:#3FB950">Hot Deals &middot; ${hotDeals.length}</span></div>
-        ${hotDeals.length === 0 ? '<div style="font-size:12px;color:#6E7681;font-style:italic;padding:10px 0">No deals flagged as likely to close</div>' : hotDeals.slice(0, 6).map(p => {
-          const stg = STAGES.find(s => s.key === p.stage) || STAGES[0];
-          return `
-            <div onclick="openProject(${p.id})" style="padding:8px 10px;background:#0D1117;border:1px solid #1C2333;border-radius:4px;margin-bottom:4px;cursor:pointer;-webkit-tap-highlight-color:transparent">
-              <div style="display:flex;justify-content:space-between;gap:8px;align-items:center;flex-wrap:wrap">
-                <div style="flex:1;min-width:0">
-                  <div style="font-size:12px;color:#E6EDF3;font-weight:500">${esc(p.name)}</div>
-                  <div style="font-size:10px;color:#6E7681;margin-top:2px">${esc(p.client_name || '')} &middot; ${stg.label}</div>
-                </div>
-                <span style="font-size:11px;color:#3FB950;font-weight:600">${fmt(p.total || 0)}</span>
-              </div>
-            </div>
-          `;
-        }).join('')}
-      </div>
-
-      <div class="dashboard-card">
-        <div class="dashboard-card-title">Proposals Out &middot; ${proposalsOut.length}</div>
-        ${proposalsOut.length === 0 ? '<div style="font-size:12px;color:#6E7681;font-style:italic;padding:10px 0">No proposals currently awaiting response</div>' : proposalsOut.map(p => `
-          <div onclick="openProject(${p.id})" style="padding:8px 10px;background:#0D1117;border:1px solid #1C2333;border-radius:4px;margin-bottom:4px;cursor:pointer;-webkit-tap-highlight-color:transparent">
-            <div style="font-size:12px;color:#E6EDF3;font-weight:500">${esc(p.name)}</div>
-            <div style="font-size:10px;color:#6E7681;margin-top:2px">${esc(p.client_name || '')} &middot; ${fmt(p.total || 0)}</div>
-          </div>
-        `).join('')}
-      </div>
-    </div>
+    <!-- 4-stage Sales Kanban: Lead / Proposal / Sent / Contract (needs review only) -->
+    ${renderSalesKanban(activeProjects, needsReview)}
 
     <!-- Stalled leads -->
     ${stalledLeads.length > 0 ? `
@@ -7498,6 +7456,68 @@ function renderSalesMgmtDashboard(activeProjects) {
             <div style="font-size:11px;color:#3FB950;font-weight:600">${fmt(group.value)}</div>
           </div>
         `;
+      }).join('')}
+    </div>
+  `;
+}
+
+// ── Sales Department Kanban (4 stages only) ──
+// Shows Lead / Proposal / Sent / Contract (needs review only).
+// Uses the same full-size card style as Full Pipeline.
+function renderSalesKanban(activeProjects, needsReview) {
+  const SALES_STAGES = STAGES.filter(s => ['lead','proposal','sent','contract'].includes(s.key));
+  const byStage = {};
+  SALES_STAGES.forEach(s => byStage[s.key] = []);
+
+  activeProjects.forEach(p => {
+    if (p.stage === 'contract') {
+      // Contract column: only projects needing review (signed but not handed off)
+      if (isContractNeedsReview(p)) byStage.contract.push(p);
+    } else if (byStage[p.stage]) {
+      byStage[p.stage].push(p);
+    }
+  });
+
+  // Sort each column the same way the full pipeline does
+  SALES_STAGES.forEach(s => {
+    byStage[s.key] = sortByColumnOrder(byStage[s.key], s.key);
+  });
+
+  return `
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;flex-wrap:wrap;gap:8px">
+      <div style="font-size:11px;font-weight:700;color:#8B949E;text-transform:uppercase;letter-spacing:0.1em">Pipeline</div>
+      <div style="display:flex;align-items:center;gap:8px">
+        <div style="display:flex;background:#0D1117;border:1px solid #30363D;border-radius:6px;overflow:hidden;font-size:11px">
+          <div onclick="if(state.timelineMode!=='estimated')toggleTimelineMode()" style="padding:5px 12px;cursor:pointer;transition:all 0.15s;${state.timelineMode === 'estimated' ? 'background:#1565C0;color:#58A6FF;font-weight:500' : 'color:#6E7681'}">Estimated</div>
+          <div onclick="if(state.timelineMode!=='booked')toggleTimelineMode()" style="padding:5px 12px;cursor:pointer;transition:all 0.15s;${state.timelineMode === 'booked' ? 'background:#1565C0;color:#58A6FF;font-weight:500' : 'color:#6E7681'}">Booked</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="pipeline-grid sales-kanban" style="margin-bottom:16px">
+      ${SALES_STAGES.map(s => {
+        const col = byStage[s.key] || [];
+        const LIMIT = 10;
+        const expanded = !!state.expandedCols[s.key];
+        const visible = expanded ? col : col.slice(0, LIMIT);
+        const hiddenCount = col.length - LIMIT;
+        const isContractCol = s.key === 'contract';
+        return `
+        <div class="pipeline-col" ondragover="onDragOver(event)" ondragleave="onDragLeave(event)" ondrop="onDropStage(event, '${s.key}')">
+          <div class="pipeline-col-header">
+            <span class="pipeline-col-name">${s.label}${isContractCol ? ' <span style="font-weight:400;color:#8B949E;font-size:10px">(needs review)</span>' : ''}</span>
+            <span class="pipeline-col-count">${col.length}</span>
+          </div>
+          ${visible.map(p => {
+            const gbbTier = getGBBTier(p.id);
+            const gbbBadge = gbbTier ? '<span style="font-size:9px;font-weight:600;padding:1px 5px;border-radius:3px;background:' + (gbbTier === 'better' ? '#0D1626;color:#58A6FF;border:1px solid #1565C0' : gbbTier === 'best' ? '#0D1A0E;color:#3FB950;border:1px solid #238636' : '#161B22;color:#6E7681;border:1px solid #30363D') + '">' + gbbTier.toUpperCase() + '</span>' : '';
+            const likely = isLikelyToClose(p.id);
+            return '<div class="project-card' + (likely ? ' likely-card' : '') + '" draggable="true" ondragstart="onReorderDragStart(event, ' + p.id + ', \'' + s.key + '\')" ondragend="onDragEnd(event)" ondragover="event.preventDefault()" ondrop="onReorderDrop(event, ' + p.id + ', \'' + s.key + '\')" onclick="openProject(' + p.id + ')" style="' + (isContractNeedsReview(p) ? 'border-color:#DA3633' : likely ? 'border-color:#238636' : '') + '">' + (likely ? '<div class="likely-badge">LIKELY TO CLOSE</div>' : '') + (isContractNeedsReview(p) ? '<div style="background:#DA3633;color:#fff;font-size:10px;font-weight:600;padding:4px 8px;border-radius:4px;margin-bottom:8px;text-align:center;letter-spacing:0.03em">REVIEW — SEND TO DESIGN & INSTALL</div>' : '') + '<div style="display:flex;justify-content:space-between;align-items:flex-start"><div class="project-card-name">' + esc(p.name) + '</div><div style="display:flex;gap:3px;align-items:center">' + gbbBadge + '</div></div><div class="project-card-client">' + esc(p.client_name || 'No client') + (p.city ? ' · ' + esc(p.city) + (p.state_abbr ? ', ' + esc(p.state_abbr) : '') : '') + '</div>' + (() => { const dt = getInstallDateDisplay(p); return '<div style="font-size:10px;color:' + dt.color + ';margin-top:3px"><span style="opacity:0.7">' + dt.label + ':</span> ' + dt.value + '</div>'; })() + '<div class="project-card-footer">' + (canSee('financials') ? '<span class="project-card-value">' + fmt(p.total) + '</span>' : '<span></span>') + '<div style="display:flex;align-items:center;gap:4px"><span class="status-pill status-' + s.color + '">' + s.label + '</span><button class="move-btn" onclick="event.stopPropagation();showMoveMenu(' + p.id + ', event)" title="Move">\u22EE</button></div></div>' + (p.systems.length ? '<div style="margin-top:6px">' + p.systems.map(systemTagHTML).join('') + '</div>' : '') + '</div>';
+          }).join('')}
+          ${col.length === 0 ? '<div class="empty-state" style="padding:20px 10px;font-size:12px">No projects</div>' : ''}
+          ${!expanded && hiddenCount > 0 ? `<div onclick="event.stopPropagation();toggleColExpanded('${s.key}')" style="text-align:center;padding:8px 6px;font-size:11px;color:#58A6FF;cursor:pointer;border-top:1px solid #1C2333;margin-top:4px;-webkit-tap-highlight-color:transparent">+${hiddenCount} more</div>` : ''}
+          ${expanded && col.length > LIMIT ? `<div onclick="event.stopPropagation();toggleColExpanded('${s.key}')" style="text-align:center;padding:8px 6px;font-size:11px;color:#6E7681;cursor:pointer;border-top:1px solid #1C2333;margin-top:4px;-webkit-tap-highlight-color:transparent">Show less ↑</div>` : ''}
+        </div>`;
       }).join('')}
     </div>
   `;
