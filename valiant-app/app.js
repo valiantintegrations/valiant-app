@@ -7520,17 +7520,74 @@ function renderSalesKanban(activeProjects, needsReview) {
             ${expanded && col.length > LIMIT ? `<div onclick="event.stopPropagation();toggleColExpanded('${s.key}')" style="font-size:11px;color:#6E7681;cursor:pointer;-webkit-tap-highlight-color:transparent">Show less ↑</div>` : ''}
           </div>
           <div class="sk-row-cards">
-            ${visible.length === 0 ? '<div class="sk-row-empty">No projects</div>' : visible.map(p => {
-              const gbbTier = getGBBTier(p.id);
-              const gbbBadge = gbbTier ? '<span style="font-size:9px;font-weight:600;padding:1px 5px;border-radius:3px;background:' + (gbbTier === 'better' ? '#0D1626;color:#58A6FF;border:1px solid #1565C0' : gbbTier === 'best' ? '#0D1A0E;color:#3FB950;border:1px solid #238636' : '#161B22;color:#6E7681;border:1px solid #30363D') + '">' + gbbTier.toUpperCase() + '</span>' : '';
-              const likely = isLikelyToClose(p.id);
-              return '<div class="project-card sk-card' + (likely ? ' likely-card' : '') + '" draggable="true" ondragstart="onReorderDragStart(event, ' + p.id + ', \'' + s.key + '\')" ondragend="onDragEnd(event)" ondragover="event.preventDefault()" ondrop="onReorderDrop(event, ' + p.id + ', \'' + s.key + '\')" onclick="openProject(' + p.id + ')" style="' + (isContractNeedsReview(p) ? 'border-color:#DA3633' : likely ? 'border-color:#238636' : '') + '">' + (likely ? '<div class="likely-badge">LIKELY TO CLOSE</div>' : '') + (isContractNeedsReview(p) ? '<div style="background:#DA3633;color:#fff;font-size:10px;font-weight:600;padding:4px 8px;border-radius:4px;margin-bottom:8px;text-align:center;letter-spacing:0.03em">REVIEW — SEND TO DESIGN & INSTALL</div>' : '') + '<div style="display:flex;justify-content:space-between;align-items:flex-start"><div class="project-card-name">' + esc(p.name) + '</div><div style="display:flex;gap:3px;align-items:center">' + gbbBadge + '</div></div><div class="project-card-client">' + esc(p.client_name || 'No client') + (p.city ? ' · ' + esc(p.city) + (p.state_abbr ? ', ' + esc(p.state_abbr) : '') : '') + '</div>' + (() => { const dt = getInstallDateDisplay(p); return '<div style="font-size:10px;color:' + dt.color + ';margin-top:3px"><span style="opacity:0.7">' + dt.label + ':</span> ' + dt.value + '</div>'; })() + '<div class="project-card-footer">' + (canSee('financials') ? '<span class="project-card-value">' + fmt(p.total) + '</span>' : '<span></span>') + '<div style="display:flex;align-items:center;gap:4px"><span class="status-pill status-' + s.color + '">' + s.label + '</span><button class="move-btn" onclick="event.stopPropagation();showMoveMenu(' + p.id + ', event)" title="Move">\u22EE</button></div></div>' + (p.systems.length ? '<div style="margin-top:6px">' + p.systems.map(systemTagHTML).join('') + '</div>' : '') + '</div>';
-            }).join('')}
+            ${visible.length === 0 ? '<div class="sk-row-empty">No projects</div>' : visible.map(p => renderSalesKanbanCard(p, s)).join('')}
           </div>
         </div>`;
       }).join('')}
     </div>
   `;
+}
+
+// Horizontal row-style card used inside the vertical Sales Kanban.
+// Content reflows left-to-right instead of stacked.
+function renderSalesKanbanCard(p, stage) {
+  const gbbTier = getGBBTier(p.id);
+  const likely = isLikelyToClose(p.id);
+  const needsReview = isContractNeedsReview(p);
+  const dt = getInstallDateDisplay(p);
+
+  const borderStyle = needsReview ? 'border-color:#DA3633' : (likely ? 'border-color:#238636' : '');
+
+  const gbbBadge = gbbTier
+    ? '<span style="font-size:9px;font-weight:600;padding:1px 5px;border-radius:3px;background:' +
+      (gbbTier === 'better' ? '#0D1626;color:#58A6FF;border:1px solid #1565C0' :
+       gbbTier === 'best'   ? '#0D1A0E;color:#3FB950;border:1px solid #238636' :
+                              '#161B22;color:#6E7681;border:1px solid #30363D') +
+      '">' + gbbTier.toUpperCase() + '</span>'
+    : '';
+
+  const banner = likely
+    ? '<span class="likely-badge" style="background:#238636;color:#fff;font-weight:700">LIKELY</span>'
+    : needsReview
+      ? '<span class="review-banner" style="background:#DA3633;color:#fff;font-weight:700">REVIEW</span>'
+      : '';
+
+  const valueCell = canSee('financials')
+    ? '<span class="meta-value">' + fmt(p.total) + '</span>'
+    : '';
+
+  const tags = p.systems.length
+    ? '<div class="sk-card-tags">' + p.systems.slice(0, 3).map(systemTagHTML).join('') + '</div>'
+    : '';
+
+  return (
+    '<div class="project-card sk-card' + (likely ? ' likely-card' : '') + '"' +
+      ' draggable="true"' +
+      ' ondragstart="onReorderDragStart(event, ' + p.id + ', \'' + stage.key + '\')"' +
+      ' ondragend="onDragEnd(event)"' +
+      ' ondragover="event.preventDefault()"' +
+      ' ondrop="onReorderDrop(event, ' + p.id + ', \'' + stage.key + '\')"' +
+      ' onclick="openProject(' + p.id + ')"' +
+      ' style="' + borderStyle + '">' +
+      banner +
+      '<div class="sk-card-primary">' +
+        '<div class="project-card-name">' + esc(p.name) + '</div>' +
+        '<div class="project-card-client">' + esc(p.client_name || 'No client') +
+          (p.city ? ' · ' + esc(p.city) + (p.state_abbr ? ', ' + esc(p.state_abbr) : '') : '') +
+        '</div>' +
+      '</div>' +
+      tags +
+      '<div class="sk-card-meta">' +
+        '<span class="meta-install" style="color:' + dt.color + '"><span style="opacity:0.6">' + dt.label + ':</span> ' + dt.value + '</span>' +
+        valueCell +
+      '</div>' +
+      '<div class="sk-card-actions">' +
+        gbbBadge +
+        '<span class="status-pill status-' + stage.color + '">' + stage.label + '</span>' +
+        '<button class="move-btn" onclick="event.stopPropagation();showMoveMenu(' + p.id + ', event)" title="Move">⋮</button>' +
+      '</div>' +
+    '</div>'
+  );
 }
 // ── Shop Work ──
 // Shape: { id, text, assignee_id, priority, project_id, status: 'open'|'done', created, completed }
