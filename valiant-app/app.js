@@ -7461,9 +7461,9 @@ function renderSalesMgmtDashboard(activeProjects) {
   `;
 }
 
-// ── Sales Department Kanban (4 stages, VERTICAL layout) ──
-// Stages stack as rows; cards wrap horizontally within each row.
-// No horizontal scrolling — cards wrap to next line when row is full.
+// ── Sales Department Kanban (4 columns) ──
+// 4 columns side-by-side: Lead / Proposal / Sent / Contract (needs review only).
+// Uses the same column layout as Full Pipeline but with compact card style.
 function renderSalesKanban(activeProjects, needsReview) {
   const SALES_STAGES = STAGES.filter(s => ['lead','proposal','sent','contract'].includes(s.key));
   const byStage = {};
@@ -7471,14 +7471,12 @@ function renderSalesKanban(activeProjects, needsReview) {
 
   activeProjects.forEach(p => {
     if (p.stage === 'contract') {
-      // Contract row: only projects needing review (signed but not handed off)
       if (isContractNeedsReview(p)) byStage.contract.push(p);
     } else if (byStage[p.stage]) {
       byStage[p.stage].push(p);
     }
   });
 
-  // Sort each row the same way the full pipeline does
   SALES_STAGES.forEach(s => {
     byStage[s.key] = sortByColumnOrder(byStage[s.key], s.key);
   });
@@ -7494,7 +7492,7 @@ function renderSalesKanban(activeProjects, needsReview) {
       </div>
     </div>
 
-    <div class="sales-kanban-vertical" style="margin-bottom:16px">
+    <div class="pipeline-grid sales-kanban" style="margin-bottom:16px">
       ${SALES_STAGES.map(s => {
         const col = byStage[s.key] || [];
         const LIMIT = 12;
@@ -7502,44 +7500,35 @@ function renderSalesKanban(activeProjects, needsReview) {
         const visible = expanded ? col : col.slice(0, LIMIT);
         const hiddenCount = col.length - LIMIT;
         const isContractCol = s.key === 'contract';
-        const stageColor = {
-          lead: '#8B949E',
-          proposal: '#D29922',
-          sent: '#D29922',
-          contract: '#58A6FF'
-        }[s.key] || '#8B949E';
         return `
-        <div class="sk-row" ondragover="onDragOver(event)" ondragleave="onDragLeave(event)" ondrop="onDropStage(event, '${s.key}')">
-          <div class="sk-row-header" style="border-left:3px solid ${stageColor}">
-            <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
-              <span class="sk-row-name">${s.label}</span>
-              <span class="sk-row-count">${col.length}</span>
-              ${isContractCol ? '<span style="font-size:10px;color:#8B949E;font-weight:400">needs review only</span>' : ''}
-            </div>
-            ${!expanded && hiddenCount > 0 ? `<div onclick="event.stopPropagation();toggleColExpanded('${s.key}')" style="font-size:11px;color:#58A6FF;cursor:pointer;-webkit-tap-highlight-color:transparent">+${hiddenCount} more</div>` : ''}
-            ${expanded && col.length > LIMIT ? `<div onclick="event.stopPropagation();toggleColExpanded('${s.key}')" style="font-size:11px;color:#6E7681;cursor:pointer;-webkit-tap-highlight-color:transparent">Show less ↑</div>` : ''}
+        <div class="pipeline-col" ondragover="onDragOver(event)" ondragleave="onDragLeave(event)" ondrop="onDropStage(event, '${s.key}')">
+          <div class="pipeline-col-header">
+            <span class="pipeline-col-name">${s.label}${isContractCol ? ' <span style="font-weight:400;color:#8B949E;font-size:10px">(review)</span>' : ''}</span>
+            <span class="pipeline-col-count">${col.length}</span>
           </div>
-          <div class="sk-row-cards">
-            ${visible.length === 0 ? '<div class="sk-row-empty">No projects</div>' : visible.map(p => renderSalesKanbanCard(p, s)).join('')}
-          </div>
+          ${visible.length === 0 ? '<div class="empty-state" style="padding:20px 10px;font-size:12px">No projects</div>' : visible.map(p => renderSalesKanbanCard(p, s)).join('')}
+          ${!expanded && hiddenCount > 0 ? `<div onclick="event.stopPropagation();toggleColExpanded('${s.key}')" style="text-align:center;padding:8px 6px;font-size:11px;color:#58A6FF;cursor:pointer;border-top:1px solid #1C2333;margin-top:4px;-webkit-tap-highlight-color:transparent">+${hiddenCount} more</div>` : ''}
+          ${expanded && col.length > LIMIT ? `<div onclick="event.stopPropagation();toggleColExpanded('${s.key}')" style="text-align:center;padding:8px 6px;font-size:11px;color:#6E7681;cursor:pointer;border-top:1px solid #1C2333;margin-top:4px;-webkit-tap-highlight-color:transparent">Show less ↑</div>` : ''}
         </div>`;
       }).join('')}
     </div>
   `;
 }
 
-// Horizontal row-style card used inside the vertical Sales Kanban.
-// Content reflows left-to-right instead of stacked.
+// Compact card used inside the Sales Kanban columns.
+// Tighter padding, less vertical space, combined info rows.
 function renderSalesKanbanCard(p, stage) {
   const gbbTier = getGBBTier(p.id);
   const likely = isLikelyToClose(p.id);
   const needsReview = isContractNeedsReview(p);
   const dt = getInstallDateDisplay(p);
 
-  const borderStyle = needsReview ? 'border-color:#DA3633' : (likely ? 'border-color:#238636' : '');
+  const borderStyle = needsReview
+    ? 'border-color:#DA3633'
+    : (likely ? 'border-color:#238636' : '');
 
   const gbbBadge = gbbTier
-    ? '<span style="font-size:9px;font-weight:600;padding:1px 5px;border-radius:3px;background:' +
+    ? '<span style="font-size:8px;font-weight:700;padding:1px 4px;border-radius:2px;background:' +
       (gbbTier === 'better' ? '#0D1626;color:#58A6FF;border:1px solid #1565C0' :
        gbbTier === 'best'   ? '#0D1A0E;color:#3FB950;border:1px solid #238636' :
                               '#161B22;color:#6E7681;border:1px solid #30363D') +
@@ -7547,21 +7536,19 @@ function renderSalesKanbanCard(p, stage) {
     : '';
 
   const banner = likely
-    ? '<span class="likely-badge" style="background:#238636;color:#fff;font-weight:700">LIKELY</span>'
+    ? '<div style="background:#238636;color:#fff;font-size:9px;font-weight:700;padding:2px 6px;border-radius:3px;margin-bottom:4px;text-align:center;letter-spacing:0.05em">LIKELY TO CLOSE</div>'
     : needsReview
-      ? '<span class="review-banner" style="background:#DA3633;color:#fff;font-weight:700">REVIEW</span>'
+      ? '<div style="background:#DA3633;color:#fff;font-size:9px;font-weight:700;padding:2px 6px;border-radius:3px;margin-bottom:4px;text-align:center;letter-spacing:0.05em">REVIEW &mdash; SEND TO DESIGN &amp; INSTALL</div>'
       : '';
 
-  const valueCell = canSee('financials')
-    ? '<span class="meta-value">' + fmt(p.total) + '</span>'
-    : '';
+  const valueDisplay = canSee('financials') ? fmt(p.total) : '';
 
   const tags = p.systems.length
-    ? '<div class="sk-card-tags">' + p.systems.slice(0, 3).map(systemTagHTML).join('') + '</div>'
+    ? '<div class="sk-compact-tags">' + p.systems.slice(0, 2).map(systemTagHTML).join('') + (p.systems.length > 2 ? '<span style="font-size:9px;color:#6E7681;padding:1px 3px">+' + (p.systems.length - 2) + '</span>' : '') + '</div>'
     : '';
 
   return (
-    '<div class="project-card sk-card' + (likely ? ' likely-card' : '') + '"' +
+    '<div class="project-card sk-compact-card' + (likely ? ' likely-card' : '') + '"' +
       ' draggable="true"' +
       ' ondragstart="onReorderDragStart(event, ' + p.id + ', \'' + stage.key + '\')"' +
       ' ondragend="onDragEnd(event)"' +
@@ -7570,22 +7557,19 @@ function renderSalesKanbanCard(p, stage) {
       ' onclick="openProject(' + p.id + ')"' +
       ' style="' + borderStyle + '">' +
       banner +
-      '<div class="sk-card-primary">' +
-        '<div class="project-card-name">' + esc(p.name) + '</div>' +
-        '<div class="project-card-client">' + esc(p.client_name || 'No client') +
-          (p.city ? ' · ' + esc(p.city) + (p.state_abbr ? ', ' + esc(p.state_abbr) : '') : '') +
-        '</div>' +
+      '<div class="sk-compact-top">' +
+        '<div class="sk-compact-name">' + esc(p.name) + '</div>' +
+        (gbbBadge ? '<div style="flex-shrink:0">' + gbbBadge + '</div>' : '') +
       '</div>' +
-      tags +
-      '<div class="sk-card-meta">' +
-        '<span class="meta-install" style="color:' + dt.color + '"><span style="opacity:0.6">' + dt.label + ':</span> ' + dt.value + '</span>' +
-        valueCell +
+      '<div class="sk-compact-client">' + esc(p.client_name || 'No client') +
+        (p.city ? ' &middot; ' + esc(p.city) : '') +
       '</div>' +
-      '<div class="sk-card-actions">' +
-        gbbBadge +
-        '<span class="status-pill status-' + stage.color + '">' + stage.label + '</span>' +
-        '<button class="move-btn" onclick="event.stopPropagation();showMoveMenu(' + p.id + ', event)" title="Move">⋮</button>' +
+      '<div class="sk-compact-meta">' +
+        (valueDisplay ? '<span class="sk-compact-value">' + valueDisplay + '</span>' : '') +
+        '<span class="sk-compact-date" style="color:' + dt.color + '">' + dt.value + '</span>' +
       '</div>' +
+      (tags ? tags : '') +
+      '<button class="move-btn sk-compact-move" onclick="event.stopPropagation();showMoveMenu(' + p.id + ', event)" title="Move">⋮</button>' +
     '</div>'
   );
 }
