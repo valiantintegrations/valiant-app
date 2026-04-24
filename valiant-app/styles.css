@@ -262,10 +262,104 @@ body {
   gap: 8px;
 }
 .sk-card {
-  flex: 0 0 calc(25% - 6px);
-  min-width: 240px;
-  max-width: 320px;
+  flex: 1 1 100%;
+  min-width: 0;
+  max-width: none;
   box-sizing: border-box;
+  /* Convert card content to a horizontal row */
+  display: flex !important;
+  align-items: center;
+  gap: 14px;
+  padding: 10px 14px !important;
+}
+/* Override internal card element layout when inside sk-card */
+.sk-card .project-card-name {
+  font-size: 13px;
+  margin-bottom: 1px;
+}
+.sk-card .project-card-client {
+  font-size: 11px;
+  margin: 0;
+}
+.sk-card .project-card-footer {
+  margin-top: 0 !important;
+  padding-top: 0 !important;
+  border-top: none !important;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-shrink: 0;
+}
+/* First section: name + client stacked, grows */
+.sk-card-primary {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+}
+.sk-card-primary > div {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+/* Second section: install date, value — fixed width each */
+.sk-card-meta {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  flex-shrink: 0;
+  font-size: 11px;
+  color: #8B949E;
+}
+.sk-card-meta .meta-value {
+  color: #E6EDF3;
+  font-weight: 600;
+  font-size: 13px;
+  min-width: 80px;
+  text-align: right;
+}
+.sk-card-meta .meta-install {
+  min-width: 110px;
+}
+/* Tags section */
+.sk-card-tags {
+  display: flex;
+  gap: 4px;
+  flex-shrink: 0;
+}
+.sk-card-tags > * { flex-shrink: 0; }
+/* Right-side status + actions */
+.sk-card-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+}
+/* Banner (Likely / Review) becomes a small pill on the left side */
+.sk-card .likely-badge,
+.sk-card .review-banner {
+  padding: 3px 8px !important;
+  font-size: 9px !important;
+  border-radius: 3px !important;
+  margin: 0 !important;
+  flex-shrink: 0;
+  letter-spacing: 0.04em;
+  white-space: nowrap;
+}
+
+/* Mobile: relax the horizontal strictness so content can wrap */
+@media (max-width: 700px) {
+  .sk-card {
+    flex-wrap: wrap;
+    gap: 8px;
+    padding: 10px 12px !important;
+  }
+  .sk-card-meta {
+    gap: 10px;
+    font-size: 10px;
+  }
+  .sk-card-meta .meta-install { min-width: 0; }
+  .sk-card-meta .meta-value { min-width: 70px; }
+  .sk-card-tags { display: none; }
 }
 .sk-row-empty {
   padding: 20px;
@@ -274,17 +368,6 @@ body {
   font-size: 12px;
   font-style: italic;
   width: 100%;
-}
-
-/* Responsive: fewer cards per row on narrower screens */
-@media (max-width: 1200px) {
-  .sk-card { flex: 0 0 calc(33.333% - 6px); }
-}
-@media (max-width: 900px) {
-  .sk-card { flex: 0 0 calc(50% - 4px); }
-}
-@media (max-width: 600px) {
-  .sk-card { flex: 0 0 100%; min-width: 0; max-width: none; }
 }
 
 /* ── Project Pipeline ── */
