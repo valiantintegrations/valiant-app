@@ -211,163 +211,79 @@ body {
 .section-action:hover { text-decoration: underline; }
 
 /* ═══════════════════════════════════════════════════════════
-   SALES DEPT VERTICAL KANBAN
+   SALES DEPT COMPACT KANBAN CARDS
    ═══════════════════════════════════════════════════════════ */
 
-.sales-kanban-vertical {
-  display: flex;
-  flex-direction: column;
-  gap: 14px;
+/* Compact card for use inside Sales Kanban columns */
+.sk-compact-card {
+  position: relative;
+  padding: 8px 10px !important;
+  margin-bottom: 6px;
+  min-height: 0;
 }
-.sk-row {
-  background: #0D1117;
-  border: 1px solid #1C2333;
-  border-radius: 10px;
-  padding: 12px 14px;
-  transition: border-color 0.15s;
-}
-.sk-row.drag-over {
-  border-color: #58A6FF;
-  border-style: dashed;
-  background: #0D1626;
-}
-.sk-row-header {
+.sk-compact-top {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  margin-bottom: 10px;
-  padding: 2px 0 2px 10px;
-  gap: 10px;
-  flex-wrap: wrap;
+  gap: 6px;
 }
-.sk-row-name {
-  font-size: 13px;
-  font-weight: 700;
+.sk-compact-name {
+  font-size: 12px;
+  font-weight: 600;
   color: #E6EDF3;
-  text-transform: uppercase;
-  letter-spacing: 0.08em;
-}
-.sk-row-count {
-  font-size: 11px;
-  color: #8B949E;
-  background: #161B22;
-  border: 1px solid #30363D;
-  padding: 1px 8px;
-  border-radius: 10px;
-  font-weight: 500;
-}
-.sk-row-cards {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
-}
-.sk-card {
-  flex: 1 1 100%;
-  min-width: 0;
-  max-width: none;
-  box-sizing: border-box;
-  /* Convert card content to a horizontal row */
-  display: flex !important;
-  align-items: center;
-  gap: 14px;
-  padding: 10px 14px !important;
-}
-/* Override internal card element layout when inside sk-card */
-.sk-card .project-card-name {
-  font-size: 13px;
-  margin-bottom: 1px;
-}
-.sk-card .project-card-client {
-  font-size: 11px;
-  margin: 0;
-}
-.sk-card .project-card-footer {
-  margin-top: 0 !important;
-  padding-top: 0 !important;
-  border-top: none !important;
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  flex-shrink: 0;
-}
-/* First section: name + client stacked, grows */
-.sk-card-primary {
-  flex: 1 1 auto;
-  min-width: 0;
+  line-height: 1.3;
+  white-space: nowrap;
   overflow: hidden;
+  text-overflow: ellipsis;
+  flex: 1;
+  min-width: 0;
+  padding-right: 16px; /* room for the move button */
 }
-.sk-card-primary > div {
+.sk-compact-client {
+  font-size: 10px;
+  color: #8B949E;
+  margin-top: 1px;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
 }
-/* Second section: install date, value — fixed width each */
-.sk-card-meta {
+.sk-compact-meta {
   display: flex;
   align-items: center;
-  gap: 14px;
-  flex-shrink: 0;
-  font-size: 11px;
-  color: #8B949E;
-}
-.sk-card-meta .meta-value {
-  color: #E6EDF3;
-  font-weight: 600;
-  font-size: 13px;
-  min-width: 80px;
-  text-align: right;
-}
-.sk-card-meta .meta-install {
-  min-width: 110px;
-}
-/* Tags section */
-.sk-card-tags {
-  display: flex;
-  gap: 4px;
-  flex-shrink: 0;
-}
-.sk-card-tags > * { flex-shrink: 0; }
-/* Right-side status + actions */
-.sk-card-actions {
-  display: flex;
-  align-items: center;
+  justify-content: space-between;
   gap: 6px;
-  flex-shrink: 0;
+  margin-top: 4px;
 }
-/* Banner (Likely / Review) becomes a small pill on the left side */
-.sk-card .likely-badge,
-.sk-card .review-banner {
-  padding: 3px 8px !important;
-  font-size: 9px !important;
-  border-radius: 3px !important;
-  margin: 0 !important;
-  flex-shrink: 0;
-  letter-spacing: 0.04em;
+.sk-compact-value {
+  font-size: 12px;
+  font-weight: 700;
+  color: #E6EDF3;
+  font-variant-numeric: tabular-nums;
+}
+.sk-compact-date {
+  font-size: 10px;
   white-space: nowrap;
 }
-
-/* Mobile: relax the horizontal strictness so content can wrap */
-@media (max-width: 700px) {
-  .sk-card {
-    flex-wrap: wrap;
-    gap: 8px;
-    padding: 10px 12px !important;
-  }
-  .sk-card-meta {
-    gap: 10px;
-    font-size: 10px;
-  }
-  .sk-card-meta .meta-install { min-width: 0; }
-  .sk-card-meta .meta-value { min-width: 70px; }
-  .sk-card-tags { display: none; }
+.sk-compact-tags {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  margin-top: 5px;
+  flex-wrap: wrap;
 }
-.sk-row-empty {
-  padding: 20px;
-  text-align: center;
-  color: #6E7681;
-  font-size: 12px;
-  font-style: italic;
-  width: 100%;
+.sk-compact-tags .system-tag {
+  font-size: 9px !important;
+  padding: 1px 5px !important;
+}
+.sk-compact-move {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  width: 18px;
+  height: 18px;
+  font-size: 14px;
+  line-height: 1;
+  padding: 0;
 }
 
 /* ── Project Pipeline ── */
