@@ -221,11 +221,6 @@ body {
   body.has-context-nav #content {
     padding-bottom: 110px;
   }
-  /* Make sure the Intake fab draws above the context nav */
-  #bottom-nav .bnav-item.bnav-intake .bnav-fab {
-    position: relative;
-    z-index: 62;
-  }
 }
 
 /* ── Bottom Nav (mobile) ── */
@@ -267,18 +262,164 @@ body {
 #bottom-nav .bnav-item svg { width: 22px; height: 22px; }
 #bottom-nav .bnav-item span { line-height: 1; }
 
-/* ── Intake FAB ── */
-#bottom-nav .bnav-item.bnav-intake {
-  color: #fff;
+/* ── Quick button (center of bottom nav) ── */
+#bottom-nav .bnav-item.bnav-quick {
+  color: #58A6FF;
 }
-#bottom-nav .bnav-item.bnav-intake .bnav-fab {
-  width: 40px; height: 40px; border-radius: 50%;
-  background: #1565C0;
-  display: flex; align-items: center; justify-content: center;
-  margin-top: -14px;
-  box-shadow: 0 2px 12px rgba(21, 101, 192, 0.4);
+#bottom-nav .bnav-item.bnav-quick svg {
+  fill: rgba(88, 166, 255, 0.12);
 }
-#bottom-nav .bnav-item.bnav-intake .bnav-fab svg { width: 20px; height: 20px; color: #fff; }
+
+/* ── Quick Actions Bottom Sheet ── */
+.qa-sheet {
+  position: fixed;
+  inset: 0;
+  z-index: 200;
+  pointer-events: none;
+}
+.qa-sheet .qa-backdrop {
+  position: absolute;
+  inset: 0;
+  background: rgba(0, 0, 0, 0);
+  pointer-events: auto;
+  transition: background 0.22s ease;
+}
+.qa-sheet.open .qa-backdrop {
+  background: rgba(0, 0, 0, 0.45);
+}
+.qa-sheet .qa-panel {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: #0D1117;
+  border-top: 1px solid #1C2333;
+  border-radius: 16px 16px 0 0;
+  padding: 8px 12px calc(env(safe-area-inset-bottom, 0) + 16px);
+  pointer-events: auto;
+  transform: translateY(100%);
+  transition: transform 0.22s ease;
+  max-height: 85vh;
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+  box-shadow: 0 -8px 30px rgba(0, 0, 0, 0.6);
+}
+.qa-sheet.open .qa-panel {
+  transform: translateY(0);
+}
+.qa-handle {
+  width: 36px;
+  height: 4px;
+  background: #30363D;
+  border-radius: 2px;
+  margin: 6px auto 12px;
+}
+.qa-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 4px 8px;
+  border-bottom: 1px solid #1C2333;
+  margin-bottom: 8px;
+}
+.qa-title {
+  font-size: 14px;
+  font-weight: 600;
+  color: #E6EDF3;
+}
+.qa-close {
+  width: 28px;
+  height: 28px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: transparent;
+  border: none;
+  color: #8B949E;
+  cursor: pointer;
+  border-radius: 4px;
+  -webkit-tap-highlight-color: transparent;
+  padding: 0;
+}
+.qa-close:active { background: #161B22; }
+.qa-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.qa-item {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  padding: 12px 10px;
+  background: transparent;
+  border: none;
+  border-radius: 8px;
+  text-align: left;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+  font-family: inherit;
+  color: #E6EDF3;
+  transition: background 0.12s;
+}
+.qa-item:active { background: #161B22; }
+.qa-item-disabled { opacity: 0.55; }
+.qa-icon {
+  width: 36px;
+  height: 36px;
+  border-radius: 8px;
+  background: #161B22;
+  border: 1px solid #1C2333;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #58A6FF;
+  flex-shrink: 0;
+}
+.qa-item-disabled .qa-icon { color: #6E7681; }
+.qa-text { flex: 1; min-width: 0; }
+.qa-label {
+  font-size: 13px;
+  font-weight: 500;
+  color: #E6EDF3;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.qa-soon {
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  padding: 1px 5px;
+  border-radius: 3px;
+  background: #1C2333;
+  color: #8B949E;
+  border: 1px solid #30363D;
+}
+.qa-desc {
+  font-size: 11px;
+  color: #8B949E;
+  margin-top: 2px;
+}
+.qa-chev {
+  color: #6E7681;
+  flex-shrink: 0;
+}
+.qa-pp-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 10px 12px;
+  background: #0D1117;
+  border: 1px solid #1C2333;
+  border-radius: 6px;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+  font-family: inherit;
+}
+.qa-pp-row:active { background: #161B22; }
 
 /* ── Cards & Surfaces ── */
 .card {
