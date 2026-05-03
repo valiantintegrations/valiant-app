@@ -153,51 +153,58 @@ body {
     position: fixed;
     left: 0;
     right: 0;
-    /* Lift above bottom nav (56px) + Intake fab bulge (~14px) + safe-area */
-    bottom: calc(70px + env(safe-area-inset-bottom, 0));
-    background: rgba(13, 17, 23, 0.97);
-    backdrop-filter: blur(10px);
-    -webkit-backdrop-filter: blur(10px);
+    /* Sit flush above the bottom nav (no gap) */
+    bottom: calc(56px + env(safe-area-inset-bottom, 0));
+    background: #0A0E14;
     border-top: 1px solid #1C2333;
-    border-bottom: 1px solid #1C2333;
-    z-index: 65;
+    z-index: 58;  /* Below bottom-nav (60) so the Intake fab still draws above */
     overflow: hidden;
   }
   #context-nav .ctx-nav-scroll {
     overflow-x: auto;
     -webkit-overflow-scrolling: touch;
     scrollbar-width: none;
-    padding: 8px 12px;
+    padding: 0 8px;
   }
   #context-nav .ctx-nav-scroll::-webkit-scrollbar { display: none; }
   #context-nav .ctx-nav-inner {
     display: inline-flex;
-    gap: 6px;
+    gap: 0;
     white-space: nowrap;
-    padding-right: 30px;  /* room for fade indicator */
+    padding-right: 36px;  /* room for fade indicator */
   }
   #context-nav .ctx-chip {
     flex-shrink: 0;
-    padding: 7px 14px;
+    padding: 10px 14px;
     font-size: 12px;
     font-weight: 500;
-    border-radius: 8px;
-    background: #161B22;
-    border: 1px solid #30363D;
-    color: #C9D1D9;
+    border-radius: 0;
+    background: transparent;
+    border: none;
+    color: #6E7681;
     cursor: pointer;
     -webkit-tap-highlight-color: transparent;
-    transition: all 0.15s;
+    transition: color 0.15s;
     font-family: inherit;
+    position: relative;
+    min-height: 38px;
   }
   #context-nav .ctx-chip.active {
-    background: #1565C0;
-    border-color: #1976D2;
-    color: #fff;
+    color: #58A6FF;
     font-weight: 600;
   }
+  #context-nav .ctx-chip.active::after {
+    content: "";
+    position: absolute;
+    left: 14px;
+    right: 14px;
+    bottom: 4px;
+    height: 2px;
+    background: #58A6FF;
+    border-radius: 1px;
+  }
   #context-nav .ctx-chip:active {
-    transform: scale(0.96);
+    color: #C9D1D9;
   }
   #context-nav .ctx-nav-fade {
     position: absolute;
@@ -206,13 +213,18 @@ body {
     bottom: 0;
     width: 36px;
     pointer-events: none;
-    background: linear-gradient(to right, rgba(13, 17, 23, 0), rgba(13, 17, 23, 0.97));
+    background: linear-gradient(to right, rgba(10, 14, 20, 0), rgba(10, 14, 20, 1));
     opacity: 1;
     transition: opacity 0.15s;
   }
   /* Push content so it isn't hidden behind context nav */
   body.has-context-nav #content {
-    padding-bottom: 130px;
+    padding-bottom: 110px;
+  }
+  /* Make sure the Intake fab draws above the context nav */
+  #bottom-nav .bnav-item.bnav-intake .bnav-fab {
+    position: relative;
+    z-index: 62;
   }
 }
 
