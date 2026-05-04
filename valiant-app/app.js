@@ -376,6 +376,11 @@ const state = {
   projectPins: JSON.parse(localStorage.getItem('vi_project_pins') || '{}'),
   projectSiteNotes: JSON.parse(localStorage.getItem('vi_project_site_notes') || '{}'),
   closeoutChecklist: JSON.parse(localStorage.getItem('vi_closeout_checklist') || '{}'),
+  actionsManual: JSON.parse(localStorage.getItem('vi_actions_manual') || '[]'),
+  actionsState: JSON.parse(localStorage.getItem('vi_actions_state') || '{}'),
+  actionsArchive: JSON.parse(localStorage.getItem('vi_actions_archive') || '[]'),
+  actionsTouchLog: JSON.parse(localStorage.getItem('vi_actions_touch_log') || '{}'),
+  salesDashTab: localStorage.getItem('vi_sales_dash_tab') || 'action',
   mapsApiKey: null,
   mapsApiLoaded: false
 };
@@ -7394,119 +7399,810 @@ function renderDesignMgmtDashboard(activeProjects) {
 }
 
 // ── Sales Department Management dashboard ──
+// Two tabs: Action (default) and Pipeline. Stats moved into a sheet on Pipeline tab.
 function renderSalesMgmtDashboard(activeProjects) {
+  const tab = state.salesDashTab || 'action';
+  const tabs = [
+    { key: 'action',   label: 'Action' },
+    { key: 'pipeline', label: 'Pipeline' }
+  ];
+
+  const tabBar = `
+    <div class="sales-subtab-bar">
+      ${tabs.map(t => `
+        <button type="button" class="sales-subtab${tab === t.key ? ' active' : ''}" onclick="setSalesDashTab('${t.key}')">${t.label}</button>
+      `).join('')}
+    </div>
+  `;
+
+  // Search bar — quick project lookup
+  const searchBar = `
+    <button type="button" onclick="quickActionProjectPicker('Search projects', (id) => openProject(id))" class="sales-search-bar">
+      <svg width="14" height="14" viewBox="0 0 14 14" fill="none"><circle cx="6" cy="6" r="4.5" stroke="currentColor" stroke-width="1.4"/><path d="M9.5 9.5L13 13" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></svg>
+      <span>Search projects&hellip;</span>
+    </button>
+  `;
+
+  let body = '';
+  if (tab === 'pipeline') {
+    body = renderSalesPipelineTab(activeProjects);
+  } else {
+    body = renderSalesActionTab(activeProjects);
+  }
+
+  return `
+    ${renderDeptDashboardHeader('Sales Department Management', 'Pipeline oversight and sales rep performance', '#3FB950')}
+    ${searchBar}
+    ${tabBar}
+    ${body}
+  `;
+}
+
+function setSalesDashTab(tab) {
+  state.salesDashTab = tab;
+  localStorage.setItem('vi_sales_dash_tab', tab);
+  renderDashboard(document.getElementById('content'));
+}
+
+// ── Sales Pipeline tab — kanban + Stats button ──
+function renderSalesPipelineTab(activeProjects) {
+  const needsReview = activeProjects.filter(p => isContractNeedsReview(p));
+  return `
+    <div style="display:flex;justify-content:flex-end;margin-bottom:10px">
+      <button type="button" onclick="openSalesStatsSheet()" class="btn btn-sm" style="display:inline-flex;align-items:center;gap:6px;font-size:12px">
+        <svg width="12" height="12" viewBox="0 0 14 14" fill="none"><path d="M2 12V6M6 12V2M10 12V8" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>
+        Stats
+      </button>
+    </div>
+    ${renderSalesKanban(activeProjects, needsReview)}
+  `;
+}
+
+// ── Sales Stats sheet — opened from Pipeline tab ──
+function openSalesStatsSheet() {
+  const activeProjects = state.projects.filter(p => !p.archived);
   const totalValue = getPipelineValue(activeProjects);
   const likelyValue = getLikelyToCloseTotal();
   const likelyCount = activeProjects.filter(p => isLikelyToClose(p.id)).length;
   const closeRate = getCloseRate();
+  const needsReview = activeProjects.filter(p => isContractNeedsReview(p)).length;
 
-  // Hot deals: likely to close
-  const hotDeals = activeProjects.filter(p => isLikelyToClose(p.id))
-    .sort((a, b) => (b.total || 0) - (a.total || 0));
-
-  // Proposals out: projects in proposal stage where proposal-sent milestone is complete
-  const proposalsOut = activeProjects.filter(p => {
-    if (p.stage !== 'proposal') return false;
-    const proposalPhase = PHASES.find(ph => ph.key === 'proposal');
-    if (!proposalPhase) return false;
-    const sentMilestone = proposalPhase.milestones.find(m => m.key === 'proposal_sent');
-    return sentMilestone && milestoneProgress(p, proposalPhase, sentMilestone) >= 1;
+  // Personal KPIs — projects where current user is Sales Lead
+  const myId = getActiveTeamMemberId();
+  const myProjects = activeProjects.filter(p => {
+    const sales = (getProjectAssignment(p.id).sales || []);
+    const lead = sales.find(x => x.lead);
+    return lead?.id === myId;
   });
+  const myValue = myProjects.reduce((s, p) => s + (p.total || 0), 0);
+  const myLikely = myProjects.filter(p => isLikelyToClose(p.id)).length;
+  const myActive = myProjects.filter(p => !['complete','archived'].includes(p.stage)).length;
 
-  // Needs review: contract signed but not yet handed off to design
-  const needsReview = activeProjects.filter(p => isContractNeedsReview(p));
-
-  // Stalled leads: Lead stage with no activity 30+ days
-  const stalledLeads = activeProjects.filter(p => {
-    if (p.stage !== 'lead') return false;
-    const la = state.recentActivity?.[p.id];
-    if (!la) return false;
-    const days = (Date.now() - new Date(la).getTime()) / 86400000;
-    return days > 30;
-  });
-
-  // By Sales Lead: group by sales lead
+  // By Sales Lead breakdown
   const byLead = {};
   activeProjects.forEach(p => {
-    const assignment = getProjectAssignment(p.id);
-    const salesLead = (assignment.sales || []).find(x => x.lead);
-    const leadId = salesLead?.id || 'unassigned';
-    if (!byLead[leadId]) byLead[leadId] = { id: leadId, projects: [], value: 0 };
-    byLead[leadId].projects.push(p);
-    byLead[leadId].value += (p.total || 0);
+    const sales = (getProjectAssignment(p.id).sales || []);
+    const lead = sales.find(x => x.lead);
+    const id = lead?.id || 'unassigned';
+    if (!byLead[id]) byLead[id] = { id, value: 0, active: 0 };
+    byLead[id].value += (p.total || 0);
+    if (!['complete','archived'].includes(p.stage)) byLead[id].active++;
   });
   const leadSummary = Object.values(byLead).sort((a, b) => b.value - a.value);
 
-  return `
-    ${renderDeptDashboardHeader('Sales Department Management', 'Pipeline oversight and sales rep performance', '#3FB950')}
-
-    <div style="margin:-6px 0 16px">
-      <button onclick="navigate('intake')" class="btn-primary" style="display:inline-flex;align-items:center;gap:8px;background:#238636;border-color:#2EA043;padding:10px 18px;font-size:13px;font-weight:600">
-        <svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M7 2v10M2 7h10" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
-        New Intake
-      </button>
-    </div>
-
-    <!-- Hero metrics -->
-    <div data-context-section="metrics" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:10px;margin-bottom:18px">
-      <div class="metric-card">
-        <div class="metric-label">Pipeline Value</div>
-        <div class="metric-value">${fmt(totalValue)}</div>
-        <div class="metric-sub">${activeProjects.length} active</div>
+  document.getElementById('sales-stats-sheet')?.remove();
+  const sheet = document.createElement('div');
+  sheet.id = 'sales-stats-sheet';
+  sheet.className = 'qa-sheet';
+  sheet.innerHTML = `
+    <div class="qa-backdrop" onclick="closeSalesStatsSheet()"></div>
+    <div class="qa-panel" role="dialog" aria-label="Sales stats">
+      <div class="qa-handle"></div>
+      <div class="qa-header">
+        <div class="qa-title">Sales Stats</div>
+        <button class="qa-close" onclick="closeSalesStatsSheet()" aria-label="Close">
+          <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M4 4l8 8M12 4l-8 8" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>
+        </button>
       </div>
-      <div class="metric-card" style="${likelyCount > 0 ? 'border-color:#238636' : ''}">
-        <div class="metric-label">Likely to Close</div>
-        <div class="metric-value" style="${likelyCount > 0 ? 'color:#3FB950' : ''}">${fmt(likelyValue)}</div>
-        <div class="metric-sub">${likelyCount} project${likelyCount === 1 ? '' : 's'}</div>
-      </div>
-      <div class="metric-card" style="${needsReview.length > 0 ? 'border-color:#DA3633' : ''}">
-        <div class="metric-label">Needs Review</div>
-        <div class="metric-value" style="${needsReview.length > 0 ? 'color:#F85149' : ''}">${needsReview.length}</div>
-        <div class="metric-sub">contracts to hand off</div>
-      </div>
-      <div class="metric-card" style="${closeRate !== null && closeRate >= 50 ? 'border-color:#238636' : ''}">
-        <div class="metric-label">Close Rate</div>
-        <div class="metric-value" style="${closeRate !== null && closeRate >= 50 ? 'color:#3FB950' : ''}">${closeRate !== null ? closeRate + '%' : '—'}</div>
-        <div class="metric-sub">all-time</div>
-      </div>
-    </div>
 
-    <!-- 4-stage Sales Kanban: Lead / Proposal / Sent / Contract (needs review only) -->
-    ${renderSalesKanban(activeProjects, needsReview)}
-
-    <!-- Stalled leads -->
-    ${stalledLeads.length > 0 ? `
-      <div data-context-section="stalled" class="dashboard-card" style="margin-bottom:16px;border-left:2px solid #D29922">
-        <div class="dashboard-card-title"><span style="color:#D29922">Stalled Leads &middot; ${stalledLeads.length}</span></div>
-        <div style="font-size:11px;color:#6E7681;margin-bottom:8px">Lead stage projects with no activity 30+ days</div>
-        ${stalledLeads.slice(0, 6).map(p => `
-          <div onclick="openProject(${p.id})" style="padding:8px 10px;background:#0D1117;border:1px solid #1C2333;border-radius:4px;margin-bottom:4px;cursor:pointer;-webkit-tap-highlight-color:transparent">
-            <div style="font-size:12px;color:#E6EDF3;font-weight:500">${esc(p.name)}</div>
-            <div style="font-size:10px;color:#6E7681;margin-top:2px">${esc(p.client_name || '')}</div>
-          </div>
-        `).join('')}
+      <div style="font-size:10px;font-weight:600;color:#6E7681;text-transform:uppercase;letter-spacing:0.08em;margin:8px 4px 6px">Team</div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:14px">
+        <div class="metric-card" style="padding:10px 12px"><div class="metric-label">Pipeline</div><div class="metric-value" style="font-size:18px">${fmt(totalValue)}</div><div class="metric-sub">${activeProjects.length} active</div></div>
+        <div class="metric-card" style="padding:10px 12px"><div class="metric-label">Likely</div><div class="metric-value" style="font-size:18px;color:#3FB950">${fmt(likelyValue)}</div><div class="metric-sub">${likelyCount} project${likelyCount === 1 ? '' : 's'}</div></div>
+        <div class="metric-card" style="padding:10px 12px${needsReview > 0 ? ';border-color:#DA3633' : ''}"><div class="metric-label">Needs Review</div><div class="metric-value" style="font-size:18px${needsReview > 0 ? ';color:#F85149' : ''}">${needsReview}</div><div class="metric-sub">contracts</div></div>
+        <div class="metric-card" style="padding:10px 12px"><div class="metric-label">Close Rate</div><div class="metric-value" style="font-size:18px${closeRate !== null && closeRate >= 50 ? ';color:#3FB950' : ''}">${closeRate !== null ? closeRate + '%' : '—'}</div><div class="metric-sub">all-time</div></div>
       </div>
-    ` : ''}
 
-    <!-- By Sales Lead -->
-    <div data-context-section="by-lead" class="dashboard-card">
-      <div class="dashboard-card-title">By Sales Lead</div>
-      ${leadSummary.length === 0 ? '<div style="font-size:12px;color:#6E7681;font-style:italic;padding:10px 0">No sales leads assigned</div>' : leadSummary.map(group => {
-        const member = group.id === 'unassigned' ? null : getTeamMember(group.id);
-        const name = member?.name || 'Unassigned';
-        const activeCount = group.projects.filter(p => !['complete'].includes(p.stage)).length;
-        return `
-          <div style="display:flex;align-items:center;gap:10px;padding:8px 10px;background:#0D1117;border:1px solid #1C2333;border-radius:4px;margin-bottom:4px">
-            <div style="flex:1;min-width:0">
-              <div style="font-size:12px;color:#E6EDF3;font-weight:500">${esc(name)}</div>
-              <div style="font-size:10px;color:#6E7681;margin-top:2px">${activeCount} active project${activeCount === 1 ? '' : 's'}</div>
+      <div style="font-size:10px;font-weight:600;color:#6E7681;text-transform:uppercase;letter-spacing:0.08em;margin:14px 4px 6px">My KPIs</div>
+      <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;margin-bottom:14px">
+        <div class="metric-card" style="padding:10px 12px"><div class="metric-label">Pipeline</div><div class="metric-value" style="font-size:18px">${fmt(myValue)}</div></div>
+        <div class="metric-card" style="padding:10px 12px"><div class="metric-label">Likely</div><div class="metric-value" style="font-size:18px;color:#3FB950">${myLikely}</div></div>
+        <div class="metric-card" style="padding:10px 12px"><div class="metric-label">Active</div><div class="metric-value" style="font-size:18px">${myActive}</div></div>
+      </div>
+
+      <div style="font-size:10px;font-weight:600;color:#6E7681;text-transform:uppercase;letter-spacing:0.08em;margin:14px 4px 6px">By Sales Lead</div>
+      <div style="display:flex;flex-direction:column;gap:4px">
+        ${leadSummary.length === 0 ? '<div style="font-size:12px;color:#6E7681;font-style:italic;padding:10px">No assignments</div>' : leadSummary.map(g => {
+          const m = g.id === 'unassigned' ? null : getTeamMember(g.id);
+          const name = m?.name || 'Unassigned';
+          return `
+            <div style="display:flex;align-items:center;gap:10px;padding:8px 10px;background:#0D1117;border:1px solid #1C2333;border-radius:6px">
+              <div style="flex:1;min-width:0">
+                <div style="font-size:12px;color:#E6EDF3;font-weight:500">${esc(name)}</div>
+                <div style="font-size:10px;color:#6E7681;margin-top:2px">${g.active} active</div>
+              </div>
+              <div style="font-size:12px;color:#3FB950;font-weight:600">${fmt(g.value)}</div>
             </div>
-            <div style="font-size:11px;color:#3FB950;font-weight:600">${fmt(group.value)}</div>
-          </div>
-        `;
-      }).join('')}
+          `;
+        }).join('')}
+      </div>
     </div>
   `;
+  document.body.appendChild(sheet);
+  requestAnimationFrame(() => sheet.classList.add('open'));
+}
+
+function closeSalesStatsSheet() {
+  const sheet = document.getElementById('sales-stats-sheet');
+  if (!sheet) return;
+  sheet.classList.remove('open');
+  setTimeout(() => sheet.remove(), 220);
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// SALES ACTION TAB — auto-derived + manual + assigned actions
+// ═══════════════════════════════════════════════════════════════════
+
+const ACTION_SECTIONS = [
+  { key: 'quote',   label: 'Quotes',    desc: 'Bids to send and follow up on',         color: '#58A6FF' },
+  { key: 'email',   label: 'Emails',    desc: 'Follow-ups and outreach',               color: '#A371F7' },
+  { key: 'meeting', label: 'Meetings',  desc: 'Walkthroughs, kickoffs, hand-offs',     color: '#3FB950' },
+  { key: 'likely',  label: 'Likely Closes', desc: 'Hot deals to keep warm',            color: '#3FB950' },
+  { key: 'notify',  label: 'Notifications', desc: 'System alerts',                     color: '#D29922' },
+  { key: 'other',   label: 'Other',     desc: 'Miscellaneous follow-ups',              color: '#6E7681' }
+];
+
+// ── Action engine ──
+// Each action has: { key, section, source, projectId, projectName, text, ageDays, complete? }
+// source: 'auto' | 'manual' | 'assigned'
+function buildSalesActions(activeProjects, currentMemberId) {
+  const auto = [];
+  const SEVEN_DAYS = 7 * 86400000;
+  const FOURTEEN_DAYS = 14 * 86400000;
+  const now = Date.now();
+
+  activeProjects.forEach(p => {
+    const lastActivity = state.recentActivity?.[p.id];
+    const lastActivityMs = lastActivity ? new Date(lastActivity).getTime() : null;
+    const daysSinceActivity = lastActivityMs ? (now - lastActivityMs) / 86400000 : null;
+    const proposalPhase = PHASES.find(ph => ph.key === 'proposal');
+    const sentMilestone = proposalPhase?.milestones.find(m => m.key === 'proposal_sent');
+    const proposalSent = sentMilestone ? milestoneProgress(p, proposalPhase, sentMilestone) >= 1 : false;
+
+    // Quotes — Lead with no proposal
+    if (p.stage === 'lead') {
+      auto.push({
+        key: `auto_send_quote_${p.id}`,
+        section: 'quote',
+        source: 'auto',
+        projectId: p.id,
+        projectName: p.name,
+        clientName: p.client_name,
+        text: `Send quote for ${p.name}`,
+        autoType: 'send_quote'
+      });
+    }
+
+    // Quotes — proposal sent 7+ days, no movement
+    if (p.stage === 'proposal' && proposalSent && daysSinceActivity !== null && daysSinceActivity >= 7) {
+      auto.push({
+        key: `auto_quote_followup_${p.id}`,
+        section: 'quote',
+        source: 'auto',
+        projectId: p.id,
+        projectName: p.name,
+        clientName: p.client_name,
+        text: `Follow up on quote for ${p.name}`,
+        ageDays: Math.floor(daysSinceActivity),
+        autoType: 'quote_followup'
+      });
+    }
+
+    // Emails — proposal stage, sent 7+ days, no contract
+    if (p.stage === 'proposal' && proposalSent && daysSinceActivity !== null && daysSinceActivity >= 7) {
+      auto.push({
+        key: `auto_email_followup_${p.id}`,
+        section: 'email',
+        source: 'auto',
+        projectId: p.id,
+        projectName: p.name,
+        clientName: p.client_name,
+        text: `Email ${p.client_name || 'client'} re: ${p.name}`,
+        ageDays: Math.floor(daysSinceActivity),
+        autoType: 'email_followup'
+      });
+    }
+
+    // Meetings — Lead 14+ days, no walkthrough logged
+    const walkthroughLog = state.meetingLogs?.[p.id]?.walkthrough;
+    if (p.stage === 'lead' && (!walkthroughLog) && lastActivityMs && (now - lastActivityMs) > FOURTEEN_DAYS) {
+      auto.push({
+        key: `auto_walkthrough_${p.id}`,
+        section: 'meeting',
+        source: 'auto',
+        projectId: p.id,
+        projectName: p.name,
+        clientName: p.client_name,
+        text: `Schedule walkthrough for ${p.name}`,
+        ageDays: Math.floor((now - lastActivityMs) / 86400000),
+        autoType: 'walkthrough'
+      });
+    }
+
+    // Meetings — Contract stage, design kickoff not logged
+    const kickoffLog = state.meetingLogs?.[p.id]?.design_kickoff;
+    if (p.stage === 'contract' && !kickoffLog && !isContractNeedsReview(p)) {
+      auto.push({
+        key: `auto_design_kickoff_${p.id}`,
+        section: 'meeting',
+        source: 'auto',
+        projectId: p.id,
+        projectName: p.name,
+        clientName: p.client_name,
+        text: `Schedule design kickoff for ${p.name}`,
+        autoType: 'design_kickoff'
+      });
+    }
+
+    // Meetings (hand-offs) — contract signed, not yet handed off
+    if (isContractNeedsReview(p)) {
+      auto.push({
+        key: `auto_handoff_${p.id}`,
+        section: 'meeting',
+        source: 'auto',
+        projectId: p.id,
+        projectName: p.name,
+        clientName: p.client_name,
+        text: `Hand off ${p.name} to Design & Install`,
+        priority: 'high',
+        autoType: 'handoff'
+      });
+    }
+
+    // Likely Closes
+    if (isLikelyToClose(p.id)) {
+      auto.push({
+        key: `auto_likely_${p.id}`,
+        section: 'likely',
+        source: 'auto',
+        projectId: p.id,
+        projectName: p.name,
+        clientName: p.client_name,
+        text: `${p.name} — keep warm`,
+        amount: p.total,
+        autoType: 'likely'
+      });
+    }
+  });
+
+  // Pull manual actions
+  const manual = (state.actionsManual || []).map(a => ({
+    key: `manual_${a.id}`,
+    section: a.section || 'other',
+    source: a.assigneeId && a.assigneeId !== a.createdBy ? 'assigned' : 'manual',
+    projectId: a.projectId || null,
+    projectName: a.projectId ? state.projects.find(p => p.id === a.projectId)?.name : null,
+    clientName: a.projectId ? state.projects.find(p => p.id === a.projectId)?.client_name : null,
+    text: a.text,
+    createdBy: a.createdBy,
+    assigneeId: a.assigneeId,
+    manualId: a.id
+  }));
+
+  // Filter manual to current user (created by me OR assigned to me)
+  const myManual = manual.filter(a => {
+    if (a.assigneeId) return a.assigneeId === currentMemberId;
+    return a.createdBy === currentMemberId;
+  });
+
+  // ── Dedup pass ──
+  // Combine, then for each (section, projectId) pair: keep best by precedence (manual > assigned > auto).
+  // Standalone manual (no projectId) always shown.
+  const all = [...myManual, ...auto];
+  const seen = new Map(); // (section + projectId) → entry
+  const standalone = [];
+  const sourceRank = { manual: 3, assigned: 2, auto: 1 };
+
+  for (const a of all) {
+    if (!a.projectId) {
+      standalone.push(a);
+      continue;
+    }
+    const dedupKey = `${a.section}_${a.projectId}`;
+    const existing = seen.get(dedupKey);
+    if (!existing || sourceRank[a.source] > sourceRank[existing.source]) {
+      seen.set(dedupKey, a);
+    }
+  }
+
+  let combined = [...standalone, ...seen.values()];
+
+  // Filter out items in dismissed/snoozed state
+  const stateMap = state.actionsState || {};
+  combined = combined.filter(a => {
+    const s = stateMap[a.key];
+    if (!s) return true;
+    if (s.status === 'done' || s.status === 'dismissed') return false;
+    if (s.status === 'snoozed' && s.snoozeUntil && new Date(s.snoozeUntil).getTime() > now) return false;
+    return true;
+  });
+
+  return combined;
+}
+
+// Render Action tab
+function renderSalesActionTab(activeProjects) {
+  const memberId = getActiveTeamMemberId();
+  const actions = buildSalesActions(activeProjects, memberId);
+  const bySec = {};
+  ACTION_SECTIONS.forEach(s => bySec[s.key] = []);
+  actions.forEach(a => {
+    if (bySec[a.section]) bySec[a.section].push(a);
+    else bySec.other.push(a);
+  });
+
+  // Calendar widget content
+  const calendarHTML = renderActionCalendarWidget();
+
+  // Sections
+  const sectionsHTML = ACTION_SECTIONS.map(sec => {
+    const items = bySec[sec.key];
+    return `
+      <div class="action-section" data-context-section="${sec.key}">
+        <div class="action-section-header">
+          <div style="display:flex;align-items:center;gap:8px">
+            <div style="width:3px;height:14px;background:${sec.color};border-radius:1px"></div>
+            <span class="action-section-name">${sec.label}</span>
+            <span class="action-section-count">${items.length}</span>
+          </div>
+          <button type="button" onclick="openManualActionDialog('${sec.key}')" class="action-add-btn" title="Add">
+            <svg width="12" height="12" viewBox="0 0 12 12" fill="none"><path d="M6 2v8M2 6h8" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>
+          </button>
+        </div>
+        ${items.length === 0
+          ? `<div class="action-empty">No ${sec.label.toLowerCase()} pending</div>`
+          : items.map(a => renderActionRow(a)).join('')
+        }
+      </div>
+    `;
+  }).join('');
+
+  return `
+    <div class="action-tab-wrap">
+      ${calendarHTML}
+      ${sectionsHTML}
+      <div style="text-align:center;margin-top:18px">
+        <button type="button" onclick="openActionsArchiveDialog()" class="btn btn-sm" style="font-size:11px;color:#8B949E">View archive</button>
+      </div>
+    </div>
+  `;
+}
+
+// Single action row
+function renderActionRow(a) {
+  const sourceLabel = a.source === 'auto' ? 'Auto'
+                    : a.source === 'assigned' ? 'Assigned'
+                    : 'Mine';
+  const sourceClass = a.source === 'auto' ? 'src-auto'
+                    : a.source === 'assigned' ? 'src-assigned'
+                    : 'src-mine';
+  const ageStr = a.ageDays ? `${a.ageDays}d ago` : '';
+  const amountStr = a.amount ? fmt(a.amount) : '';
+  const pri = a.priority === 'high';
+  const hi = pri ? ' action-row-priority' : '';
+  return `
+    <div class="action-row${hi}">
+      <div class="action-row-main" ${a.projectId ? `onclick="openProject(${a.projectId})"` : ''}>
+        <div class="action-row-text">${esc(a.text)}</div>
+        <div class="action-row-meta">
+          ${a.clientName ? `<span>${esc(a.clientName)}</span>` : ''}
+          ${ageStr ? `<span>${ageStr}</span>` : ''}
+          ${amountStr ? `<span style="color:#3FB950">${amountStr}</span>` : ''}
+          <span class="action-source ${sourceClass}">${sourceLabel}</span>
+        </div>
+      </div>
+      <div class="action-row-actions">
+        <button type="button" class="action-btn action-btn-done" onclick="completeAction('${a.key}')" title="Done">
+          <svg width="13" height="13" viewBox="0 0 14 14" fill="none"><path d="M2 7.5l3.5 3.5L12 4" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        </button>
+        <button type="button" class="action-btn" onclick="snoozeAction('${a.key}')" title="Snooze">
+          <svg width="13" height="13" viewBox="0 0 14 14" fill="none"><circle cx="7" cy="7" r="5" stroke="currentColor" stroke-width="1.5"/><path d="M7 4v3l2 1.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
+        </button>
+        <button type="button" class="action-btn" onclick="dismissAction('${a.key}')" title="Dismiss">
+          <svg width="13" height="13" viewBox="0 0 14 14" fill="none"><path d="M3 3l8 8M11 3l-8 8" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
+        </button>
+      </div>
+    </div>
+  `;
+}
+
+// ── Calendar widget on Action tab ──
+function renderActionCalendarWidget() {
+  if (!state.actionCalendarToggles) {
+    state.actionCalendarToggles = { booked: true, estimated: true, personal: true };
+  }
+  const toggles = state.actionCalendarToggles;
+
+  // 7-day strip starting from today
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  const days = [];
+  for (let i = 0; i < 7; i++) {
+    const d = new Date(today.getTime() + i * 86400000);
+    const dStr = d.toISOString().substring(0, 10);
+    const events = [];
+    if (toggles.booked || toggles.estimated) {
+      state.projects.forEach(p => {
+        if (p.archived) return;
+        const dates = (typeof getCalendarDates === 'function') ? getCalendarDates(p) : null;
+        if (!dates?.start) return;
+        const sd = dates.start.substring(0, 10);
+        let inRange = sd === dStr;
+        if (!inRange && dates.end) {
+          const start = new Date(dates.start);
+          const end = new Date(dates.end);
+          const check = new Date(dStr);
+          inRange = check >= start && check <= end;
+        }
+        if (!inRange) return;
+        if (dates.source === 'booked' && !toggles.booked) return;
+        if (dates.source === 'estimated' && !toggles.estimated) return;
+        events.push({ id: p.id, name: p.name, source: dates.source });
+      });
+    }
+    days.push({
+      date: d,
+      dateStr: dStr,
+      isToday: i === 0,
+      events
+    });
+  }
+
+  return `
+    <div class="action-calendar">
+      <div class="action-cal-header">
+        <div class="action-cal-title">This Week</div>
+        <div class="action-cal-toggles">
+          <button type="button" class="action-cal-toggle${toggles.booked ? ' on' : ''}" onclick="toggleActionCalendar('booked')">
+            <span class="dot dot-booked"></span>Booked
+          </button>
+          <button type="button" class="action-cal-toggle${toggles.estimated ? ' on' : ''}" onclick="toggleActionCalendar('estimated')">
+            <span class="dot dot-estimated"></span>Estimated
+          </button>
+          <button type="button" class="action-cal-toggle${toggles.personal ? ' on' : ''}" onclick="toggleActionCalendar('personal')">
+            <span class="dot dot-personal"></span>Personal
+          </button>
+        </div>
+      </div>
+      <div class="action-cal-strip">
+        ${days.map(d => {
+          const dayName = d.date.toLocaleDateString('en-US', { weekday: 'short' });
+          const dayNum = d.date.getDate();
+          return `
+            <div class="action-cal-day${d.isToday ? ' today' : ''}${d.events.length > 0 ? ' has-events' : ''}" title="${esc(dayName)} ${dayNum}: ${d.events.length} event${d.events.length === 1 ? '' : 's'}">
+              <div class="cal-day-name">${dayName}</div>
+              <div class="cal-day-num">${dayNum}</div>
+              <div class="cal-day-dots">
+                ${d.events.slice(0, 3).map(e => `<span class="cal-day-dot dot-${e.source}"></span>`).join('')}
+                ${d.events.length > 3 ? `<span class="cal-day-more">+${d.events.length - 3}</span>` : ''}
+              </div>
+            </div>
+          `;
+        }).join('')}
+      </div>
+    </div>
+  `;
+}
+
+function toggleActionCalendar(key) {
+  if (!state.actionCalendarToggles) {
+    state.actionCalendarToggles = { booked: true, estimated: true, personal: true };
+  }
+  state.actionCalendarToggles[key] = !state.actionCalendarToggles[key];
+  renderDashboard(document.getElementById('content'));
+}
+
+// ── Action lifecycle ──
+function _persistActionState() {
+  save('vi_actions_state', state.actionsState);
+}
+function _persistActionArchive() {
+  save('vi_actions_archive', state.actionsArchive);
+}
+function _persistActionsManual() {
+  save('vi_actions_manual', state.actionsManual);
+}
+function _archiveAction(key, status, actionRecord) {
+  const entry = {
+    key,
+    status,
+    resolvedAt: new Date().toISOString(),
+    resolvedBy: getActiveTeamMemberId(),
+    text: actionRecord?.text || '',
+    section: actionRecord?.section || '',
+    projectId: actionRecord?.projectId || null,
+    projectName: actionRecord?.projectName || null
+  };
+  if (!state.actionsArchive) state.actionsArchive = [];
+  state.actionsArchive.unshift(entry);
+  if (state.actionsArchive.length > 500) state.actionsArchive = state.actionsArchive.slice(0, 500);
+  _persistActionArchive();
+}
+
+// Find an action by key from current build (need it for archive context)
+function _findCurrentAction(key) {
+  const memberId = getActiveTeamMemberId();
+  const activeProjects = state.projects.filter(p => !p.archived);
+  const all = buildSalesActions(activeProjects, memberId);
+  return all.find(a => a.key === key);
+}
+
+function completeAction(key) {
+  const a = _findCurrentAction(key);
+  if (!a) return;
+  state.actionsState[key] = { status: 'done', resolvedAt: new Date().toISOString() };
+  _persistActionState();
+  // Project state change for auto actions
+  if (a.source === 'auto' && a.projectId && a.autoType) {
+    handleAutoActionCompletion(a);
+  }
+  // If manual, remove the manual entry
+  if (a.source === 'manual' || a.source === 'assigned') {
+    if (a.manualId) {
+      state.actionsManual = state.actionsManual.filter(m => m.id !== a.manualId);
+      _persistActionsManual();
+    }
+  }
+  _archiveAction(key, 'done', a);
+  showToast(`Marked done: ${a.text}`, 'success');
+  renderDashboard(document.getElementById('content'));
+}
+
+function snoozeAction(key) {
+  // Show options
+  const options = [
+    { label: '1 day',  ms: 1 * 86400000 },
+    { label: '3 days', ms: 3 * 86400000 },
+    { label: '1 week', ms: 7 * 86400000 },
+    { label: '2 weeks', ms: 14 * 86400000 }
+  ];
+  const overlay = document.createElement('div');
+  overlay.className = 'modal-overlay';
+  overlay.id = 'snooze-picker';
+  overlay.innerHTML = `
+    <div class="modal-container" style="max-width:280px">
+      <div class="modal-header">
+        <div class="modal-title">Snooze for...</div>
+        <button class="modal-close" onclick="document.getElementById('snooze-picker')?.remove()">&times;</button>
+      </div>
+      <div class="modal-body" style="display:flex;flex-direction:column;gap:6px">
+        ${options.map(o => `<button type="button" class="btn" onclick="confirmSnooze('${key}', ${o.ms})" style="padding:10px;text-align:left">${o.label}</button>`).join('')}
+      </div>
+    </div>
+  `;
+  document.body.appendChild(overlay);
+}
+
+function confirmSnooze(key, ms) {
+  document.getElementById('snooze-picker')?.remove();
+  const a = _findCurrentAction(key);
+  if (!a) return;
+  state.actionsState[key] = {
+    status: 'snoozed',
+    resolvedAt: new Date().toISOString(),
+    snoozeUntil: new Date(Date.now() + ms).toISOString()
+  };
+  _persistActionState();
+  showToast(`Snoozed: ${a.text}`, 'info');
+  renderDashboard(document.getElementById('content'));
+}
+
+function dismissAction(key) {
+  const a = _findCurrentAction(key);
+  if (!a) return;
+  state.actionsState[key] = { status: 'dismissed', resolvedAt: new Date().toISOString() };
+  _persistActionState();
+  if (a.source === 'manual' || a.source === 'assigned') {
+    if (a.manualId) {
+      state.actionsManual = state.actionsManual.filter(m => m.id !== a.manualId);
+      _persistActionsManual();
+    }
+  }
+  _archiveAction(key, 'dismissed', a);
+  showToast(`Dismissed: ${a.text}`, 'info');
+  renderDashboard(document.getElementById('content'));
+}
+
+// ── Auto-action completion handlers — apply project state changes ──
+function handleAutoActionCompletion(a) {
+  const p = state.projects.find(pr => pr.id === a.projectId);
+  if (!p) return;
+  const now = new Date().toISOString();
+  switch (a.autoType) {
+    case 'send_quote': {
+      // Mark proposal_sent milestone done, advance to proposal stage if still in lead
+      setMilestone(p.id, 'proposal', 'proposal_sent', true);
+      if (p.stage === 'lead') p.stage = 'proposal';
+      state.recentActivity[p.id] = now;
+      save('vi_projects_cache', state.projects);
+      break;
+    }
+    case 'quote_followup':
+    case 'email_followup': {
+      // Touch the project so the trigger silences for 7 more days
+      state.recentActivity[p.id] = now;
+      break;
+    }
+    case 'walkthrough': {
+      // Add walkthrough meeting log entry
+      if (typeof setMeetingLog === 'function') {
+        setMeetingLog(p.id, 'walkthrough', { notes: 'Walkthrough completed (logged from Action)', date: now });
+      }
+      state.recentActivity[p.id] = now;
+      break;
+    }
+    case 'design_kickoff': {
+      if (typeof setMeetingLog === 'function') {
+        setMeetingLog(p.id, 'design_kickoff', { notes: 'Design kickoff completed (logged from Action)', date: now });
+      }
+      state.recentActivity[p.id] = now;
+      break;
+    }
+    case 'handoff': {
+      if (typeof markContractReviewed === 'function') {
+        markContractReviewed(p.id);
+      }
+      break;
+    }
+    case 'likely': {
+      // No state change — likely flag stays until manually changed
+      break;
+    }
+  }
+}
+
+// ── Manual action dialog ──
+function openManualActionDialog(presetSection) {
+  document.getElementById('manual-action-dialog')?.remove();
+  const memberId = getActiveTeamMemberId();
+  const teamForAssign = state.team.filter(m => !m.archived);
+  const overlay = document.createElement('div');
+  overlay.id = 'manual-action-dialog';
+  overlay.className = 'modal-overlay';
+  overlay.innerHTML = `
+    <div class="modal-container" style="max-width:420px">
+      <div class="modal-header">
+        <div class="modal-title">Add Action</div>
+        <button class="modal-close" onclick="document.getElementById('manual-action-dialog')?.remove()">&times;</button>
+      </div>
+      <div class="modal-body">
+        <div style="display:flex;flex-direction:column;gap:10px">
+          <div>
+            <label class="form-label">Category</label>
+            <select id="ma-section" class="form-input">
+              <option value="quote"${presetSection === 'quote' ? ' selected' : ''}>Quote</option>
+              <option value="email"${presetSection === 'email' ? ' selected' : ''}>Email</option>
+              <option value="meeting"${presetSection === 'meeting' ? ' selected' : ''}>Meeting</option>
+              <option value="other"${presetSection === 'other' || !['quote','email','meeting'].includes(presetSection) ? ' selected' : ''}>Other</option>
+            </select>
+          </div>
+          <div>
+            <label class="form-label">Text</label>
+            <input type="text" id="ma-text" class="form-input" placeholder="What needs to happen?" autofocus>
+          </div>
+          <div>
+            <label class="form-label">Project (optional)</label>
+            <button type="button" id="ma-project-btn" class="form-input" onclick="pickProjectForManualAction()" style="text-align:left;cursor:pointer">
+              <span id="ma-project-display" style="color:#6E7681">No project</span>
+            </button>
+            <input type="hidden" id="ma-project-id" value="">
+          </div>
+          <div>
+            <label class="form-label">Assign to (optional)</label>
+            <select id="ma-assignee" class="form-input">
+              <option value="">Just me</option>
+              ${teamForAssign.map(m => `<option value="${m.id}">${esc(m.name)}</option>`).join('')}
+            </select>
+          </div>
+        </div>
+        <div style="display:flex;gap:8px;margin-top:14px">
+          <button type="button" class="btn" onclick="document.getElementById('manual-action-dialog')?.remove()" style="flex:1">Cancel</button>
+          <button type="button" class="btn-primary" onclick="saveManualAction()" style="flex:2">Add</button>
+        </div>
+      </div>
+    </div>
+  `;
+  document.body.appendChild(overlay);
+}
+
+function pickProjectForManualAction() {
+  quickActionProjectPicker('Link to project', (id) => {
+    const p = state.projects.find(pr => pr.id === id);
+    if (!p) return;
+    document.getElementById('ma-project-id').value = String(id);
+    const disp = document.getElementById('ma-project-display');
+    if (disp) {
+      disp.textContent = p.name;
+      disp.style.color = '#E6EDF3';
+    }
+  });
+}
+
+function saveManualAction() {
+  const section = document.getElementById('ma-section').value;
+  const text = document.getElementById('ma-text').value.trim();
+  const projectIdRaw = document.getElementById('ma-project-id').value;
+  const projectId = projectIdRaw ? parseInt(projectIdRaw, 10) : null;
+  const assigneeId = document.getElementById('ma-assignee').value || null;
+  if (!text) {
+    showToast('Action text required', 'warn');
+    return;
+  }
+  const entry = {
+    id: Date.now(),
+    section,
+    text,
+    projectId,
+    assigneeId: assigneeId ? parseInt(assigneeId, 10) : null,
+    createdBy: getActiveTeamMemberId(),
+    createdAt: new Date().toISOString()
+  };
+  if (!state.actionsManual) state.actionsManual = [];
+  state.actionsManual.push(entry);
+  _persistActionsManual();
+  document.getElementById('manual-action-dialog')?.remove();
+  showToast('Action added', 'success');
+  renderDashboard(document.getElementById('content'));
+}
+
+// ── Archive dialog ──
+function openActionsArchiveDialog() {
+  document.getElementById('actions-archive-dialog')?.remove();
+  const items = state.actionsArchive || [];
+  const overlay = document.createElement('div');
+  overlay.id = 'actions-archive-dialog';
+  overlay.className = 'modal-overlay';
+  overlay.innerHTML = `
+    <div class="modal-container" style="max-width:520px;max-height:80vh;display:flex;flex-direction:column">
+      <div class="modal-header">
+        <div>
+          <div class="modal-title">Action Archive</div>
+          <div class="modal-sub">${items.length} resolved item${items.length === 1 ? '' : 's'}</div>
+        </div>
+        <button class="modal-close" onclick="document.getElementById('actions-archive-dialog')?.remove()">&times;</button>
+      </div>
+      <div class="modal-body" style="overflow-y:auto;flex:1;min-height:0">
+        ${items.length === 0
+          ? '<div style="font-size:12px;color:#6E7681;text-align:center;padding:20px;font-style:italic">No archived actions yet</div>'
+          : items.slice(0, 100).map(it => `
+            <div style="display:flex;align-items:flex-start;gap:10px;padding:8px 10px;background:#0D1117;border:1px solid #1C2333;border-radius:6px;margin-bottom:4px">
+              <div style="width:20px;height:20px;flex-shrink:0;display:flex;align-items:center;justify-content:center">
+                ${it.status === 'done'
+                  ? '<svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M2 7.5l3.5 3.5L12 4" stroke="#3FB950" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>'
+                  : '<svg width="12" height="12" viewBox="0 0 14 14" fill="none"><path d="M3 3l8 8M11 3l-8 8" stroke="#6E7681" stroke-width="1.6" stroke-linecap="round"/></svg>'
+                }
+              </div>
+              <div style="flex:1;min-width:0">
+                <div style="font-size:12px;color:${it.status === 'done' ? '#C9D1D9' : '#8B949E'};text-decoration:${it.status === 'dismissed' ? 'line-through' : 'none'}">${esc(it.text)}</div>
+                <div style="font-size:10px;color:#6E7681;margin-top:2px">${it.status === 'done' ? 'Done' : 'Dismissed'} &middot; ${fmtDate(it.resolvedAt)}${it.projectName ? ' &middot; ' + esc(it.projectName) : ''}</div>
+              </div>
+            </div>
+          `).join('')
+        }
+      </div>
+    </div>
+  `;
+  document.body.appendChild(overlay);
 }
 
 // ── Sales Department Kanban (4 columns) ──
@@ -7725,14 +8421,23 @@ function getDashboardContextChips() {
   const mode = state.dashboardMode || 'mine';
 
   if (mode === 'sales_mgmt') {
+    const subtab = state.salesDashTab || 'action';
+    if (subtab === 'pipeline') {
+      return [
+        { key: 'lead',     label: 'Lead',     action: 'scrollSection', arg: 'lead' },
+        { key: 'proposal', label: 'Proposal', action: 'scrollSection', arg: 'proposal' },
+        { key: 'sent',     label: 'Sent',     action: 'scrollSection', arg: 'sent' },
+        { key: 'contract', label: 'Contract', action: 'scrollSection', arg: 'contract' }
+      ];
+    }
+    // Action tab — chips for each section
     return [
-      { key: 'metrics',   label: 'Top',       action: 'scrollSection', arg: 'metrics' },
-      { key: 'lead',      label: 'Lead',      action: 'scrollSection', arg: 'lead' },
-      { key: 'proposal',  label: 'Proposal',  action: 'scrollSection', arg: 'proposal' },
-      { key: 'sent',      label: 'Sent',      action: 'scrollSection', arg: 'sent' },
-      { key: 'contract',  label: 'Contract',  action: 'scrollSection', arg: 'contract' },
-      { key: 'stalled',   label: 'Stalled',   action: 'scrollSection', arg: 'stalled' },
-      { key: 'by-lead',   label: 'By Lead',   action: 'scrollSection', arg: 'by-lead' }
+      { key: 'quote',   label: 'Quotes',   action: 'scrollSection', arg: 'quote' },
+      { key: 'email',   label: 'Emails',   action: 'scrollSection', arg: 'email' },
+      { key: 'meeting', label: 'Meetings', action: 'scrollSection', arg: 'meeting' },
+      { key: 'likely',  label: 'Likely',   action: 'scrollSection', arg: 'likely' },
+      { key: 'notify',  label: 'Notify',   action: 'scrollSection', arg: 'notify' },
+      { key: 'other',   label: 'Other',    action: 'scrollSection', arg: 'other' }
     ];
   }
   if (mode === 'design_mgmt') {
@@ -7794,24 +8499,34 @@ function getDashboardContextChips() {
 // Scroll to an element by data-context-section attribute, accounting for context nav height
 function scrollToContextSection(key) {
   const target = document.querySelector(`[data-context-section="${key}"]`);
+  // Find the actual scrolling container — could be window OR #content depending on layout
+  const content = document.getElementById('content');
+  const scroller = (content && content.scrollHeight > content.clientHeight) ? content : window;
   if (!target) {
-    // Fall back to top if section not on page yet
-    window.scrollTo({ top: 0, behavior: 'smooth' });
+    if (scroller === window) window.scrollTo({ top: 0, behavior: 'smooth' });
+    else scroller.scrollTo({ top: 0, behavior: 'smooth' });
     return;
   }
-  const ctxNav = document.getElementById('context-nav');
-  const bottomNav = document.getElementById('bottom-nav');
-  const ctxH = (ctxNav?.offsetHeight || 0);
-  const bnavH = (bottomNav?.offsetHeight || 0);
-  const offset = 16; // breathing room
-  const rect = target.getBoundingClientRect();
-  const top = window.scrollY + rect.top - offset - 4;
-  window.scrollTo({ top, behavior: 'smooth' });
+  const offset = 16;
+  if (scroller === window) {
+    const rect = target.getBoundingClientRect();
+    const top = window.scrollY + rect.top - offset - 4;
+    window.scrollTo({ top, behavior: 'smooth' });
+  } else {
+    // For container scrolling, compute target's offsetTop within the scroller
+    const containerRect = scroller.getBoundingClientRect();
+    const targetRect = target.getBoundingClientRect();
+    const top = scroller.scrollTop + (targetRect.top - containerRect.top) - offset;
+    scroller.scrollTo({ top, behavior: 'smooth' });
+  }
 }
 
 // Just scroll to top after switching project tabs so the user sees the new content
 function scrollContextNavTo(tabKey) {
-  window.scrollTo({ top: 0, behavior: 'smooth' });
+  const content = document.getElementById('content');
+  const scroller = (content && content.scrollHeight > content.clientHeight) ? content : window;
+  if (scroller === window) window.scrollTo({ top: 0, behavior: 'smooth' });
+  else scroller.scrollTo({ top: 0, behavior: 'smooth' });
 }
 
 // Update fade indicator on the context nav (so user knows there's more)
