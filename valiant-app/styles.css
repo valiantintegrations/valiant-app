@@ -2527,3 +2527,93 @@ td.today .cal-day-num {
   #right-panel { display: none; }
   #main { padding-right: 0; }
 }
+
+/* ── Project Anchor Flash Highlight ── */
+@keyframes anchor-flash {
+  0%   { box-shadow: 0 0 0 2px transparent; }
+  20%  { box-shadow: 0 0 0 2px #58A6FF, 0 0 14px rgba(88, 166, 255, 0.4); }
+  100% { box-shadow: 0 0 0 2px transparent; }
+}
+.project-anchor-flash {
+  animation: anchor-flash 1.6s ease-out;
+  border-radius: 8px;
+}
+
+/* ── Project Mobilization Dialog ── */
+.mob-row {
+  background: #0D1117;
+  border: 1px solid #1C2333;
+  border-radius: 8px;
+  padding: 10px 12px;
+  margin-bottom: 6px;
+}
+.mob-row.mob-done { border-color: #1F6E2E; background: #0A130C; }
+.mob-row-top {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.mob-dot {
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+.mob-text { flex: 1; min-width: 0; }
+.mob-label {
+  font-size: 13px;
+  color: #E6EDF3;
+  font-weight: 500;
+}
+.mob-row.mob-done .mob-label { color: #8B949E; text-decoration: line-through; }
+.mob-hint {
+  font-size: 11px;
+  color: #6E7681;
+  margin-top: 1px;
+}
+.mob-actions {
+  display: flex;
+  gap: 4px;
+  flex-shrink: 0;
+  flex-wrap: wrap;
+}
+.mob-detail {
+  font-size: 11px;
+  color: #C9D1D9;
+  margin-top: 6px;
+  padding-left: 22px;
+}
+.mob-inline-editor {
+  margin-top: 10px;
+  padding: 10px 12px;
+  background: #161B22;
+  border: 1px solid #1C2333;
+  border-radius: 6px;
+}
+.mob-tag-chip {
+  flex-shrink: 0;
+  padding: 5px 10px;
+  font-size: 11px;
+  font-weight: 500;
+  border-radius: 4px;
+  background: #0D1117;
+  border: 1px solid #30363D;
+  color: #8B949E;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+  font-family: inherit;
+  transition: all 0.12s;
+}
+.mob-tag-chip:hover { border-color: #58A6FF; color: #C9D1D9; }
+.mob-tag-chip.active {
+  background: #1565C0;
+  border-color: #1976D2;
+  color: #fff;
+  font-weight: 600;
+}
+
+/* Flag-badge tappable hover state */
+.flag-badge-tap:hover {
+  background: #2A1D08 !important;
+  border-color: #D29922 !important;
+}
