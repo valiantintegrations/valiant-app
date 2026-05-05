@@ -1770,13 +1770,108 @@ function toggleRoleAssignment(projectId, role, memberId) {
 }
 
 function setRoleLead(projectId, role, memberId) {
+  // Find current lead and count affected manual actions before prompting
   const a = getProjectAssignment(projectId);
   const list = a[role] || [];
+  const currentLead = list.find(x => x.lead);
+  const currentLeadId = currentLead?.id || null;
+
+  // If no change, just return
+  if (currentLeadId === memberId) return;
+
+  // Count manual actions on this project assigned to current lead
+  const newLeadName = getTeamMember(memberId)?.name || 'this person';
+  const oldLeadName = currentLeadId ? (getTeamMember(currentLeadId)?.name || 'previous lead') : null;
+  const affectedManual = (state.actionsManual || []).filter(m =>
+    m.projectId === projectId &&
+    currentLeadId &&
+    m.assigneeId === currentLeadId
+  );
+
+  // Auto-actions auto-cascade because they're computed live from the lead.
+  // For manual actions, prompt the user.
+  const projectName = state.projects.find(p => p.id === projectId)?.name || 'this project';
+  const proceed = function(reassignManual) {
+    list.forEach(x => x.lead = (x.id === memberId));
+    setProjectAssignment(projectId, role, list);
+    if (reassignManual && affectedManual.length > 0) {
+      affectedManual.forEach(m => { m.assigneeId = memberId; });
+      _persistActionsManual();
+    }
+    if (state.currentPage === 'project' && state.currentProject?.id === projectId) {
+      renderCurrentPage();
+    } else {
+      renderCurrentPage();
+    }
+    if (typeof showToast === 'function') {
+      const note = affectedManual.length > 0 && reassignManual
+        ? ` &middot; ${affectedManual.length} manual action${affectedManual.length === 1 ? '' : 's'} reassigned`
+        : '';
+      showToast(`${role} lead set to ${newLeadName}${note}`, 'success');
+    }
+  };
+
+  if (oldLeadName && affectedManual.length > 0) {
+    // Prompt with checkbox
+    document.getElementById('lead-cascade-dialog')?.remove();
+    const overlay = document.createElement('div');
+    overlay.id = 'lead-cascade-dialog';
+    overlay.className = 'modal-overlay';
+    overlay.innerHTML = `
+      <div class="modal-container" style="max-width:420px">
+        <div class="modal-header">
+          <div class="modal-title">Change ${esc(role)} lead?</div>
+          <button class="modal-close" onclick="document.getElementById('lead-cascade-dialog')?.remove()">&times;</button>
+        </div>
+        <div class="modal-body">
+          <div style="font-size:13px;color:#C9D1D9;line-height:1.5;margin-bottom:14px">
+            ${esc(role.charAt(0).toUpperCase() + role.slice(1))} lead on <strong>${esc(projectName)}</strong> changes from <strong>${esc(oldLeadName)}</strong> to <strong>${esc(newLeadName)}</strong>.
+          </div>
+          <div style="background:#0D1117;border:1px solid #1C2333;border-radius:6px;padding:10px 12px;margin-bottom:14px">
+            <div style="font-size:11px;color:#8B949E;margin-bottom:6px">Auto-derived actions reassign automatically.</div>
+            <label style="display:flex;align-items:flex-start;gap:8px;cursor:pointer;font-size:12px;color:#E6EDF3">
+              <input type="checkbox" id="cascade-manual" checked style="margin-top:2px">
+              <span>Also reassign <strong>${affectedManual.length} manual action${affectedManual.length === 1 ? '' : 's'}</strong> previously assigned to ${esc(oldLeadName)}</span>
+            </label>
+          </div>
+          <div style="display:flex;gap:8px">
+            <button type="button" class="btn" onclick="document.getElementById('lead-cascade-dialog')?.remove()" style="flex:1">Cancel</button>
+            <button type="button" class="btn-primary" onclick="_confirmLeadChange(${projectId}, '${role}', ${memberId})" style="flex:2">Change Lead</button>
+          </div>
+        </div>
+      </div>
+    `;
+    document.body.appendChild(overlay);
+  } else {
+    // No manual actions affected — just proceed
+    proceed(false);
+  }
+}
+
+function _confirmLeadChange(projectId, role, memberId) {
+  const cascade = document.getElementById('cascade-manual')?.checked || false;
+  const a = getProjectAssignment(projectId);
+  const list = a[role] || [];
+  const currentLead = list.find(x => x.lead);
+  const currentLeadId = currentLead?.id || null;
+  const affectedManual = (state.actionsManual || []).filter(m =>
+    m.projectId === projectId &&
+    currentLeadId &&
+    m.assigneeId === currentLeadId
+  );
   list.forEach(x => x.lead = (x.id === memberId));
   setProjectAssignment(projectId, role, list);
-  if (state.currentPage === 'project' && state.currentProject?.id === projectId) {
-    renderCurrentPage();
+  if (cascade && affectedManual.length > 0) {
+    affectedManual.forEach(m => { m.assigneeId = memberId; });
+    _persistActionsManual();
   }
+  document.getElementById('lead-cascade-dialog')?.remove();
+  const newLeadName = getTeamMember(memberId)?.name || 'this person';
+  const note = cascade && affectedManual.length > 0
+    ? ` · ${affectedManual.length} manual action${affectedManual.length === 1 ? '' : 's'} reassigned`
+    : '';
+  if (typeof showToast === 'function') showToast(`${role} lead set to ${newLeadName}${note}`, 'success');
+  renderCurrentPage();
 }
 
 // ── Legacy compatibility — used by old renderers until migrated ──
@@ -2967,9 +3062,23 @@ function renderMyWorkDashboard(memberId, activeProjects, myAssignments, activeMe
     `;
   }).join('');
 
+  // Build "My Actions" — sales-relevant actions assigned to this user
+  const myActions = buildSalesActions(activeProjects, memberId, 'mine');
+  const myActionsHTML = myActions.length === 0 ? '' : `
+    <div class="dashboard-card" style="margin-bottom:16px">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px">
+        <div class="dashboard-card-title" style="margin:0;color:#58A6FF">Actions Assigned to Me &middot; ${myActions.length}</div>
+        <button type="button" onclick="setDashboardMode('sales_mgmt');setSalesDashTab('action')" class="btn btn-sm" style="font-size:11px;padding:4px 10px">View all in Sales</button>
+      </div>
+      ${myActions.slice(0, 8).map(a => renderActionRow(a)).join('')}
+      ${myActions.length > 8 ? `<div style="text-align:center;font-size:11px;color:#8B949E;margin-top:8px">+ ${myActions.length - 8} more</div>` : ''}
+    </div>
+  `;
+
   return `
     ${closeoutBanner}
     ${summaryRow}
+    ${myActionsHTML}
     ${sections}
   `;
 }
@@ -7601,11 +7710,23 @@ const ACTION_SECTIONS = [
 // ── Action engine ──
 // Each action has: { key, section, source, projectId, projectName, text, ageDays, complete? }
 // source: 'auto' | 'manual' | 'assigned'
-function buildSalesActions(activeProjects, currentMemberId) {
+// Build sales actions list. Returns auto + manual actions enriched with assigneeId.
+// `mode` controls filtering:
+//   'department' — return ALL sales-relevant actions (used by Sales Dept dashboard)
+//   'mine' — return only actions assigned to currentMemberId (used by My Work)
+function buildSalesActions(activeProjects, currentMemberId, mode) {
+  if (!mode) mode = 'department';
   const auto = [];
   const SEVEN_DAYS = 7 * 86400000;
   const FOURTEEN_DAYS = 14 * 86400000;
   const now = Date.now();
+
+  // Helper: find role lead's id on a project, or null
+  function getRoleLeadId(projectId, role) {
+    const arr = (getProjectAssignment(projectId)[role] || []);
+    const lead = arr.find(x => x.lead);
+    return lead ? lead.id : null;
+  }
 
   activeProjects.forEach(p => {
     const lastActivity = state.recentActivity?.[p.id];
@@ -7614,6 +7735,8 @@ function buildSalesActions(activeProjects, currentMemberId) {
     const proposalPhase = PHASES.find(ph => ph.key === 'proposal');
     const sentMilestone = proposalPhase?.milestones.find(m => m.key === 'proposal_sent');
     const proposalSent = sentMilestone ? milestoneProgress(p, proposalPhase, sentMilestone) >= 1 : false;
+    const salesLead = getRoleLeadId(p.id, 'sales');
+    const designLead = getRoleLeadId(p.id, 'design');
 
     // Quotes — Lead with no proposal
     if (p.stage === 'lead') {
@@ -7625,7 +7748,9 @@ function buildSalesActions(activeProjects, currentMemberId) {
         projectName: p.name,
         clientName: p.client_name,
         text: `Send quote for ${p.name}`,
-        autoType: 'send_quote'
+        autoType: 'send_quote',
+        roleForLead: 'sales',
+        assigneeId: salesLead
       });
     }
 
@@ -7640,7 +7765,9 @@ function buildSalesActions(activeProjects, currentMemberId) {
         clientName: p.client_name,
         text: `Follow up on quote for ${p.name}`,
         ageDays: Math.floor(daysSinceActivity),
-        autoType: 'quote_followup'
+        autoType: 'quote_followup',
+        roleForLead: 'sales',
+        assigneeId: salesLead
       });
     }
 
@@ -7655,7 +7782,9 @@ function buildSalesActions(activeProjects, currentMemberId) {
         clientName: p.client_name,
         text: `Email ${p.client_name || 'client'} re: ${p.name}`,
         ageDays: Math.floor(daysSinceActivity),
-        autoType: 'email_followup'
+        autoType: 'email_followup',
+        roleForLead: 'sales',
+        assigneeId: salesLead
       });
     }
 
@@ -7671,7 +7800,9 @@ function buildSalesActions(activeProjects, currentMemberId) {
         clientName: p.client_name,
         text: `Schedule walkthrough for ${p.name}`,
         ageDays: Math.floor((now - lastActivityMs) / 86400000),
-        autoType: 'walkthrough'
+        autoType: 'walkthrough',
+        roleForLead: 'sales',
+        assigneeId: salesLead
       });
     }
 
@@ -7686,7 +7817,9 @@ function buildSalesActions(activeProjects, currentMemberId) {
         projectName: p.name,
         clientName: p.client_name,
         text: `Schedule design kickoff for ${p.name}`,
-        autoType: 'design_kickoff'
+        autoType: 'design_kickoff',
+        roleForLead: 'design',
+        assigneeId: designLead
       });
     }
 
@@ -7701,7 +7834,9 @@ function buildSalesActions(activeProjects, currentMemberId) {
         clientName: p.client_name,
         text: `Hand off ${p.name} to Design & Install`,
         priority: 'high',
-        autoType: 'handoff'
+        autoType: 'handoff',
+        roleForLead: 'sales',
+        assigneeId: salesLead
       });
     }
 
@@ -7716,36 +7851,40 @@ function buildSalesActions(activeProjects, currentMemberId) {
         clientName: p.client_name,
         text: `${p.name} — keep warm`,
         amount: p.total,
-        autoType: 'likely'
+        autoType: 'likely',
+        roleForLead: 'sales',
+        assigneeId: salesLead
       });
     }
   });
 
-  // Pull manual actions
-  const manual = (state.actionsManual || []).map(a => ({
+  // Apply assignee override from actionsState (if user re-assigned an auto-action via Edit)
+  const stateMap = state.actionsState || {};
+  auto.forEach(a => {
+    const override = stateMap[a.key]?.assigneeOverride;
+    if (override !== undefined) a.assigneeId = override;
+  });
+
+  // Pull manual actions (sales-relevant only — section in quote/email/meeting/likely/other)
+  const SALES_SECTIONS = new Set(['quote','email','meeting','likely','other','notify']);
+  const manual = (state.actionsManual || []).filter(a => SALES_SECTIONS.has(a.section || 'other')).map(a => ({
     key: `manual_${a.id}`,
     section: a.section || 'other',
-    source: a.assigneeId && a.assigneeId !== a.createdBy ? 'assigned' : 'manual',
+    source: a.assigneeId && a.createdBy && a.assigneeId !== a.createdBy ? 'assigned' : 'manual',
     projectId: a.projectId || null,
     projectName: a.projectId ? state.projects.find(p => p.id === a.projectId)?.name : null,
     clientName: a.projectId ? state.projects.find(p => p.id === a.projectId)?.client_name : null,
     text: a.text,
     createdBy: a.createdBy,
-    assigneeId: a.assigneeId,
+    assigneeId: a.assigneeId || null,
     manualId: a.id
   }));
 
-  // Filter manual to current user (created by me OR assigned to me)
-  const myManual = manual.filter(a => {
-    if (a.assigneeId) return a.assigneeId === currentMemberId;
-    return a.createdBy === currentMemberId;
-  });
-
   // ── Dedup pass ──
-  // Combine, then for each (section, projectId) pair: keep best by precedence (manual > assigned > auto).
+  // For each (section, projectId) pair: keep best by precedence (manual > assigned > auto).
   // Standalone manual (no projectId) always shown.
-  const all = [...myManual, ...auto];
-  const seen = new Map(); // (section + projectId) → entry
+  const all = [...manual, ...auto];
+  const seen = new Map();
   const standalone = [];
   const sourceRank = { manual: 3, assigned: 2, auto: 1 };
 
@@ -7764,7 +7903,6 @@ function buildSalesActions(activeProjects, currentMemberId) {
   let combined = [...standalone, ...seen.values()];
 
   // Filter out items in dismissed/snoozed state
-  const stateMap = state.actionsState || {};
   combined = combined.filter(a => {
     const s = stateMap[a.key];
     if (!s) return true;
@@ -7773,19 +7911,64 @@ function buildSalesActions(activeProjects, currentMemberId) {
     return true;
   });
 
+  // Filter by mode
+  if (mode === 'mine') {
+    combined = combined.filter(a => a.assigneeId === currentMemberId);
+  }
+  // 'department' mode returns everything (including unassigned)
+
   return combined;
 }
 
-// Render Action tab
+// Build a list of "Needs Assignment" projects — projects where some auto-actions
+// have no assignee because no role lead is designated for the responsible role.
+function buildNeedsAssignment(activeProjects) {
+  const needs = []; // { projectId, projectName, role, count, sections }
+  const byProject = {};
+
+  // Re-derive auto-actions to find unassigned ones
+  const allActions = buildSalesActions(activeProjects, null, 'department');
+  allActions.forEach(a => {
+    if (a.source !== 'auto') return;
+    if (a.assigneeId) return; // assigned, skip
+    const role = a.roleForLead;
+    if (!role) return;
+    const key = `${a.projectId}_${role}`;
+    if (!byProject[key]) {
+      const p = state.projects.find(x => x.id === a.projectId);
+      byProject[key] = {
+        projectId: a.projectId,
+        projectName: p?.name || 'Unknown',
+        clientName: p?.client_name || '',
+        role,
+        sections: new Set(),
+        count: 0
+      };
+    }
+    byProject[key].sections.add(a.section);
+    byProject[key].count++;
+  });
+
+  return Object.values(byProject).map(x => ({ ...x, sections: [...x.sections] }));
+}
+
+// Render Action tab — Sales Dept dashboard shows ALL department actions
 function renderSalesActionTab(activeProjects) {
   const memberId = getActiveTeamMemberId();
-  const actions = buildSalesActions(activeProjects, memberId);
+  // Sales Dept dashboard = department mode (all actions across team)
+  const actions = buildSalesActions(activeProjects, memberId, 'department');
   const bySec = {};
   ACTION_SECTIONS.forEach(s => bySec[s.key] = []);
   actions.forEach(a => {
     if (bySec[a.section]) bySec[a.section].push(a);
     else bySec.other.push(a);
   });
+
+  // Needs Assignment — only visible to users who can assign teams
+  const canAssign = currentUserHasPermission('assign_team.sales') ||
+                    currentUserHasPermission('assign_team.design') ||
+                    currentUserHasPermission('admin.system');
+  const needsAssignment = canAssign ? buildNeedsAssignment(activeProjects) : [];
 
   // Calendar widget content
   const calendarHTML = renderActionCalendarWidget();
@@ -7816,6 +7999,35 @@ function renderSalesActionTab(activeProjects) {
   return `
     <div class="action-tab-wrap">
       ${calendarHTML}
+      ${needsAssignment.length > 0 ? `
+        <div class="action-section" data-context-section="needs-assignment" style="border-color:#D29922">
+          <div class="action-section-header">
+            <div style="display:flex;align-items:center;gap:8px">
+              <div style="width:3px;height:14px;background:#D29922;border-radius:1px"></div>
+              <span class="action-section-name" style="color:#D29922">Needs Assignment</span>
+              <span class="action-section-count">${needsAssignment.length}</span>
+            </div>
+          </div>
+          <div style="font-size:11px;color:#8B949E;margin-bottom:8px">Projects without a designated lead — actions can't auto-assign until a lead is set.</div>
+          ${needsAssignment.map(na => `
+            <div class="action-row" style="border-color:#D2992233">
+              <div class="action-row-main" onclick="openProject(${na.projectId})">
+                <div class="action-row-text">${esc(na.projectName)} &middot; needs ${esc(na.role)} lead</div>
+                <div class="action-row-meta">
+                  ${na.clientName ? `<span>${esc(na.clientName)}</span>` : ''}
+                  <span>${na.count} pending action${na.count === 1 ? '' : 's'}</span>
+                  <span class="action-source src-auto">Unassigned</span>
+                </div>
+              </div>
+              <div class="action-row-actions">
+                <button type="button" class="action-btn action-btn-done" onclick="openProject(${na.projectId});event.stopPropagation()" title="Open project to assign">
+                  <svg width="13" height="13" viewBox="0 0 14 14" fill="none"><path d="M5 2l5 5-5 5" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>
+                </button>
+              </div>
+            </div>
+          `).join('')}
+        </div>
+      ` : ''}
       ${sectionsHTML}
       <div style="text-align:center;margin-top:18px">
         <button type="button" onclick="openActionsArchiveDialog()" class="btn btn-sm" style="font-size:11px;color:#8B949E">View archive</button>
@@ -7840,6 +8052,11 @@ function renderActionRow(a) {
   const userText = state.actionsState?.[a.key]?.userText;
   const displayText = userText || a.text;
   const wasEdited = !!userText && userText !== a.text;
+  // Assignee badge
+  const assignee = a.assigneeId ? getTeamMember(a.assigneeId) : null;
+  const assigneeBadge = assignee
+    ? `<span class="action-assignee" title="Assigned to ${esc(assignee.name)}"><span class="action-assignee-dot" style="background:${assignee.color || '#1565C0'}">${esc(getInitials(assignee.name))}</span>${esc(assignee.name.split(' ')[0])}</span>`
+    : `<span class="action-assignee action-assignee-none">Unassigned</span>`;
   return `
     <div class="action-row${hi}">
       <div class="action-row-main" ${a.projectId ? `onclick="openProject(${a.projectId})"` : ''}>
@@ -7848,6 +8065,7 @@ function renderActionRow(a) {
           ${a.clientName ? `<span>${esc(a.clientName)}</span>` : ''}
           ${ageStr ? `<span>${ageStr}</span>` : ''}
           ${amountStr ? `<span style="color:#3FB950">${amountStr}</span>` : ''}
+          ${assigneeBadge}
           <span class="action-source ${sourceClass}">${sourceLabel}</span>
         </div>
       </div>
@@ -8136,7 +8354,7 @@ function openManualActionDialog(presetSection) {
               <option value="quote"${presetSection === 'quote' ? ' selected' : ''}>Quote</option>
               <option value="email"${presetSection === 'email' ? ' selected' : ''}>Email</option>
               <option value="meeting"${presetSection === 'meeting' ? ' selected' : ''}>Meeting</option>
-              <option value="other"${presetSection === 'other' || !['quote','email','meeting'].includes(presetSection) ? ' selected' : ''}>Other</option>
+              <option value="other"${presetSection === 'other' || !['quote','email','meeting'].includes(presetSection) ? ' selected' : ''}>Misc Tasks</option>
             </select>
           </div>
           <div>
@@ -8151,10 +8369,9 @@ function openManualActionDialog(presetSection) {
             <input type="hidden" id="ma-project-id" value="">
           </div>
           <div>
-            <label class="form-label">Assign to (optional)</label>
+            <label class="form-label">Assigned to</label>
             <select id="ma-assignee" class="form-input">
-              <option value="">Just me</option>
-              ${teamForAssign.map(m => `<option value="${m.id}">${esc(m.name)}</option>`).join('')}
+              ${teamForAssign.map(m => `<option value="${m.id}"${m.id === memberId ? ' selected' : ''}>${esc(m.name)}${m.id === memberId ? ' (me)' : ''}</option>`).join('')}
             </select>
           </div>
         </div>
@@ -10719,7 +10936,12 @@ function editActionText(key) {
   const a = _findCurrentAction(key);
   if (!a) return;
   const currentText = state.actionsState?.[key]?.userText || a.text;
-  // For manual actions, edit the manualEntry directly so it persists in the list
+  const currentAssignee = a.assigneeId || null;
+  const teamForAssign = state.team.filter(m => !m.archived);
+  const stateOverride = state.actionsState?.[key];
+  const hasUserText = !!stateOverride?.userText;
+  const hasAssigneeOverride = stateOverride && 'assigneeOverride' in stateOverride;
+
   document.getElementById('edit-action-dialog')?.remove();
   const overlay = document.createElement('div');
   overlay.className = 'modal-overlay';
@@ -10729,14 +10951,27 @@ function editActionText(key) {
       <div class="modal-header">
         <div>
           <div class="modal-title">Edit action</div>
-          <div class="modal-sub">${a.source === 'auto' ? 'Auto-derived — text only, source and category preserved' : 'Manual action'}</div>
+          <div class="modal-sub">${a.source === 'auto' ? 'Auto-derived — edits override defaults' : 'Manual action'}</div>
         </div>
         <button class="modal-close" onclick="document.getElementById('edit-action-dialog')?.remove()">&times;</button>
       </div>
       <div class="modal-body">
-        <textarea id="edit-action-text" class="form-input" rows="3" style="width:100%;resize:vertical;font-family:inherit">${esc(currentText)}</textarea>
+        <div style="display:flex;flex-direction:column;gap:10px">
+          <div>
+            <label class="form-label">Action text</label>
+            <textarea id="edit-action-text" class="form-input" rows="3" style="width:100%;resize:vertical;font-family:inherit">${esc(currentText)}</textarea>
+          </div>
+          <div>
+            <label class="form-label">Assigned to</label>
+            <select id="edit-action-assignee" class="form-input">
+              <option value="">Unassigned</option>
+              ${teamForAssign.map(m => `<option value="${m.id}"${m.id === currentAssignee ? ' selected' : ''}>${esc(m.name)}${m.id === getActiveTeamMemberId() ? ' (me)' : ''}</option>`).join('')}
+            </select>
+            ${a.source === 'auto' && a.roleForLead ? `<div style="font-size:10px;color:#6E7681;margin-top:4px">Default: project's ${a.roleForLead} lead${hasAssigneeOverride ? ' &middot; <span style="color:#D29922">overridden</span>' : ''}</div>` : ''}
+          </div>
+        </div>
         <div style="display:flex;gap:8px;margin-top:14px">
-          ${state.actionsState?.[key]?.userText ? `<button type="button" class="btn" onclick="resetActionText('${key}')" style="font-size:12px">Reset to default</button>` : ''}
+          ${(hasUserText || hasAssigneeOverride) ? `<button type="button" class="btn" onclick="resetActionText('${key}')" style="font-size:12px">Reset to default</button>` : ''}
           <div style="flex:1"></div>
           <button type="button" class="btn" onclick="document.getElementById('edit-action-dialog')?.remove()">Cancel</button>
           <button type="button" class="btn-primary" onclick="saveActionText('${key}')">Save</button>
@@ -10750,25 +10985,35 @@ function editActionText(key) {
 
 function saveActionText(key) {
   const ta = document.getElementById('edit-action-text');
+  const sel = document.getElementById('edit-action-assignee');
   if (!ta) return;
   const newText = ta.value.trim();
+  const newAssignee = sel?.value ? parseInt(sel.value, 10) : null;
   if (!newText) {
     showToast('Action text cannot be empty', 'error');
     return;
   }
   const a = _findCurrentAction(key);
   if (!a) return;
-  // For manual/assigned: edit the manualEntry text directly
+  // For manual/assigned: edit the manualEntry text + assignee directly
   if ((a.source === 'manual' || a.source === 'assigned') && a.manualId) {
     const m = state.actionsManual.find(x => x.id === a.manualId);
     if (m) {
       m.text = newText;
+      m.assigneeId = newAssignee;
       _persistActionsManual();
     }
   } else {
-    // For auto: store as userText override (key preserved for propagation)
+    // For auto: store as userText override + assigneeOverride (key preserved for propagation)
     if (!state.actionsState[key]) state.actionsState[key] = {};
-    state.actionsState[key].userText = newText;
+    if (newText !== a.text) {
+      state.actionsState[key].userText = newText;
+    } else {
+      delete state.actionsState[key].userText;
+    }
+    // Only store assignee override if it differs from the role-derived default
+    // We track it explicitly so user can clear back to default later
+    state.actionsState[key].assigneeOverride = newAssignee;
     _persistActionState();
   }
   document.getElementById('edit-action-dialog')?.remove();
@@ -10779,12 +11024,13 @@ function saveActionText(key) {
 function resetActionText(key) {
   if (!state.actionsState[key]) return;
   delete state.actionsState[key].userText;
-  // If state object is now empty, clean up
+  delete state.actionsState[key].assigneeOverride;
+  // If state object is now empty (no status etc.), clean up
   if (Object.keys(state.actionsState[key]).length === 0) {
     delete state.actionsState[key];
   }
   _persistActionState();
   document.getElementById('edit-action-dialog')?.remove();
-  showToast('Reset to default', 'info');
+  showToast('Reset to defaults', 'info');
   renderDashboard(document.getElementById('content'));
 }
