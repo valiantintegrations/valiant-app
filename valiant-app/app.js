@@ -1500,6 +1500,7 @@ function navigate(page) {
   });
   const titles = {
     dashboard: 'Dashboard', calendar: 'Calendar', projects: 'Projects',
+    'open-projects': 'Open Projects',
     shopwork: 'Shop Work', vendors: 'Vendors', intake: 'New Intake', team: 'Team'
   };
   document.getElementById('page-title').textContent = titles[page] || 'Dashboard';
@@ -1518,6 +1519,7 @@ function renderCurrentPage() {
       case 'dashboard': renderDashboard(c); break;
       case 'calendar': renderCalendar(c); break;
       case 'projects': renderProjects(c); break;
+      case 'open-projects': renderOpenProjects(c); break;
       case 'shopwork': renderShopWork(c); break;
       case 'vendors': renderVendors(c); break;
       case 'intake': renderIntake(c); break;
@@ -2747,18 +2749,15 @@ function renderDashboard(c) {
   // Build mode tabs
   const tabs = [];
   if (isMasterAdmin) tabs.push({ key: 'executive', label: 'Executive' });
-  tabs.push({ key: 'mine', label: 'My Work', badge: totalMyWork, alertBadge: myCloseoutCount });
+  tabs.push({ key: 'mine', label: 'My Work', badge: totalMyWork });
   if (canSeeSalesMgmt) {
-    const alerts = countSalesMgmtAlerts(activeProjects);
-    tabs.push({ key: 'sales_mgmt', label: 'Sales Dept', alertBadge: alerts });
+    tabs.push({ key: 'sales_mgmt', label: 'Sales Dept' });
   }
   if (canSeeDesignMgmt) {
-    const alerts = countDesignMgmtAlerts(activeProjects);
-    tabs.push({ key: 'design_mgmt', label: 'Design Dept', alertBadge: alerts });
+    tabs.push({ key: 'design_mgmt', label: 'Design Dept' });
   }
   if (canSeeInstallMgmt) {
-    const alerts = getProjectsNeedingCloseout().length;
-    tabs.push({ key: 'install_mgmt', label: 'Install Dept', alertBadge: alerts });
+    tabs.push({ key: 'install_mgmt', label: 'Install Dept' });
   }
   if (canSeeAllProjects) tabs.push({ key: 'pipeline', label: 'Full Pipeline' });
 
@@ -2768,7 +2767,7 @@ function renderDashboard(c) {
       <div class="dash-mode-inner" style="display:inline-flex;background:#0D1117;border:1px solid #30363D;border-radius:6px;overflow:hidden;font-size:12px;white-space:nowrap;vertical-align:top">
         ${tabs.map(t => `
           <div onclick="setDashboardMode('${t.key}')" style="padding:8px 14px;cursor:pointer;transition:all 0.15s;${dashboardMode === t.key ? 'background:#1565C0;color:#58A6FF;font-weight:500' : 'color:#8B949E'};-webkit-tap-highlight-color:transparent;display:inline-flex;align-items:center;gap:5px;border-right:1px solid #30363D">
-            ${t.label}${t.badge > 0 ? `<span style="opacity:0.7;margin-left:2px">${t.badge}</span>` : ''}${t.alertBadge > 0 ? `<span style="background:#DA3633;color:#fff;font-size:9px;font-weight:700;padding:1px 5px;border-radius:8px">${t.alertBadge}</span>` : ''}
+            ${t.label}${t.badge > 0 ? `<span style="opacity:0.7;margin-left:2px">${t.badge}</span>` : ''}
           </div>
         `).join('')}
       </div>
@@ -7447,19 +7446,39 @@ function setSalesDashTab(tab) {
 // ── Sales Pipeline tab — kanban + Stats button ──
 function renderSalesPipelineTab(activeProjects) {
   const needsReview = activeProjects.filter(p => isContractNeedsReview(p));
+  const collapsed = localStorage.getItem('vi_sales_stats_collapsed') === '1';
   return `
-    <div style="display:flex;justify-content:flex-end;margin-bottom:10px">
+    <!-- Desktop inline stats panel (hidden on mobile via CSS) -->
+    <div class="sales-stats-inline${collapsed ? ' collapsed' : ''}" id="sales-stats-inline">
+      <div class="sales-stats-inline-header">
+        <div style="font-size:11px;font-weight:700;color:#8B949E;text-transform:uppercase;letter-spacing:0.08em">Sales Stats</div>
+        <button type="button" class="btn btn-sm" onclick="toggleSalesStatsInline()" style="font-size:11px;padding:4px 10px">
+          ${collapsed ? 'Show Stats' : 'Hide Stats'}
+        </button>
+      </div>
+      ${collapsed ? '' : `<div class="sales-stats-inline-body">${renderSalesStatsContent()}</div>`}
+    </div>
+
+    <!-- Mobile-only Stats button (hidden on desktop via CSS) -->
+    <div class="sales-stats-mobile-trigger">
       <button type="button" onclick="openSalesStatsSheet()" class="btn btn-sm" style="display:inline-flex;align-items:center;gap:6px;font-size:12px">
         <svg width="12" height="12" viewBox="0 0 14 14" fill="none"><path d="M2 12V6M6 12V2M10 12V8" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>
         Stats
       </button>
     </div>
+
     ${renderSalesKanban(activeProjects, needsReview)}
   `;
 }
 
-// ── Sales Stats sheet — opened from Pipeline tab ──
-function openSalesStatsSheet() {
+function toggleSalesStatsInline() {
+  const cur = localStorage.getItem('vi_sales_stats_collapsed') === '1';
+  localStorage.setItem('vi_sales_stats_collapsed', cur ? '0' : '1');
+  renderDashboard(document.getElementById('content'));
+}
+
+// Shared stats content used by both inline panel and mobile sheet
+function renderSalesStatsContent() {
   const activeProjects = state.projects.filter(p => !p.archived);
   const totalValue = getPipelineValue(activeProjects);
   const likelyValue = getLikelyToCloseTotal();
@@ -7478,18 +7497,66 @@ function openSalesStatsSheet() {
   const myLikely = myProjects.filter(p => isLikelyToClose(p.id)).length;
   const myActive = myProjects.filter(p => !['complete','archived'].includes(p.stage)).length;
 
-  // By Sales Lead breakdown
+  // Per-employee breakdown — Sales Lead KPIs
   const byLead = {};
   activeProjects.forEach(p => {
     const sales = (getProjectAssignment(p.id).sales || []);
     const lead = sales.find(x => x.lead);
     const id = lead?.id || 'unassigned';
-    if (!byLead[id]) byLead[id] = { id, value: 0, active: 0 };
+    if (!byLead[id]) byLead[id] = { id, value: 0, active: 0, likely: 0, won: 0, lost: 0 };
     byLead[id].value += (p.total || 0);
     if (!['complete','archived'].includes(p.stage)) byLead[id].active++;
+    if (isLikelyToClose(p.id)) byLead[id].likely++;
+  });
+  // Compute won/lost from completed/archived
+  state.projects.forEach(p => {
+    const sales = (getProjectAssignment(p.id).sales || []);
+    const lead = sales.find(x => x.lead);
+    const id = lead?.id || 'unassigned';
+    if (!byLead[id]) byLead[id] = { id, value: 0, active: 0, likely: 0, won: 0, lost: 0 };
+    if (p.stage === 'complete' || (p.archived && p.archived_reason === 'won')) byLead[id].won++;
+    else if (p.archived && p.archived_reason === 'lost') byLead[id].lost++;
   });
   const leadSummary = Object.values(byLead).sort((a, b) => b.value - a.value);
 
+  return `
+    <div style="font-size:10px;font-weight:600;color:#6E7681;text-transform:uppercase;letter-spacing:0.08em;margin:0 4px 6px">Team</div>
+    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:8px;margin-bottom:14px">
+      <div class="metric-card" style="padding:10px 12px"><div class="metric-label">Pipeline</div><div class="metric-value" style="font-size:18px">${fmt(totalValue)}</div><div class="metric-sub">${activeProjects.length} active</div></div>
+      <div class="metric-card" style="padding:10px 12px"><div class="metric-label">Likely</div><div class="metric-value" style="font-size:18px;color:#3FB950">${fmt(likelyValue)}</div><div class="metric-sub">${likelyCount} project${likelyCount === 1 ? '' : 's'}</div></div>
+      <div class="metric-card" style="padding:10px 12px${needsReview > 0 ? ';border-color:#DA3633' : ''}"><div class="metric-label">Needs Review</div><div class="metric-value" style="font-size:18px${needsReview > 0 ? ';color:#F85149' : ''}">${needsReview}</div><div class="metric-sub">contracts</div></div>
+      <div class="metric-card" style="padding:10px 12px"><div class="metric-label">Close Rate</div><div class="metric-value" style="font-size:18px${closeRate !== null && closeRate >= 50 ? ';color:#3FB950' : ''}">${closeRate !== null ? closeRate + '%' : '—'}</div><div class="metric-sub">all-time</div></div>
+    </div>
+
+    <div style="font-size:10px;font-weight:600;color:#6E7681;text-transform:uppercase;letter-spacing:0.08em;margin:14px 4px 6px">My KPIs</div>
+    <div style="display:grid;grid-template-columns:repeat(3, 1fr);gap:8px;margin-bottom:14px">
+      <div class="metric-card" style="padding:10px 12px"><div class="metric-label">Pipeline</div><div class="metric-value" style="font-size:18px">${fmt(myValue)}</div></div>
+      <div class="metric-card" style="padding:10px 12px"><div class="metric-label">Likely</div><div class="metric-value" style="font-size:18px;color:#3FB950">${myLikely}</div></div>
+      <div class="metric-card" style="padding:10px 12px"><div class="metric-label">Active</div><div class="metric-value" style="font-size:18px">${myActive}</div></div>
+    </div>
+
+    <div style="font-size:10px;font-weight:600;color:#6E7681;text-transform:uppercase;letter-spacing:0.08em;margin:14px 4px 6px">By Sales Lead</div>
+    <div style="display:flex;flex-direction:column;gap:4px">
+      ${leadSummary.length === 0 ? '<div style="font-size:12px;color:#6E7681;font-style:italic;padding:10px">No assignments</div>' : leadSummary.map(g => {
+        const m = g.id === 'unassigned' ? null : getTeamMember(g.id);
+        const name = m?.name || 'Unassigned';
+        const cr = (g.won + g.lost > 0) ? Math.round((g.won / (g.won + g.lost)) * 100) : null;
+        return `
+          <div style="display:flex;align-items:center;gap:10px;padding:10px 12px;background:#0D1117;border:1px solid #1C2333;border-radius:6px">
+            <div style="flex:1;min-width:0">
+              <div style="font-size:12px;color:#E6EDF3;font-weight:500">${esc(name)}</div>
+              <div style="font-size:10px;color:#6E7681;margin-top:2px">${g.active} active &middot; ${g.likely} likely${cr !== null ? ' &middot; ' + cr + '% close rate' : ''}</div>
+            </div>
+            <div style="font-size:13px;color:#3FB950;font-weight:600;font-variant-numeric:tabular-nums">${fmt(g.value)}</div>
+          </div>
+        `;
+      }).join('')}
+    </div>
+  `;
+}
+
+// ── Sales Stats sheet — opened from Pipeline tab ──
+function openSalesStatsSheet() {
   document.getElementById('sales-stats-sheet')?.remove();
   const sheet = document.createElement('div');
   sheet.id = 'sales-stats-sheet';
@@ -7504,38 +7571,7 @@ function openSalesStatsSheet() {
           <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M4 4l8 8M12 4l-8 8" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>
         </button>
       </div>
-
-      <div style="font-size:10px;font-weight:600;color:#6E7681;text-transform:uppercase;letter-spacing:0.08em;margin:8px 4px 6px">Team</div>
-      <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:14px">
-        <div class="metric-card" style="padding:10px 12px"><div class="metric-label">Pipeline</div><div class="metric-value" style="font-size:18px">${fmt(totalValue)}</div><div class="metric-sub">${activeProjects.length} active</div></div>
-        <div class="metric-card" style="padding:10px 12px"><div class="metric-label">Likely</div><div class="metric-value" style="font-size:18px;color:#3FB950">${fmt(likelyValue)}</div><div class="metric-sub">${likelyCount} project${likelyCount === 1 ? '' : 's'}</div></div>
-        <div class="metric-card" style="padding:10px 12px${needsReview > 0 ? ';border-color:#DA3633' : ''}"><div class="metric-label">Needs Review</div><div class="metric-value" style="font-size:18px${needsReview > 0 ? ';color:#F85149' : ''}">${needsReview}</div><div class="metric-sub">contracts</div></div>
-        <div class="metric-card" style="padding:10px 12px"><div class="metric-label">Close Rate</div><div class="metric-value" style="font-size:18px${closeRate !== null && closeRate >= 50 ? ';color:#3FB950' : ''}">${closeRate !== null ? closeRate + '%' : '—'}</div><div class="metric-sub">all-time</div></div>
-      </div>
-
-      <div style="font-size:10px;font-weight:600;color:#6E7681;text-transform:uppercase;letter-spacing:0.08em;margin:14px 4px 6px">My KPIs</div>
-      <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;margin-bottom:14px">
-        <div class="metric-card" style="padding:10px 12px"><div class="metric-label">Pipeline</div><div class="metric-value" style="font-size:18px">${fmt(myValue)}</div></div>
-        <div class="metric-card" style="padding:10px 12px"><div class="metric-label">Likely</div><div class="metric-value" style="font-size:18px;color:#3FB950">${myLikely}</div></div>
-        <div class="metric-card" style="padding:10px 12px"><div class="metric-label">Active</div><div class="metric-value" style="font-size:18px">${myActive}</div></div>
-      </div>
-
-      <div style="font-size:10px;font-weight:600;color:#6E7681;text-transform:uppercase;letter-spacing:0.08em;margin:14px 4px 6px">By Sales Lead</div>
-      <div style="display:flex;flex-direction:column;gap:4px">
-        ${leadSummary.length === 0 ? '<div style="font-size:12px;color:#6E7681;font-style:italic;padding:10px">No assignments</div>' : leadSummary.map(g => {
-          const m = g.id === 'unassigned' ? null : getTeamMember(g.id);
-          const name = m?.name || 'Unassigned';
-          return `
-            <div style="display:flex;align-items:center;gap:10px;padding:8px 10px;background:#0D1117;border:1px solid #1C2333;border-radius:6px">
-              <div style="flex:1;min-width:0">
-                <div style="font-size:12px;color:#E6EDF3;font-weight:500">${esc(name)}</div>
-                <div style="font-size:10px;color:#6E7681;margin-top:2px">${g.active} active</div>
-              </div>
-              <div style="font-size:12px;color:#3FB950;font-weight:600">${fmt(g.value)}</div>
-            </div>
-          `;
-        }).join('')}
-      </div>
+      ${renderSalesStatsContent()}
     </div>
   `;
   document.body.appendChild(sheet);
@@ -7559,7 +7595,7 @@ const ACTION_SECTIONS = [
   { key: 'meeting', label: 'Meetings',  desc: 'Walkthroughs, kickoffs, hand-offs',     color: '#3FB950' },
   { key: 'likely',  label: 'Likely Closes', desc: 'Hot deals to keep warm',            color: '#3FB950' },
   { key: 'notify',  label: 'Notifications', desc: 'System alerts',                     color: '#D29922' },
-  { key: 'other',   label: 'Other',     desc: 'Miscellaneous follow-ups',              color: '#6E7681' }
+  { key: 'other',   label: 'Misc Tasks', desc: 'Miscellaneous follow-ups',              color: '#6E7681' }
 ];
 
 // ── Action engine ──
@@ -7800,10 +7836,14 @@ function renderActionRow(a) {
   const amountStr = a.amount ? fmt(a.amount) : '';
   const pri = a.priority === 'high';
   const hi = pri ? ' action-row-priority' : '';
+  // Apply user-text override if present
+  const userText = state.actionsState?.[a.key]?.userText;
+  const displayText = userText || a.text;
+  const wasEdited = !!userText && userText !== a.text;
   return `
     <div class="action-row${hi}">
       <div class="action-row-main" ${a.projectId ? `onclick="openProject(${a.projectId})"` : ''}>
-        <div class="action-row-text">${esc(a.text)}</div>
+        <div class="action-row-text">${esc(displayText)}${wasEdited ? ' <span style="font-size:9px;color:#6E7681;font-weight:400">(edited)</span>' : ''}</div>
         <div class="action-row-meta">
           ${a.clientName ? `<span>${esc(a.clientName)}</span>` : ''}
           ${ageStr ? `<span>${ageStr}</span>` : ''}
@@ -7814,6 +7854,9 @@ function renderActionRow(a) {
       <div class="action-row-actions">
         <button type="button" class="action-btn action-btn-done" onclick="completeAction('${a.key}')" title="Done">
           <svg width="13" height="13" viewBox="0 0 14 14" fill="none"><path d="M2 7.5l3.5 3.5L12 4" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        </button>
+        <button type="button" class="action-btn" onclick="editActionText('${a.key}')" title="Edit">
+          <svg width="13" height="13" viewBox="0 0 14 14" fill="none"><path d="M9 2l3 3-7 7H2v-3z" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/></svg>
         </button>
         <button type="button" class="action-btn" onclick="snoozeAction('${a.key}')" title="Snooze">
           <svg width="13" height="13" viewBox="0 0 14 14" fill="none"><circle cx="7" cy="7" r="5" stroke="currentColor" stroke-width="1.5"/><path d="M7 4v3l2 1.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
@@ -8437,7 +8480,7 @@ function getDashboardContextChips() {
       { key: 'meeting', label: 'Meetings', action: 'scrollSection', arg: 'meeting' },
       { key: 'likely',  label: 'Likely',   action: 'scrollSection', arg: 'likely' },
       { key: 'notify',  label: 'Notify',   action: 'scrollSection', arg: 'notify' },
-      { key: 'other',   label: 'Other',    action: 'scrollSection', arg: 'other' }
+      { key: 'other',   label: 'Misc',    action: 'scrollSection', arg: 'other' }
     ];
   }
   if (mode === 'design_mgmt') {
@@ -10060,6 +10103,27 @@ function refreshAdminNav() {
   const intakeNav = document.querySelector('[data-page="intake"]');
   if (intakeNav) intakeNav.style.display = canCreate ? '' : 'none';
 
+  // Inject "Open Projects" nav item right after Projects, in the first nav section.
+  // Always visible — content is permission-scoped inside the page itself.
+  if (!document.querySelector('[data-page="open-projects"]')) {
+    const projectsLink = document.querySelector('[data-page="projects"]');
+    if (projectsLink && projectsLink.parentNode) {
+      const link = document.createElement('a');
+      link.className = 'nav-item';
+      link.dataset.page = 'open-projects';
+      link.onclick = () => navigate('open-projects');
+      link.innerHTML = '<svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M2 4.5h5l1.5 2H14v5.5a1 1 0 01-1 1H3a1 1 0 01-1-1V4.5z" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round"/><path d="M2 8h12" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/></svg><span>Open Projects</span><span class="nav-badge" id="open-projects-badge"></span>';
+      projectsLink.parentNode.insertBefore(link, projectsLink.nextSibling);
+    }
+  }
+  // Update Open Projects badge count
+  const openProjectsBadge = document.getElementById('open-projects-badge');
+  if (openProjectsBadge) {
+    const count = getOpenProjectsForUser().length;
+    openProjectsBadge.textContent = count > 0 ? count : '';
+    openProjectsBadge.style.display = count > 0 ? '' : 'none';
+  }
+
   if (!toolsSection) return;
   const activeMember = getTeamMember(getActiveTeamMemberId());
   // Team nav — legacy admin gate
@@ -10466,4 +10530,261 @@ function quickActionCreateNote() {
       if (ta) ta.focus();
     }, 200);
   });
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// OPEN PROJECTS PAGE
+// Shows projects in the in-production phase (Contract → Design → Install).
+// Excludes pre-contract sales pipeline (Lead/Proposal/Sent) and Complete.
+// Visible to all users; scoped by permission inside the page.
+// ═══════════════════════════════════════════════════════════════════
+
+const OPEN_PROJECT_STAGES = ['contract', 'design', 'install'];
+
+function getOpenProjectsForUser() {
+  const memberId = getActiveTeamMemberId();
+  const canViewAll = currentUserHasPermission('projects.view_all');
+  let projects = state.projects.filter(p => !p.archived && OPEN_PROJECT_STAGES.includes(p.stage));
+  if (!canViewAll) {
+    // Scope to projects this user is assigned to in any role
+    projects = projects.filter(p => {
+      const a = getProjectAssignment(p.id);
+      return ['sales', 'design', 'pm', 'install', 'warehouse'].some(role =>
+        (a[role] || []).some(x => x.id === memberId)
+      );
+    });
+  }
+  return projects;
+}
+
+function renderOpenProjects(c) {
+  document.getElementById('page-title').textContent = 'Open Projects';
+  const memberId = getActiveTeamMemberId();
+  const canViewAll = currentUserHasPermission('projects.view_all');
+  const canSeeFinancials = currentUserHasPermission('financials.view_project_totals');
+  const projects = getOpenProjectsForUser();
+
+  // Group by stage
+  const byStage = {};
+  OPEN_PROJECT_STAGES.forEach(s => byStage[s] = []);
+  projects.forEach(p => {
+    if (byStage[p.stage]) byStage[p.stage].push(p);
+  });
+
+  // Sort each stage's projects by closest install date first
+  Object.keys(byStage).forEach(s => {
+    byStage[s].sort((a, b) => {
+      const wa = getInstallWindow(a);
+      const wb = getInstallWindow(b);
+      const da = wa?.start ? new Date(wa.start).getTime() : Infinity;
+      const db = wb?.start ? new Date(wb.start).getTime() : Infinity;
+      return da - db;
+    });
+  });
+
+  // Filter chips state
+  if (!state.openProjectsFilter) state.openProjectsFilter = 'all';
+  const filter = state.openProjectsFilter;
+  const filteredStages = filter === 'all' ? OPEN_PROJECT_STAGES :
+                         filter === 'design' ? ['design'] :
+                         filter === 'install' ? ['install'] :
+                         filter === 'contract' ? ['contract'] :
+                         OPEN_PROJECT_STAGES;
+
+  const totalCount = projects.length;
+  const visibleProjects = projects.filter(p => filteredStages.includes(p.stage));
+
+  // Compute aggregate metrics (gated by financials permission)
+  const aggregateValue = canSeeFinancials
+    ? projects.reduce((sum, p) => sum + (p.total || 0), 0)
+    : null;
+
+  const heroMetrics = `
+    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:10px;margin-bottom:16px">
+      <div class="metric-card">
+        <div class="metric-label">${canViewAll ? 'Active Projects' : 'My Active'}</div>
+        <div class="metric-value">${totalCount}</div>
+        <div class="metric-sub">in production</div>
+      </div>
+      <div class="metric-card">
+        <div class="metric-label">In Design</div>
+        <div class="metric-value" style="color:#A371F7">${byStage.design.length}</div>
+        <div class="metric-sub">design phase</div>
+      </div>
+      <div class="metric-card">
+        <div class="metric-label">In Install</div>
+        <div class="metric-value" style="color:#F0883E">${byStage.install.length}</div>
+        <div class="metric-sub">install phase</div>
+      </div>
+      ${canSeeFinancials ? `
+        <div class="metric-card">
+          <div class="metric-label">Total Value</div>
+          <div class="metric-value" style="color:#3FB950">${fmt(aggregateValue)}</div>
+          <div class="metric-sub">all open</div>
+        </div>
+      ` : ''}
+    </div>
+  `;
+
+  const filterChips = `
+    <div style="display:flex;gap:6px;margin-bottom:16px;overflow-x:auto;-webkit-overflow-scrolling:touch;padding-bottom:2px">
+      ${[
+        { key: 'all',      label: `All (${totalCount})` },
+        { key: 'contract', label: `Contract (${byStage.contract.length})`, color: '#58A6FF' },
+        { key: 'design',   label: `Design (${byStage.design.length})`,     color: '#A371F7' },
+        { key: 'install',  label: `Install (${byStage.install.length})`,   color: '#F0883E' }
+      ].map(c => `
+        <button type="button" onclick="setOpenProjectsFilter('${c.key}')" class="op-filter-chip${filter === c.key ? ' active' : ''}" ${c.color && filter === c.key ? `style="background:${c.color}22;color:${c.color};border-color:${c.color}66"` : ''}>${esc(c.label)}</button>
+      `).join('')}
+    </div>
+  `;
+
+  const projectsHTML = visibleProjects.length === 0
+    ? `<div class="empty-state" style="padding:40px 20px;text-align:center;color:#6E7681;font-style:italic">${canViewAll ? 'No projects in this view' : 'No active projects assigned to you'}</div>`
+    : `<div class="op-grid">${visibleProjects.map(p => renderOpenProjectCard(p, memberId, canSeeFinancials)).join('')}</div>`;
+
+  c.innerHTML = `
+    <div style="margin-bottom:14px">
+      <div style="font-size:11px;color:#6E7681;font-weight:500">Projects in production: Contract &middot; Design &middot; Install</div>
+    </div>
+    ${heroMetrics}
+    ${filterChips}
+    ${projectsHTML}
+  `;
+}
+
+function setOpenProjectsFilter(key) {
+  state.openProjectsFilter = key;
+  renderCurrentPage();
+}
+
+function renderOpenProjectCard(p, memberId, canSeeFinancials) {
+  const stg = STAGES.find(s => s.key === p.stage) || STAGES[0];
+  const assignment = getProjectAssignment(p.id);
+  const allRolePeople = ['sales', 'design', 'pm', 'install', 'warehouse']
+    .map(r => (assignment[r] || []).map(x => ({ ...x, role: r })))
+    .flat();
+  const isOnTeam = allRolePeople.some(x => x.id === memberId);
+
+  // Phase progress
+  const totalMilestones = PHASES.reduce((s, ph) => s + ph.milestones.length, 0);
+  const doneMilestones = PHASES.reduce((s, ph) => {
+    return s + ph.milestones.reduce((ms, m) => ms + (milestoneProgress(p, ph, m) >= 1 ? 1 : 0), 0);
+  }, 0);
+  const overallPct = totalMilestones > 0 ? Math.round((doneMilestones / totalMilestones) * 100) : 0;
+
+  // Install window
+  const win = getInstallWindow(p);
+  const dateStr = win?.start
+    ? `${fmtDate(win.start)}${win.end && win.end !== win.start ? ' - ' + fmtDate(win.end) : ''}`
+    : null;
+  const dateColor = win?.source === 'booked' ? '#3FB950' : (win?.source === 'estimated' ? '#58A6FF' : '#6E7681');
+  const dateLabel = win?.source === 'booked' ? 'Booked' : (win?.source === 'estimated' ? 'Est.' : null);
+
+  // Closeout flag
+  const closeout = isProjectInCloseout(p);
+
+  // Team avatars/initials
+  const teamCircles = allRolePeople.slice(0, 5).map((x, i) => {
+    const m = getTeamMember(x.id);
+    if (!m) return '';
+    return `<div class="op-team-circle" title="${esc(m.name)} (${esc(x.role)})" style="background:${m.color || '#1565C0'};margin-left:${i === 0 ? '0' : '-6px'};z-index:${5 - i}">${esc(getInitials(m.name))}</div>`;
+  }).join('');
+  const teamMore = allRolePeople.length > 5 ? `<div class="op-team-circle" style="background:#1C2333;margin-left:-6px;color:#8B949E">+${allRolePeople.length - 5}</div>` : '';
+
+  return `
+    <div class="op-card${isOnTeam ? ' op-card-mine' : ''}${closeout ? ' op-card-closeout' : ''}" onclick="openProject(${p.id})">
+      <div class="op-card-top">
+        <div class="op-card-name">${esc(p.name)}</div>
+        <span class="status-pill status-${stg.color}">${stg.label}</span>
+      </div>
+      <div class="op-card-client">${esc(p.client_name || 'No client')}${p.city ? ' &middot; ' + esc(p.city) : ''}</div>
+      <div class="op-card-progress">
+        <div class="op-progress-bar"><div class="op-progress-fill" style="width:${overallPct}%;background:${stg.color === 'red' ? '#F0883E' : stg.color === 'purple' ? '#A371F7' : '#58A6FF'}"></div></div>
+        <div class="op-progress-text">${overallPct}% &middot; ${doneMilestones}/${totalMilestones}</div>
+      </div>
+      <div class="op-card-meta">
+        ${dateStr ? `<div class="op-meta-item"><span style="color:${dateColor}">${esc(dateLabel)}: ${esc(dateStr)}</span></div>` : '<div class="op-meta-item" style="color:#6E7681">No install date</div>'}
+        ${canSeeFinancials && p.total ? `<div class="op-meta-item op-meta-value">${fmt(p.total)}</div>` : ''}
+      </div>
+      ${closeout ? '<div class="op-card-closeout-banner">CLOSEOUT NEEDED</div>' : ''}
+      ${allRolePeople.length > 0 ? `<div class="op-card-team">${teamCircles}${teamMore}</div>` : ''}
+    </div>
+  `;
+}
+
+// Edit the text of any action row (auto / manual / assigned).
+// Stored as userText override on actionsState; key preserved so propagation still works.
+function editActionText(key) {
+  const a = _findCurrentAction(key);
+  if (!a) return;
+  const currentText = state.actionsState?.[key]?.userText || a.text;
+  // For manual actions, edit the manualEntry directly so it persists in the list
+  document.getElementById('edit-action-dialog')?.remove();
+  const overlay = document.createElement('div');
+  overlay.className = 'modal-overlay';
+  overlay.id = 'edit-action-dialog';
+  overlay.innerHTML = `
+    <div class="modal-container" style="max-width:420px">
+      <div class="modal-header">
+        <div>
+          <div class="modal-title">Edit action</div>
+          <div class="modal-sub">${a.source === 'auto' ? 'Auto-derived — text only, source and category preserved' : 'Manual action'}</div>
+        </div>
+        <button class="modal-close" onclick="document.getElementById('edit-action-dialog')?.remove()">&times;</button>
+      </div>
+      <div class="modal-body">
+        <textarea id="edit-action-text" class="form-input" rows="3" style="width:100%;resize:vertical;font-family:inherit">${esc(currentText)}</textarea>
+        <div style="display:flex;gap:8px;margin-top:14px">
+          ${state.actionsState?.[key]?.userText ? `<button type="button" class="btn" onclick="resetActionText('${key}')" style="font-size:12px">Reset to default</button>` : ''}
+          <div style="flex:1"></div>
+          <button type="button" class="btn" onclick="document.getElementById('edit-action-dialog')?.remove()">Cancel</button>
+          <button type="button" class="btn-primary" onclick="saveActionText('${key}')">Save</button>
+        </div>
+      </div>
+    </div>
+  `;
+  document.body.appendChild(overlay);
+  setTimeout(() => document.getElementById('edit-action-text')?.focus(), 50);
+}
+
+function saveActionText(key) {
+  const ta = document.getElementById('edit-action-text');
+  if (!ta) return;
+  const newText = ta.value.trim();
+  if (!newText) {
+    showToast('Action text cannot be empty', 'error');
+    return;
+  }
+  const a = _findCurrentAction(key);
+  if (!a) return;
+  // For manual/assigned: edit the manualEntry text directly
+  if ((a.source === 'manual' || a.source === 'assigned') && a.manualId) {
+    const m = state.actionsManual.find(x => x.id === a.manualId);
+    if (m) {
+      m.text = newText;
+      _persistActionsManual();
+    }
+  } else {
+    // For auto: store as userText override (key preserved for propagation)
+    if (!state.actionsState[key]) state.actionsState[key] = {};
+    state.actionsState[key].userText = newText;
+    _persistActionState();
+  }
+  document.getElementById('edit-action-dialog')?.remove();
+  showToast('Action updated', 'success');
+  renderDashboard(document.getElementById('content'));
+}
+
+function resetActionText(key) {
+  if (!state.actionsState[key]) return;
+  delete state.actionsState[key].userText;
+  // If state object is now empty, clean up
+  if (Object.keys(state.actionsState[key]).length === 0) {
+    delete state.actionsState[key];
+  }
+  _persistActionState();
+  document.getElementById('edit-action-dialog')?.remove();
+  showToast('Reset to default', 'info');
+  renderDashboard(document.getElementById('content'));
 }
