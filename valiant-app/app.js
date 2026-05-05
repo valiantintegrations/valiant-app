@@ -380,6 +380,8 @@ const state = {
   actionsState: JSON.parse(localStorage.getItem('vi_actions_state') || '{}'),
   actionsArchive: JSON.parse(localStorage.getItem('vi_actions_archive') || '[]'),
   actionsTouchLog: JSON.parse(localStorage.getItem('vi_actions_touch_log') || '{}'),
+  mobilizationFlags: JSON.parse(localStorage.getItem('vi_mobilization_flags') || '{}'),
+  mobilizationEditing: {},
   salesDashTab: localStorage.getItem('vi_sales_dash_tab') || 'action',
   mapsApiKey: null,
   mapsApiLoaded: false
@@ -523,6 +525,28 @@ const STAGES = [
   { key: 'proposal', label: 'Proposal', color: 'blue' },
   { key: 'sent', label: 'Sent', color: 'amber' },
   { key: 'contract', label: 'Contract', color: 'green' }
+];
+
+// Canonical scope tags used on intake + mobilization. Drives which design checklists apply.
+const SCOPE_TAGS = [
+  'PA System',
+  'LED Wall',
+  'Key Lights',
+  'House Lights',
+  'Broadcast Video System',
+  'Streaming Audio System',
+  'Camera',
+  'Control (Q-sys)',
+  'Control (AHM)',
+  'Control (Atlona)',
+  'Distributed Audio',
+  'TVs',
+  'Projection',
+  'Conferencing',
+  'Mics',
+  'Acoustic Treatment',
+  'Drape',
+  'Network'
 ];
 
 function mapStage(raw) {
@@ -1538,7 +1562,7 @@ function renderCurrentPage() {
 
 // ── Project Page Navigation ──
 // v1.16: project detail is a full page, not a modal
-function openProject(id) {
+function openProject(id, tabOrAnchor, anchor) {
   const p = state.projects.find(x => x.id === id);
   if (!p) return;
   // Remember where we came from so Back returns to the right page
@@ -1548,7 +1572,21 @@ function openProject(id) {
     state.projectOrigin = 'dashboard';
   }
   state.currentProject = p;
-  state.projectTab = getDefaultProjectTab();
+  // If second arg looks like a known tab, use it as the tab. Otherwise treat as anchor on default tab.
+  const KNOWN_TABS = ['overview','progress','details','design','install','location','files','notes'];
+  let tab = getDefaultProjectTab();
+  let anchorKey = null;
+  if (tabOrAnchor && KNOWN_TABS.includes(tabOrAnchor)) {
+    tab = tabOrAnchor;
+    anchorKey = anchor || null;
+  } else if (tabOrAnchor) {
+    // It's an anchor, not a tab. Decide which tab the anchor belongs to.
+    anchorKey = tabOrAnchor;
+    if (anchorKey === 'attention' || anchorKey === 'needs-attention') tab = 'overview';
+    else tab = 'progress'; // milestone anchors default to progress
+  }
+  state.projectTab = tab;
+  state.projectPendingAnchor = anchorKey;
   state.currentPage = 'project';
   document.querySelectorAll('.nav-item').forEach(el => el.classList.remove('active'));
   document.querySelectorAll('#bottom-nav .bnav-item').forEach(el => el.classList.remove('active'));
@@ -1558,6 +1596,24 @@ function openProject(id) {
   renderCurrentPage();
   const c = document.getElementById('content');
   if (c) c.scrollTop = 0;
+  // After render, scroll to anchor if specified
+  if (anchorKey) {
+    setTimeout(() => scrollToProjectAnchor(anchorKey), 100);
+  }
+}
+
+// Scroll to a labeled anchor within the project page and briefly highlight it
+function scrollToProjectAnchor(anchorKey) {
+  if (!anchorKey) return;
+  const el = document.querySelector(`[data-project-anchor="${anchorKey}"]`);
+  if (!el) return;
+  const rect = el.getBoundingClientRect();
+  const offset = 20;
+  window.scrollTo({ top: window.scrollY + rect.top - offset, behavior: 'smooth' });
+  // Briefly highlight
+  el.classList.add('project-anchor-flash');
+  setTimeout(() => el.classList.remove('project-anchor-flash'), 1800);
+  state.projectPendingAnchor = null;
 }
 
 function injectTopbarBackButton() {
@@ -1764,9 +1820,9 @@ function toggleRoleAssignment(projectId, role, memberId) {
     list.push({ id: memberId, lead: !hasLead });
   }
   setProjectAssignment(projectId, role, list);
-  if (state.currentPage === 'project' && state.currentProject?.id === projectId) {
-    renderCurrentPage();
-  }
+  // Always re-render — mobile paths and dashboard surfaces need the update too,
+  // not just the project page in-place panel
+  renderCurrentPage();
 }
 
 function setRoleLead(projectId, role, memberId) {
@@ -3136,7 +3192,7 @@ function renderMyWorkCard(p, role, isLead) {
         <div style="font-size:11px;color:#8B949E">${doneMilestones}/${totalMilestones} milestones</div>
         <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;justify-content:flex-end">
           ${mySubtasksBadge}
-          ${flags.total > 0 ? `<span style="font-size:10px;padding:2px 6px;border-radius:3px;background:#1A150D;color:#D29922;border:1px solid #9E6A03">${flags.total} flag${flags.total === 1 ? '' : 's'}</span>` : ''}
+          ${flags.total > 0 ? `<span class="flag-badge-tap" onclick="event.stopPropagation();openProject(${p.id},'attention')" style="font-size:10px;padding:2px 6px;border-radius:3px;background:#1A150D;color:#D29922;border:1px solid #9E6A03;cursor:pointer">${flags.total} flag${flags.total === 1 ? '' : 's'}</span>` : ''}
           ${win ? `<span class="countdown-pill ${cdClass}">${fmtCountdown(win.start)}</span>` : ''}
         </div>
       </div>
@@ -3885,8 +3941,8 @@ function renderProjectOverviewHTML(p) {
     </div>
 
     <!-- Needs Attention (multi-audience executive summary) -->
-    <div class="dashboard-card" style="margin-bottom:14px">
-      <div class="dashboard-card-title">Needs Attention</div>
+    <div class="dashboard-card${flags.total > 0 ? ' needs-attention-active' : ''}" data-project-anchor="attention" style="margin-bottom:14px${flags.total > 0 ? ';border-color:#9E6A03;border-width:2px' : ''}">
+      <div class="dashboard-card-title">Needs Attention${flags.total > 0 ? ` <span style="font-size:11px;color:#D29922;font-weight:600;margin-left:6px">${flags.total} item${flags.total === 1 ? '' : 's'}</span>` : ''}</div>
       ${flags.total === 0 ? `
         <div style="display:flex;align-items:center;gap:8px;padding:8px 0">
           <div style="width:8px;height:8px;border-radius:50%;background:#3FB950"></div>
@@ -4267,7 +4323,7 @@ function renderProjectProgressHTML(p) {
       const parallel = phase.parallel;
 
       return `
-        <div class="dashboard-card" style="margin-bottom:12px;${!unlocked ? 'opacity:0.55' : ''}">
+        <div class="dashboard-card" data-project-anchor="phase_${phase.key}" style="margin-bottom:12px;${!unlocked ? 'opacity:0.55' : ''}">
           <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px">
             <div style="display:flex;align-items:center;gap:8px">
               <span style="font-size:14px;font-weight:600;color:${phase.color}">${phase.label}</span>
@@ -4291,7 +4347,7 @@ function renderProjectProgressHTML(p) {
               const isLinked = !!milestone.linkedChecklist;
               const action = getMilestoneAction(phase.key, milestone.key);
               return `
-                <div class="milestone-row ${mDone ? 'done' : ''} ${!mUnlocked ? 'locked' : ''}">
+                <div class="milestone-row ${mDone ? 'done' : ''} ${!mUnlocked ? 'locked' : ''}" data-project-anchor="milestone_${phase.key}_${milestone.key}">
                   <div class="milestone-check ${mDone ? 'checked' : ''}" onclick="${mUnlocked && !isLinked ? `toggleMilestone(${p.id}, '${phase.key}', '${milestone.key}')` : ''}">
                     ${mDone ? '<svg width="11" height="11" viewBox="0 0 11 11" fill="none"><path d="M2 5.5l2.5 2.5L9 3" stroke="#fff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>' : ''}
                   </div>
@@ -7964,11 +8020,13 @@ function renderSalesActionTab(activeProjects) {
     else bySec.other.push(a);
   });
 
-  // Needs Assignment — only visible to users who can assign teams
-  const canAssign = currentUserHasPermission('assign_team.sales') ||
-                    currentUserHasPermission('assign_team.design') ||
-                    currentUserHasPermission('admin.system');
-  const needsAssignment = canAssign ? buildNeedsAssignment(activeProjects) : [];
+  // Mobilization — projects in Contract that need their mobilization checklist done
+  // Visible to anyone with assign_team perms (sales managers, PMs, admins)
+  const canSeeMobilization = currentUserHasPermission('assign_team.sales') ||
+                             currentUserHasPermission('assign_team.design') ||
+                             currentUserHasPermission('assign_team.pm') ||
+                             currentUserHasPermission('admin.system');
+  const mobilizationProjects = canSeeMobilization ? getProjectsNeedingMobilization() : [];
 
   // Calendar widget content
   const calendarHTML = renderActionCalendarWidget();
@@ -7999,33 +8057,38 @@ function renderSalesActionTab(activeProjects) {
   return `
     <div class="action-tab-wrap">
       ${calendarHTML}
-      ${needsAssignment.length > 0 ? `
-        <div class="action-section" data-context-section="needs-assignment" style="border-color:#D29922">
+      ${mobilizationProjects.length > 0 ? `
+        <div class="action-section" data-context-section="mobilization" style="border-color:#D29922">
           <div class="action-section-header">
             <div style="display:flex;align-items:center;gap:8px">
               <div style="width:3px;height:14px;background:#D29922;border-radius:1px"></div>
-              <span class="action-section-name" style="color:#D29922">Needs Assignment</span>
-              <span class="action-section-count">${needsAssignment.length}</span>
+              <span class="action-section-name" style="color:#D29922">Project Mobilization &mdash; Needs Review</span>
+              <span class="action-section-count">${mobilizationProjects.length}</span>
             </div>
           </div>
-          <div style="font-size:11px;color:#8B949E;margin-bottom:8px">Projects without a designated lead — actions can't auto-assign until a lead is set.</div>
-          ${needsAssignment.map(na => `
-            <div class="action-row" style="border-color:#D2992233">
-              <div class="action-row-main" onclick="openProject(${na.projectId})">
-                <div class="action-row-text">${esc(na.projectName)} &middot; needs ${esc(na.role)} lead</div>
-                <div class="action-row-meta">
-                  ${na.clientName ? `<span>${esc(na.clientName)}</span>` : ''}
-                  <span>${na.count} pending action${na.count === 1 ? '' : 's'}</span>
-                  <span class="action-source src-auto">Unassigned</span>
+          <div style="font-size:11px;color:#8B949E;margin-bottom:8px">Newly contracted projects need their mobilization checklist completed to unlock Design + Planning.</div>
+          ${mobilizationProjects.map(p => {
+            const s = getMobilizationState(p.id);
+            const completed = MOBILIZATION_ITEMS.filter(it => s[it.key]).length;
+            const total = MOBILIZATION_ITEMS.length;
+            const pct = Math.round((completed / total) * 100);
+            return `
+              <div class="action-row" style="border-color:#D2992233">
+                <div class="action-row-main" onclick="openMobilizationDialog(${p.id})">
+                  <div class="action-row-text">${esc(p.name)}</div>
+                  <div class="action-row-meta">
+                    ${p.client_name ? `<span>${esc(p.client_name)}</span>` : ''}
+                    <span style="color:#D29922">${completed}/${total} items complete (${pct}%)</span>
+                  </div>
+                </div>
+                <div class="action-row-actions">
+                  <button type="button" class="action-btn action-btn-done" onclick="event.stopPropagation();openMobilizationDialog(${p.id})" title="Open mobilization checklist">
+                    <svg width="13" height="13" viewBox="0 0 14 14" fill="none"><path d="M5 2l5 5-5 5" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>
+                  </button>
                 </div>
               </div>
-              <div class="action-row-actions">
-                <button type="button" class="action-btn action-btn-done" onclick="openProject(${na.projectId});event.stopPropagation()" title="Open project to assign">
-                  <svg width="13" height="13" viewBox="0 0 14 14" fill="none"><path d="M5 2l5 5-5 5" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>
-                </button>
-              </div>
-            </div>
-          `).join('')}
+            `;
+          }).join('')}
         </div>
       ` : ''}
       ${sectionsHTML}
@@ -8057,9 +8120,23 @@ function renderActionRow(a) {
   const assigneeBadge = assignee
     ? `<span class="action-assignee" title="Assigned to ${esc(assignee.name)}"><span class="action-assignee-dot" style="background:${assignee.color || '#1565C0'}">${esc(getInitials(assignee.name))}</span>${esc(assignee.name.split(' ')[0])}</span>`
     : `<span class="action-assignee action-assignee-none">Unassigned</span>`;
+  // Map auto-action types to a milestone anchor in the Progress tab
+  const anchorMap = {
+    'send_quote':       'milestone_proposal_proposal_sent',
+    'quote_followup':   'phase_proposal',
+    'email_followup':   'phase_proposal',
+    'walkthrough':      'phase_lead',
+    'design_kickoff':   'milestone_design_kickoff',
+    'handoff':          'phase_contract',
+    'likely':           'phase_proposal'
+  };
+  const anchor = a.autoType ? anchorMap[a.autoType] : null;
+  const openHandler = a.projectId
+    ? (anchor ? `onclick="openProject(${a.projectId},'progress','${anchor}')"` : `onclick="openProject(${a.projectId})"`)
+    : '';
   return `
     <div class="action-row${hi}">
-      <div class="action-row-main" ${a.projectId ? `onclick="openProject(${a.projectId})"` : ''}>
+      <div class="action-row-main" ${openHandler}>
         <div class="action-row-text">${esc(displayText)}${wasEdited ? ' <span style="font-size:9px;color:#6E7681;font-weight:400">(edited)</span>' : ''}</div>
         <div class="action-row-meta">
           ${a.clientName ? `<span>${esc(a.clientName)}</span>` : ''}
@@ -8192,8 +8269,16 @@ function _archiveAction(key, status, actionRecord) {
     text: actionRecord?.text || '',
     section: actionRecord?.section || '',
     projectId: actionRecord?.projectId || null,
-    projectName: actionRecord?.projectName || null
+    projectName: actionRecord?.projectName || null,
+    autoType: actionRecord?.autoType || null,
+    source: actionRecord?.source || null,
+    manualEntry: null
   };
+  // For manual/assigned actions, preserve the original entry so it can be restored
+  if ((actionRecord?.source === 'manual' || actionRecord?.source === 'assigned') && actionRecord?.manualId) {
+    const m = state.actionsManual.find(x => x.id === actionRecord.manualId);
+    if (m) entry.manualEntry = { ...m };
+  }
   if (!state.actionsArchive) state.actionsArchive = [];
   state.actionsArchive.unshift(entry);
   if (state.actionsArchive.length > 500) state.actionsArchive = state.actionsArchive.slice(0, 500);
@@ -8204,7 +8289,8 @@ function _archiveAction(key, status, actionRecord) {
 function _findCurrentAction(key) {
   const memberId = getActiveTeamMemberId();
   const activeProjects = state.projects.filter(p => !p.archived);
-  const all = buildSalesActions(activeProjects, memberId);
+  // Use department mode so we find ALL actions, not just user's
+  const all = buildSalesActions(activeProjects, memberId, 'department');
   return all.find(a => a.key === key);
 }
 
@@ -8441,28 +8527,189 @@ function openActionsArchiveDialog() {
         </div>
         <button class="modal-close" onclick="document.getElementById('actions-archive-dialog')?.remove()">&times;</button>
       </div>
-      <div class="modal-body" style="overflow-y:auto;flex:1;min-height:0">
-        ${items.length === 0
-          ? '<div style="font-size:12px;color:#6E7681;text-align:center;padding:20px;font-style:italic">No archived actions yet</div>'
-          : items.slice(0, 100).map(it => `
-            <div style="display:flex;align-items:flex-start;gap:10px;padding:8px 10px;background:#0D1117;border:1px solid #1C2333;border-radius:6px;margin-bottom:4px">
-              <div style="width:20px;height:20px;flex-shrink:0;display:flex;align-items:center;justify-content:center">
-                ${it.status === 'done'
-                  ? '<svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M2 7.5l3.5 3.5L12 4" stroke="#3FB950" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>'
-                  : '<svg width="12" height="12" viewBox="0 0 14 14" fill="none"><path d="M3 3l8 8M11 3l-8 8" stroke="#6E7681" stroke-width="1.6" stroke-linecap="round"/></svg>'
-                }
-              </div>
-              <div style="flex:1;min-width:0">
-                <div style="font-size:12px;color:${it.status === 'done' ? '#C9D1D9' : '#8B949E'};text-decoration:${it.status === 'dismissed' ? 'line-through' : 'none'}">${esc(it.text)}</div>
-                <div style="font-size:10px;color:#6E7681;margin-top:2px">${it.status === 'done' ? 'Done' : 'Dismissed'} &middot; ${fmtDate(it.resolvedAt)}${it.projectName ? ' &middot; ' + esc(it.projectName) : ''}</div>
-              </div>
-            </div>
-          `).join('')
-        }
+      <div class="modal-body" id="archive-body" style="overflow-y:auto;flex:1;min-height:0">
+        ${renderArchiveBody()}
       </div>
     </div>
   `;
   document.body.appendChild(overlay);
+}
+
+function renderArchiveBody() {
+  const items = state.actionsArchive || [];
+  if (items.length === 0) {
+    return '<div style="font-size:12px;color:#6E7681;text-align:center;padding:20px;font-style:italic">No archived actions yet</div>';
+  }
+  return items.slice(0, 100).map((it, idx) => `
+    <div style="display:flex;align-items:flex-start;gap:10px;padding:8px 10px;background:#0D1117;border:1px solid #1C2333;border-radius:6px;margin-bottom:4px">
+      <div style="width:20px;height:20px;flex-shrink:0;display:flex;align-items:center;justify-content:center">
+        ${it.status === 'done'
+          ? '<svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M2 7.5l3.5 3.5L12 4" stroke="#3FB950" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>'
+          : '<svg width="12" height="12" viewBox="0 0 14 14" fill="none"><path d="M3 3l8 8M11 3l-8 8" stroke="#6E7681" stroke-width="1.6" stroke-linecap="round"/></svg>'
+        }
+      </div>
+      <div style="flex:1;min-width:0">
+        <div style="font-size:12px;color:${it.status === 'done' ? '#C9D1D9' : '#8B949E'};text-decoration:${it.status === 'dismissed' ? 'line-through' : 'none'}">${esc(it.text)}</div>
+        <div style="font-size:10px;color:#6E7681;margin-top:2px">${it.status === 'done' ? 'Done' : 'Dismissed'} &middot; ${fmtDate(it.resolvedAt)}${it.projectName ? ' &middot; ' + esc(it.projectName) : ''}</div>
+      </div>
+      <button type="button" class="btn btn-sm" onclick="restoreArchivedAction(${idx})" style="font-size:10px;padding:3px 8px;flex-shrink:0" title="Restore as incomplete">Restore</button>
+    </div>
+  `).join('');
+}
+
+// Restore an archived action — full reversal for Done items, simple restore for Dismissed.
+function restoreArchivedAction(idx) {
+  const items = state.actionsArchive || [];
+  const item = items[idx];
+  if (!item) return;
+
+  if (item.status === 'done' && item.autoType) {
+    // Done auto-action — confirm reversal of propagated state changes
+    document.getElementById('restore-confirm-dialog')?.remove();
+    const overlay = document.createElement('div');
+    overlay.id = 'restore-confirm-dialog';
+    overlay.className = 'modal-overlay';
+    overlay.style.zIndex = '1100';
+    overlay.innerHTML = `
+      <div class="modal-container" style="max-width:420px">
+        <div class="modal-header">
+          <div class="modal-title">Restore action?</div>
+          <button class="modal-close" onclick="document.getElementById('restore-confirm-dialog')?.remove()">&times;</button>
+        </div>
+        <div class="modal-body">
+          <div style="font-size:13px;color:#C9D1D9;line-height:1.5;margin-bottom:14px">
+            "<strong>${esc(item.text)}</strong>" was marked Done. Restoring will return it to your active list.
+          </div>
+          <div style="background:#0D1117;border:1px solid #1C2333;border-radius:6px;padding:10px 12px;margin-bottom:14px">
+            <label style="display:flex;align-items:flex-start;gap:8px;cursor:pointer;font-size:12px;color:#E6EDF3">
+              <input type="checkbox" id="undo-state-changes" checked style="margin-top:2px">
+              <span>Also reverse the linked project state change<br><span style="font-size:10px;color:#8B949E">${esc(_describeAutoTypeReversal(item.autoType))}</span></span>
+            </label>
+          </div>
+          <div style="display:flex;gap:8px">
+            <button type="button" class="btn" onclick="document.getElementById('restore-confirm-dialog')?.remove()" style="flex:1">Cancel</button>
+            <button type="button" class="btn-primary" onclick="_doRestore(${idx})" style="flex:2">Restore</button>
+          </div>
+        </div>
+      </div>
+    `;
+    document.body.appendChild(overlay);
+  } else {
+    // Dismissed or non-auto — simple restore
+    _doRestore(idx, false);
+  }
+}
+
+function _describeAutoTypeReversal(autoType) {
+  const map = {
+    'send_quote': 'Will uncheck the "Proposal sent" milestone',
+    'quote_followup': 'Will reset the activity timestamp',
+    'email_followup': 'Will reset the activity timestamp',
+    'walkthrough': 'Will remove the auto-logged walkthrough meeting entry',
+    'design_kickoff': 'Will remove the kickoff meeting entry and uncheck the milestone',
+    'handoff': 'Will return the contract to "needs review" status',
+    'likely': 'No state change to reverse'
+  };
+  return map[autoType] || 'No state change to reverse';
+}
+
+function _doRestore(idx, askedAboutReversal) {
+  const items = state.actionsArchive || [];
+  const item = items[idx];
+  if (!item) return;
+  const undo = askedAboutReversal === false ? false : (document.getElementById('undo-state-changes')?.checked ?? false);
+
+  // Remove from archive
+  items.splice(idx, 1);
+  save('vi_actions_archive', items);
+
+  // Clear actionsState entry so the auto-action surfaces again
+  if (state.actionsState[item.key]) {
+    delete state.actionsState[item.key];
+    _persistActionState();
+  }
+
+  // For manual actions, we need to restore the original entry
+  if (item.source === 'manual' || item.source === 'assigned') {
+    if (item.manualEntry) {
+      // Re-add to actionsManual
+      const max = state.actionsManual.reduce((m, a) => Math.max(m, a.id || 0), 0);
+      const restored = { ...item.manualEntry, id: max + 1 };
+      state.actionsManual.push(restored);
+      _persistActionsManual();
+    }
+  }
+
+  // Reverse state propagation if requested
+  if (undo && item.status === 'done' && item.autoType && item.projectId) {
+    _reverseAutoActionPropagation(item);
+  }
+
+  // Close dialogs and refresh
+  document.getElementById('restore-confirm-dialog')?.remove();
+  document.getElementById('actions-archive-dialog')?.remove();
+  showToast('Action restored', 'success');
+  renderCurrentPage();
+  // Re-open archive after a tick so user sees updated list
+  setTimeout(() => openActionsArchiveDialog(), 100);
+}
+
+function _reverseAutoActionPropagation(item) {
+  const projectId = item.projectId;
+  const p = state.projects.find(x => x.id === projectId);
+  if (!p) return;
+
+  switch (item.autoType) {
+    case 'send_quote': {
+      // Uncheck proposal_sent milestone
+      const phaseKey = 'proposal';
+      const milestoneKey = 'proposal_sent';
+      if (state.milestones?.[projectId]?.[phaseKey]) {
+        delete state.milestones[projectId][phaseKey][milestoneKey];
+        save('vi_milestones', state.milestones);
+      }
+      break;
+    }
+    case 'walkthrough': {
+      // Remove auto-logged walkthrough meeting
+      if (state.meetingLogs?.[projectId]?.walkthrough?.source === 'action_completion') {
+        delete state.meetingLogs[projectId].walkthrough;
+        save('vi_meeting_logs', state.meetingLogs);
+      }
+      break;
+    }
+    case 'design_kickoff': {
+      // Remove auto-logged kickoff + uncheck milestone
+      if (state.meetingLogs?.[projectId]?.design_kickoff?.source === 'action_completion') {
+        delete state.meetingLogs[projectId].design_kickoff;
+        save('vi_meeting_logs', state.meetingLogs);
+      }
+      if (state.milestones?.[projectId]?.design?.kickoff) {
+        delete state.milestones[projectId].design.kickoff;
+        save('vi_milestones', state.milestones);
+      }
+      break;
+    }
+    case 'handoff': {
+      // Mark contract back as needing review (clear the reviewed flag)
+      if (p.contract_reviewed_at) {
+        delete p.contract_reviewed_at;
+        save('vi_projects', state.projects);
+      }
+      break;
+    }
+    case 'quote_followup':
+    case 'email_followup': {
+      // Reset activity timestamp (set to old date that triggers follow-up again)
+      if (state.recentActivity?.[projectId]) {
+        const old = new Date();
+        old.setDate(old.getDate() - 8);
+        state.recentActivity[projectId] = old.toISOString();
+        save('vi_recent_activity', state.recentActivity);
+      }
+      break;
+    }
+  }
 }
 
 // ── Sales Department Kanban (4 columns) ──
@@ -11033,4 +11280,314 @@ function resetActionText(key) {
   document.getElementById('edit-action-dialog')?.remove();
   showToast('Reset to defaults', 'info');
   renderDashboard(document.getElementById('content'));
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// PROJECT MOBILIZATION
+// Replaces the older "Needs Assignment" concept. When a project enters
+// Contract stage, it must complete a mobilization checklist before
+// Design and Planning can fully kick in.
+// ═══════════════════════════════════════════════════════════════════
+
+const MOBILIZATION_ITEMS = [
+  { key: 'sales_lead',       label: 'Sales Lead designated',       hint: 'Usually pre-set at project creation' },
+  { key: 'design_lead',      label: 'Design Lead designated',      hint: 'Person owning design phase work' },
+  { key: 'pm_lead',          label: 'PM Lead designated',          hint: 'Project manager for cross-phase coordination' },
+  { key: 'install_window',   label: 'Estimated install window set',hint: 'Approximate dates for forward planning' },
+  { key: 'scope_tags',       label: 'Project scope tags confirmed',hint: 'Drives which design checklists apply' },
+  { key: 'site_briefing',    label: 'Site briefing started',       hint: 'Location pins added — or skipped if not needed' },
+  { key: 'design_kickoff',   label: 'Initial design kickoff scheduled', hint: 'Meeting on the books to start design' }
+];
+
+// Returns the mobilization state for a project. Each item is auto-derived
+// from project state OR has a manual confirmation flag stored separately.
+function getMobilizationState(projectId) {
+  const p = state.projects.find(x => x.id === projectId);
+  if (!p) return null;
+  const a = getProjectAssignment(projectId);
+  const salesLead = (a.sales || []).find(x => x.lead);
+  const designLead = (a.design || []).find(x => x.lead);
+  const pmLead = (a.pm || []).find(x => x.lead);
+  const win = getInstallWindow(p);
+  const tags = p.systems || [];
+  const pinsCount = (state.projectPins?.[projectId] || []).length;
+  const briefingSkipped = state.mobilizationFlags?.[projectId]?.site_briefing_skipped;
+  const designKickoffLog = state.meetingLogs?.[projectId]?.design_kickoff;
+  const designKickoffScheduled = state.mobilizationFlags?.[projectId]?.design_kickoff_scheduled;
+
+  return {
+    sales_lead:     !!salesLead,
+    design_lead:    !!designLead,
+    pm_lead:        !!pmLead,
+    install_window: !!win,
+    scope_tags:     tags.length > 0,
+    site_briefing:  pinsCount > 0 || !!briefingSkipped,
+    design_kickoff: !!designKickoffLog || !!designKickoffScheduled
+  };
+}
+
+function isMobilizationComplete(projectId) {
+  const s = getMobilizationState(projectId);
+  if (!s) return false;
+  return MOBILIZATION_ITEMS.every(it => s[it.key]);
+}
+
+// Projects that need mobilization review — Contract stage with incomplete checklist
+function getProjectsNeedingMobilization() {
+  return state.projects.filter(p =>
+    !p.archived &&
+    p.stage === 'contract' &&
+    !isMobilizationComplete(p.id)
+  );
+}
+
+// Open the mobilization dialog for a project
+function openMobilizationDialog(projectId) {
+  const p = state.projects.find(x => x.id === projectId);
+  if (!p) return;
+  document.getElementById('mobilization-dialog')?.remove();
+  const overlay = document.createElement('div');
+  overlay.id = 'mobilization-dialog';
+  overlay.className = 'modal-overlay';
+  overlay.innerHTML = `
+    <div class="modal-container" style="max-width:560px;max-height:90vh;display:flex;flex-direction:column">
+      <div class="modal-header">
+        <div>
+          <div class="modal-title">Project Mobilization</div>
+          <div class="modal-sub">${esc(p.name)} &middot; complete to unlock Design + Planning</div>
+        </div>
+        <button class="modal-close" onclick="document.getElementById('mobilization-dialog')?.remove()">&times;</button>
+      </div>
+      <div class="modal-body" id="mobilization-body" style="overflow-y:auto;flex:1">
+        ${renderMobilizationBody(projectId)}
+      </div>
+    </div>
+  `;
+  document.body.appendChild(overlay);
+}
+
+function refreshMobilizationBody(projectId) {
+  const body = document.getElementById('mobilization-body');
+  if (body) body.innerHTML = renderMobilizationBody(projectId);
+  renderCurrentPage();
+}
+
+function renderMobilizationBody(projectId) {
+  const p = state.projects.find(x => x.id === projectId);
+  if (!p) return '';
+  const s = getMobilizationState(projectId);
+  const a = getProjectAssignment(projectId);
+  const win = getInstallWindow(p);
+  const tags = p.systems || [];
+  const flags = state.mobilizationFlags?.[projectId] || {};
+  const team = state.team.filter(m => !m.archived);
+
+  const rows = MOBILIZATION_ITEMS.map(it => {
+    const done = s[it.key];
+    const dotColor = done ? '#3FB950' : '#6E7681';
+    let detail = '';
+    if (it.key === 'sales_lead') {
+      const lead = (a.sales || []).find(x => x.lead);
+      detail = lead ? esc(getTeamMember(lead.id)?.name || '') : '<span style="color:#D29922">Not designated</span>';
+    } else if (it.key === 'design_lead') {
+      const lead = (a.design || []).find(x => x.lead);
+      detail = lead ? esc(getTeamMember(lead.id)?.name || '') : '<span style="color:#D29922">Not designated</span>';
+    } else if (it.key === 'pm_lead') {
+      const lead = (a.pm || []).find(x => x.lead);
+      detail = lead ? esc(getTeamMember(lead.id)?.name || '') : '<span style="color:#D29922">Not designated</span>';
+    } else if (it.key === 'install_window') {
+      detail = win ? `${fmtDate(win.start)}${win.end && win.end !== win.start ? ' — ' + fmtDate(win.end) : ''} <span style="color:#6E7681">(${esc(win.source)})</span>` : '<span style="color:#D29922">No window set</span>';
+    } else if (it.key === 'scope_tags') {
+      detail = tags.length > 0 ? tags.map(t => `<span style="font-size:10px;padding:2px 6px;background:#1C2333;border:1px solid #30363D;border-radius:3px;color:#C9D1D9;margin-right:3px">${esc(t)}</span>`).join('') : '<span style="color:#D29922">No tags</span>';
+    } else if (it.key === 'site_briefing') {
+      const pinsCount = (state.projectPins?.[projectId] || []).length;
+      detail = pinsCount > 0 ? `${pinsCount} pin${pinsCount === 1 ? '' : 's'}` : (flags.site_briefing_skipped ? '<span style="color:#8B949E">Skipped</span>' : '<span style="color:#D29922">No pins yet</span>');
+    } else if (it.key === 'design_kickoff') {
+      detail = (state.meetingLogs?.[projectId]?.design_kickoff) ? '<span style="color:#3FB950">Logged</span>' :
+               (flags.design_kickoff_scheduled ? '<span style="color:#3FB950">Scheduled</span>' : '<span style="color:#D29922">Not scheduled</span>');
+    }
+
+    return `
+      <div class="mob-row${done ? ' mob-done' : ''}">
+        <div class="mob-row-top">
+          <div class="mob-dot" style="background:${dotColor}"></div>
+          <div class="mob-text">
+            <div class="mob-label">${esc(it.label)}</div>
+            <div class="mob-hint">${esc(it.hint)}</div>
+          </div>
+          <div class="mob-actions">
+            ${renderMobilizationItemAction(projectId, it.key, done)}
+          </div>
+        </div>
+        <div class="mob-detail">${detail}</div>
+        ${renderMobilizationInlineEditor(projectId, it.key)}
+      </div>
+    `;
+  }).join('');
+
+  const allDone = MOBILIZATION_ITEMS.every(it => s[it.key]);
+
+  return `
+    <div style="font-size:12px;color:#8B949E;margin-bottom:12px;line-height:1.5">
+      Once all items are complete, this project is mobilized — Design and Planning can fully kick in. Items auto-check as the underlying state is set.
+    </div>
+    ${rows}
+    ${allDone ? `
+      <div style="margin-top:14px;padding:10px 12px;background:#0D1A0E;border:1px solid #238636;border-radius:6px;display:flex;align-items:center;gap:8px">
+        <svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M2 7.5l3.5 3.5L12 4" stroke="#3FB950" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        <span style="font-size:12px;color:#3FB950;font-weight:500">Project mobilized — Design + Planning unlocked</span>
+      </div>
+    ` : ''}
+  `;
+}
+
+function renderMobilizationItemAction(projectId, itemKey, done) {
+  if (itemKey === 'sales_lead' || itemKey === 'design_lead' || itemKey === 'pm_lead') {
+    return `<button type="button" class="btn btn-sm" onclick="openMobilizationLeadPicker(${projectId}, '${itemKey.replace('_lead', '')}')" style="font-size:11px;padding:4px 10px">${done ? 'Change' : 'Set Lead'}</button>`;
+  }
+  if (itemKey === 'install_window') {
+    return `<button type="button" class="btn btn-sm" onclick="openMobilizationInstallEditor(${projectId})" style="font-size:11px;padding:4px 10px">${done ? 'Edit' : 'Set Window'}</button>`;
+  }
+  if (itemKey === 'scope_tags') {
+    return `<button type="button" class="btn btn-sm" onclick="openMobilizationTagsEditor(${projectId})" style="font-size:11px;padding:4px 10px">Edit Tags</button>`;
+  }
+  if (itemKey === 'site_briefing') {
+    const flags = state.mobilizationFlags?.[projectId] || {};
+    const pinsCount = (state.projectPins?.[projectId] || []).length;
+    if (pinsCount > 0) {
+      return `<button type="button" class="btn btn-sm" onclick="openProject(${projectId},'location')" style="font-size:11px;padding:4px 10px">Open</button>`;
+    }
+    return `
+      <button type="button" class="btn btn-sm" onclick="openProject(${projectId},'location')" style="font-size:11px;padding:4px 10px">Open</button>
+      <button type="button" class="btn btn-sm" onclick="toggleMobilizationFlag(${projectId},'site_briefing_skipped')" style="font-size:11px;padding:4px 10px">${flags.site_briefing_skipped ? 'Un-skip' : 'Skip'}</button>
+    `;
+  }
+  if (itemKey === 'design_kickoff') {
+    const flags = state.mobilizationFlags?.[projectId] || {};
+    return `<button type="button" class="btn btn-sm" onclick="toggleMobilizationFlag(${projectId},'design_kickoff_scheduled')" style="font-size:11px;padding:4px 10px">${flags.design_kickoff_scheduled ? 'Unschedule' : 'Mark Scheduled'}</button>`;
+  }
+  return '';
+}
+
+function renderMobilizationInlineEditor(projectId, itemKey) {
+  const editing = state.mobilizationEditing?.[projectId];
+  if (editing !== itemKey) return '';
+  if (itemKey === 'scope_tags') {
+    const p = state.projects.find(x => x.id === projectId);
+    const current = new Set(p.systems || []);
+    return `
+      <div class="mob-inline-editor">
+        <div style="font-size:11px;color:#8B949E;margin-bottom:8px">Tap tags to toggle</div>
+        <div style="display:flex;flex-wrap:wrap;gap:6px">
+          ${SCOPE_TAGS.map(t => `
+            <button type="button" onclick="toggleScopeTag(${projectId}, '${esc(t).replace(/'/g, "\\'")}')" class="mob-tag-chip${current.has(t) ? ' active' : ''}">${esc(t)}</button>
+          `).join('')}
+        </div>
+        <div style="display:flex;justify-content:flex-end;margin-top:10px">
+          <button type="button" class="btn btn-sm" onclick="closeMobilizationEditor(${projectId})" style="font-size:11px;padding:4px 10px">Done</button>
+        </div>
+      </div>
+    `;
+  }
+  if (itemKey === 'install_window') {
+    const p = state.projects.find(x => x.id === projectId);
+    const win = getInstallWindow(p);
+    const start = win?.start || '';
+    const end = win?.end || '';
+    return `
+      <div class="mob-inline-editor">
+        <div style="display:flex;gap:8px;align-items:end;flex-wrap:wrap">
+          <div>
+            <label class="form-label" style="font-size:10px">Start</label>
+            <input type="date" id="mob-est-start" class="form-input" value="${start}" style="font-size:12px">
+          </div>
+          <div>
+            <label class="form-label" style="font-size:10px">End</label>
+            <input type="date" id="mob-est-end" class="form-input" value="${end}" style="font-size:12px">
+          </div>
+          <button type="button" class="btn-primary" onclick="saveMobilizationInstallWindow(${projectId})" style="font-size:11px;padding:6px 12px">Save</button>
+          <button type="button" class="btn" onclick="closeMobilizationEditor(${projectId})" style="font-size:11px;padding:6px 12px">Cancel</button>
+        </div>
+      </div>
+    `;
+  }
+  if (itemKey === 'sales_lead' || itemKey === 'design_lead' || itemKey === 'pm_lead') {
+    const role = itemKey.replace('_lead', '');
+    const a = getProjectAssignment(projectId);
+    const list = a[role] || [];
+    const currentLeadId = list.find(x => x.lead)?.id;
+    const team = state.team.filter(m => !m.archived);
+    return `
+      <div class="mob-inline-editor">
+        <div style="font-size:11px;color:#8B949E;margin-bottom:8px">Select ${role} lead</div>
+        <div style="display:flex;flex-wrap:wrap;gap:6px">
+          ${team.map(m => `
+            <button type="button" onclick="setMobilizationLead(${projectId},'${role}',${m.id})" class="mob-tag-chip${m.id === currentLeadId ? ' active' : ''}">${esc(m.name)}</button>
+          `).join('')}
+        </div>
+        <div style="display:flex;justify-content:flex-end;margin-top:10px">
+          <button type="button" class="btn btn-sm" onclick="closeMobilizationEditor(${projectId})" style="font-size:11px;padding:4px 10px">Done</button>
+        </div>
+      </div>
+    `;
+  }
+  return '';
+}
+
+function openMobilizationTagsEditor(projectId) {
+  if (!state.mobilizationEditing) state.mobilizationEditing = {};
+  state.mobilizationEditing[projectId] = 'scope_tags';
+  refreshMobilizationBody(projectId);
+}
+
+function openMobilizationInstallEditor(projectId) {
+  if (!state.mobilizationEditing) state.mobilizationEditing = {};
+  state.mobilizationEditing[projectId] = 'install_window';
+  refreshMobilizationBody(projectId);
+}
+
+function openMobilizationLeadPicker(projectId, role) {
+  if (!state.mobilizationEditing) state.mobilizationEditing = {};
+  state.mobilizationEditing[projectId] = role + '_lead';
+  refreshMobilizationBody(projectId);
+}
+
+function closeMobilizationEditor(projectId) {
+  if (state.mobilizationEditing) delete state.mobilizationEditing[projectId];
+  refreshMobilizationBody(projectId);
+}
+
+function toggleScopeTag(projectId, tag) {
+  const p = state.projects.find(x => x.id === projectId);
+  if (!p) return;
+  if (!p.systems) p.systems = [];
+  const idx = p.systems.indexOf(tag);
+  if (idx >= 0) p.systems.splice(idx, 1);
+  else p.systems.push(tag);
+  save('vi_projects', state.projects);
+  refreshMobilizationBody(projectId);
+}
+
+function saveMobilizationInstallWindow(projectId) {
+  const start = document.getElementById('mob-est-start')?.value;
+  const end = document.getElementById('mob-est-end')?.value || start;
+  if (!start) { showToast('Set a start date', 'error'); return; }
+  if (!state.estimatedInstall) state.estimatedInstall = {};
+  state.estimatedInstall[projectId] = { start, end };
+  save('vi_estimated_install', state.estimatedInstall);
+  closeMobilizationEditor(projectId);
+}
+
+function setMobilizationLead(projectId, role, memberId) {
+  // Use existing setRoleLead so the cascade prompt applies
+  setRoleLead(projectId, role, memberId);
+  closeMobilizationEditor(projectId);
+}
+
+function toggleMobilizationFlag(projectId, flagKey) {
+  if (!state.mobilizationFlags) state.mobilizationFlags = {};
+  if (!state.mobilizationFlags[projectId]) state.mobilizationFlags[projectId] = {};
+  state.mobilizationFlags[projectId][flagKey] = !state.mobilizationFlags[projectId][flagKey];
+  save('vi_mobilization_flags', state.mobilizationFlags);
+  refreshMobilizationBody(projectId);
 }
