@@ -549,6 +549,18 @@ const SCOPE_TAGS = [
   'Network'
 ];
 
+// Mobilization checklist items — used by Sales Action tab + project Overview.
+// Each item auto-checks based on derived project state (with optional manual flags).
+const MOBILIZATION_ITEMS = [
+  { key: 'sales_lead',       label: 'Sales Lead designated',       hint: 'Usually pre-set at project creation' },
+  { key: 'design_lead',      label: 'Design Lead designated',      hint: 'Person owning design phase work' },
+  { key: 'pm_lead',          label: 'PM Lead designated',          hint: 'Project manager for cross-phase coordination' },
+  { key: 'install_window',   label: 'Estimated install window set',hint: 'Approximate dates for forward planning' },
+  { key: 'scope_tags',       label: 'Project scope tags confirmed',hint: 'Drives which design checklists apply' },
+  { key: 'site_briefing',    label: 'Site briefing started',       hint: 'Location pins added — or skipped if not needed' },
+  { key: 'design_kickoff',   label: 'Initial design kickoff scheduled', hint: 'Meeting on the books to start design' }
+];
+
 function mapStage(raw) {
   if (!raw) return 'lead';
   const s = raw.toLowerCase();
@@ -11287,17 +11299,9 @@ function resetActionText(key) {
 // Replaces the older "Needs Assignment" concept. When a project enters
 // Contract stage, it must complete a mobilization checklist before
 // Design and Planning can fully kick in.
+// (MOBILIZATION_ITEMS is declared near the top of this file alongside
+//  SCOPE_TAGS so it's available before Sales dashboard render runs.)
 // ═══════════════════════════════════════════════════════════════════
-
-const MOBILIZATION_ITEMS = [
-  { key: 'sales_lead',       label: 'Sales Lead designated',       hint: 'Usually pre-set at project creation' },
-  { key: 'design_lead',      label: 'Design Lead designated',      hint: 'Person owning design phase work' },
-  { key: 'pm_lead',          label: 'PM Lead designated',          hint: 'Project manager for cross-phase coordination' },
-  { key: 'install_window',   label: 'Estimated install window set',hint: 'Approximate dates for forward planning' },
-  { key: 'scope_tags',       label: 'Project scope tags confirmed',hint: 'Drives which design checklists apply' },
-  { key: 'site_briefing',    label: 'Site briefing started',       hint: 'Location pins added — or skipped if not needed' },
-  { key: 'design_kickoff',   label: 'Initial design kickoff scheduled', hint: 'Meeting on the books to start design' }
-];
 
 // Returns the mobilization state for a project. Each item is auto-derived
 // from project state OR has a manual confirmation flag stored separately.
