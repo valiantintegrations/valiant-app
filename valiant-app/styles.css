@@ -3566,3 +3566,59 @@ td.today .cal-day-num {
   font-style: italic;
   padding: 2px 6px;
 }
+
+/* ── Calendar filter bar (v1.43 — replaces view toggle) ── */
+.cal-filter-bar {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px 12px;
+  background: #0D1117;
+  border: 1px solid #1C2333;
+  border-radius: 6px;
+  margin-bottom: 10px;
+}
+.cal-filter-group {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+.cal-filter-label {
+  font-size: 11px;
+  font-weight: 600;
+  color: #8B949E;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  margin-right: 4px;
+  min-width: 50px;
+}
+.cal-toggle-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  font-weight: 500;
+  padding: 4px 10px;
+  background: #161B22;
+  border: 1px solid #30363D;
+  color: #8B949E;
+  border-radius: 4px;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+  font-family: inherit;
+}
+.cal-toggle-chip:hover { color: #C9D1D9; border-color: #58A6FF; }
+.cal-toggle-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex-shrink: 0;
+  opacity: 0.5;
+}
+.cal-toggle-chip.active .cal-toggle-dot { opacity: 1; }
+
+/* My Work calendar item title — make weight visible */
+.my-cal-item-title {
+  font-weight: 500;
+}
