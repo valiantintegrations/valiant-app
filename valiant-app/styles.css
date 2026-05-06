@@ -2790,3 +2790,261 @@ td.today .cal-day-num {
   border: 1px solid #9E6A03;
   border-radius: 3px;
 }
+
+/* ── Install Window Picker (full-screen calendar modal) ── */
+.iwp-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.7);
+  z-index: 200;
+  display: flex;
+  align-items: stretch;
+  justify-content: center;
+  overflow: hidden;
+  -webkit-overflow-scrolling: touch;
+}
+.iwp-panel {
+  background: #0D1117;
+  border: 1px solid #30363D;
+  width: 100%;
+  max-width: 760px;
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+  overflow: hidden;
+}
+@media (min-width: 700px) {
+  .iwp-overlay { padding: 24px; }
+  .iwp-panel {
+    border-radius: 12px;
+    height: auto;
+    max-height: calc(100vh - 48px);
+  }
+}
+.iwp-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 14px 18px;
+  border-bottom: 1px solid #1C2333;
+  flex-shrink: 0;
+}
+.iwp-title {
+  font-size: 16px;
+  font-weight: 600;
+  color: #E6EDF3;
+}
+.iwp-sub {
+  font-size: 11px;
+  color: #8B949E;
+  margin-top: 2px;
+}
+.iwp-close {
+  width: 32px;
+  height: 32px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: transparent;
+  border: none;
+  color: #8B949E;
+  cursor: pointer;
+  border-radius: 6px;
+  -webkit-tap-highlight-color: transparent;
+  padding: 0;
+}
+.iwp-close:hover, .iwp-close:active { background: #1C2333; color: #C9D1D9; }
+.iwp-body {
+  flex: 1;
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+  padding: 14px 18px;
+}
+.iwp-footer {
+  flex-shrink: 0;
+  border-top: 1px solid #1C2333;
+  padding: 12px 18px calc(env(safe-area-inset-bottom, 0) + 12px);
+  background: #0D1117;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.iwp-summary {
+  font-size: 13px;
+  color: #C9D1D9;
+}
+.iwp-actions {
+  display: flex;
+  gap: 8px;
+  justify-content: flex-end;
+}
+
+.iwp-month-nav {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 16px;
+  margin-bottom: 12px;
+}
+.iwp-month-name {
+  font-size: 14px;
+  font-weight: 600;
+  color: #E6EDF3;
+  min-width: 160px;
+  text-align: center;
+}
+.iwp-month-btn {
+  width: 32px;
+  height: 32px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: #161B22;
+  border: 1px solid #30363D;
+  color: #C9D1D9;
+  cursor: pointer;
+  border-radius: 6px;
+  -webkit-tap-highlight-color: transparent;
+}
+.iwp-month-btn:hover, .iwp-month-btn:active {
+  background: #1C2333;
+  border-color: #58A6FF;
+}
+
+.iwp-dow {
+  display: grid;
+  grid-template-columns: repeat(7, 1fr);
+  gap: 4px;
+  margin-bottom: 4px;
+}
+.iwp-dow-cell {
+  font-size: 10px;
+  font-weight: 700;
+  color: #6E7681;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  text-align: center;
+  padding: 4px 0;
+}
+
+.iwp-grid {
+  display: grid;
+  grid-template-columns: repeat(7, 1fr);
+  gap: 4px;
+}
+.iwp-day {
+  aspect-ratio: 1 / 1.1;
+  background: #0D1117;
+  border: 1px solid #1C2333;
+  border-radius: 6px;
+  padding: 4px;
+  cursor: pointer;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  -webkit-tap-highlight-color: transparent;
+  transition: background 0.1s, border-color 0.1s;
+  overflow: hidden;
+}
+.iwp-day:hover {
+  background: #161B22;
+  border-color: #30363D;
+}
+.iwp-day-blank {
+  background: transparent;
+  border: none;
+  cursor: default;
+}
+.iwp-day-blank:hover {
+  background: transparent;
+  border: none;
+}
+.iwp-day-num {
+  font-size: 12px;
+  font-weight: 600;
+  color: #C9D1D9;
+}
+.iwp-day-today { border-color: #58A6FF; }
+.iwp-day-today .iwp-day-num { color: #58A6FF; }
+.iwp-day-past { opacity: 0.55; }
+.iwp-day-events {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  flex: 1;
+  min-height: 0;
+}
+.iwp-event {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  font-size: 9px;
+  color: #C9D1D9;
+  white-space: nowrap;
+  overflow: hidden;
+}
+.iwp-event-dot {
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+.iwp-event-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  flex: 1;
+  min-width: 0;
+}
+.iwp-event-more {
+  font-size: 9px;
+  color: #6E7681;
+  font-weight: 600;
+}
+/* Selection states */
+.iwp-day-range-start {
+  background: #0F4C2E;
+  border-color: #2EA043;
+}
+.iwp-day-range-end {
+  background: #0F4C2E;
+  border-color: #2EA043;
+}
+.iwp-day-range-mid {
+  background: #0A2E1B;
+  border-color: #1F6E2E;
+}
+.iwp-day-range-start .iwp-day-num,
+.iwp-day-range-end .iwp-day-num,
+.iwp-day-range-mid .iwp-day-num {
+  color: #3FB950;
+}
+
+.iwp-legend {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 16px;
+  margin-top: 14px;
+  font-size: 11px;
+  color: #8B949E;
+}
+.iwp-legend-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+/* Mobile tweaks */
+@media (max-width: 700px) {
+  .iwp-day { padding: 2px; aspect-ratio: 1 / 1.2; }
+  .iwp-day-num { font-size: 11px; }
+  .iwp-event { font-size: 8px; }
+  .iwp-event-label { font-size: 8px; }
+  .iwp-month-name { min-width: 130px; font-size: 13px; }
+  .iwp-actions .btn, .iwp-actions .btn-primary {
+    flex: 1;
+    padding: 10px;
+    font-size: 13px;
+  }
+}
