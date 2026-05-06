@@ -3169,3 +3169,106 @@ td.today .cal-day-num {
   accent-color: #1565C0;
   cursor: pointer;
 }
+
+/* ── Install Window Picker — segmented mode toggle + notes ── */
+.iwp-mode-bar {
+  flex-shrink: 0;
+  padding: 12px 18px 0;
+}
+.iwp-segmented {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 6px;
+  background: #0D1117;
+  border: 1px solid #1C2333;
+  border-radius: 8px;
+  padding: 4px;
+}
+.iwp-seg-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 8px 10px;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  color: #8B949E;
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+  transition: all 0.12s;
+  font-family: inherit;
+}
+.iwp-seg-btn:hover { color: #C9D1D9; }
+.iwp-seg-btn.active.iwp-seg-est {
+  background: #0D1626;
+  border-color: #1565C0;
+  color: #58A6FF;
+  font-weight: 600;
+}
+.iwp-seg-btn.active.iwp-seg-bk {
+  background: #0A2E1B;
+  border-color: #1F6E2E;
+  color: #3FB950;
+  font-weight: 600;
+}
+.iwp-seg-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+.iwp-seg-hint {
+  font-size: 10px;
+  font-weight: 400;
+  color: #6E7681;
+  margin-left: 4px;
+}
+.iwp-seg-btn.active .iwp-seg-hint {
+  color: inherit;
+  opacity: 0.7;
+}
+
+.iwp-notes {
+  flex-shrink: 0;
+  padding: 0 18px 12px;
+  border-bottom: 1px solid #1C2333;
+}
+.iwp-notes-label {
+  display: block;
+  font-size: 11px;
+  font-weight: 600;
+  color: #8B949E;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  margin-bottom: 6px;
+}
+.iwp-notes-textarea {
+  width: 100%;
+  background: #0D1117;
+  border: 1px solid #1C2333;
+  border-radius: 6px;
+  color: #C9D1D9;
+  font-size: 13px;
+  padding: 10px 12px;
+  font-family: inherit;
+  resize: vertical;
+  min-height: 56px;
+  line-height: 1.5;
+}
+.iwp-notes-textarea:focus {
+  outline: none;
+  border-color: #1565C0;
+  background: #0F1219;
+}
+.iwp-notes-textarea::placeholder {
+  color: #4A5568;
+  font-style: italic;
+}
+
+/* Scheduling notes flag on calendar events */
+.cal-event-has-notes {
+  font-weight: 600;
+}
