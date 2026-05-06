@@ -11540,7 +11540,7 @@ function openMobilizationDialog(projectId) {
           <div class="modal-title">Project Mobilization</div>
           <div class="modal-sub">${esc(p.name)} &middot; complete to unlock Design + Planning</div>
         </div>
-        <button class="modal-close" onclick="document.getElementById('mobilization-dialog')?.remove()">&times;</button>
+        <button class="modal-close" onclick="closeMobilizationDialog()">&times;</button>
       </div>
       <div class="modal-body" id="mobilization-body" style="overflow-y:auto;flex:1">
         ${renderMobilizationBody(projectId)}
@@ -11553,6 +11553,12 @@ function openMobilizationDialog(projectId) {
 function refreshMobilizationBody(projectId) {
   const body = document.getElementById('mobilization-body');
   if (body) body.innerHTML = renderMobilizationBody(projectId);
+}
+
+// Close the mobilization dialog AND re-render the underlying page so any
+// changes (leads set, scope tags, install window) reflect in dashboards.
+function closeMobilizationDialog() {
+  document.getElementById('mobilization-dialog')?.remove();
   renderCurrentPage();
 }
 
@@ -11784,8 +11790,21 @@ function saveMobilizationInstallWindow(projectId) {
 }
 
 function setMobilizationLead(projectId, role, memberId) {
-  // Use existing setRoleLead so the cascade prompt applies
-  setRoleLead(projectId, role, memberId);
+  // Within mobilization, we do a clean assignment without invoking setRoleLead's
+  // cascade dialog (which would cover the mobilization dialog and re-render the page).
+  // Mobilization is for newly-contracted projects — there's no prior lead with
+  // assigned manual actions to cascade, so the simpler path is correct.
+  const a = getProjectAssignment(projectId);
+  const list = a[role] || [];
+  const idx = list.findIndex(x => x.id === memberId);
+  // If person isn't on the role yet, add them
+  if (idx < 0) {
+    list.push({ id: memberId, lead: false });
+  }
+  // Set this person as lead, unset others
+  list.forEach(x => x.lead = (x.id === memberId));
+  setProjectAssignment(projectId, role, list);
+  // Just refresh the dialog body — no full-page render
   closeMobilizationEditor(projectId);
 }
 
