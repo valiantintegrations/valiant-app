@@ -77,8 +77,7 @@ const PERMISSION_KEYS = [
   // Sales / client
   'sales.view_pipeline',
   'sales.send_proposals',
-  'client.view_contact',
-  'calendar.view_all'
+  'client.view_contact'
 ];
 
 // Helper: all user-management permissions (used in Master Admin / Owner bundles)
@@ -124,7 +123,6 @@ const DEFAULT_BUNDLES = {
       'client.view_contact',
       'templates.review',
       'dashboards.install_mgmt',
-      'calendar.view_all'
     ]
   },
   'design_admin': {
@@ -144,7 +142,6 @@ const DEFAULT_BUNDLES = {
       'client.view_contact',
       'templates.review',
       'dashboards.design_mgmt',
-      'calendar.view_all'
     ]
   },
   'sales': {
@@ -161,7 +158,6 @@ const DEFAULT_BUNDLES = {
       'client.view_contact',
       'vendors.view',
       'dashboards.sales_mgmt',
-      'calendar.view_all'
     ]
   },
   'project_manager': {
@@ -178,7 +174,6 @@ const DEFAULT_BUNDLES = {
       'financials.view_project_totals',
       'client.view_contact',
       'dashboards.install_mgmt','dashboards.design_mgmt','dashboards.sales_mgmt',
-      'calendar.view_all'
     ]
   },
   'designer': {
@@ -192,7 +187,6 @@ const DEFAULT_BUNDLES = {
       'vendors.view',
       'financials.view_project_totals',
       'client.view_contact',
-      'calendar.view_all'
     ]
   },
   'installer': {
@@ -372,8 +366,9 @@ const state = {
   meetingLogs: JSON.parse(localStorage.getItem('vi_meeting_logs') || '{}'),
   meetings: JSON.parse(localStorage.getItem('vi_meetings') || '[]'),
   personalEvents: JSON.parse(localStorage.getItem('vi_personal_events') || '[]'),
-  calendarViewMode: localStorage.getItem('vi_calendar_view_mode') || 'mine',
   calendarSelectedMembers: JSON.parse(localStorage.getItem('vi_calendar_selected_members') || '[]'),
+  calendarShowBooked: JSON.parse(localStorage.getItem('vi_calendar_show_booked') || 'false'),
+  calendarShowEstimated: JSON.parse(localStorage.getItem('vi_calendar_show_estimated') || 'false'),
   planningAssignments: JSON.parse(localStorage.getItem('vi_planning_assignments') || '{}'),
   vehicles: JSON.parse(localStorage.getItem('vi_vehicles') || '[]'),
   tools: JSON.parse(localStorage.getItem('vi_tools') || '[]'),
@@ -419,12 +414,34 @@ state.team.forEach(m => {
   // Detect stale bundles (old permission keys) and refresh to new DEFAULT_BUNDLES
   // Check Master Admin bundle for the presence of old 'admin.edit_users' (without suffix)
   const stale = state.bundles?.master_admin?.permissions?.includes('admin.edit_users');
-  // Also refresh if calendar.view_all is missing from Master Admin (added in v1.43)
-  const missingCalendarPerm = !state.bundles?.master_admin?.permissions?.includes('calendar.view_all');
-  if (stale || missingCalendarPerm) {
+  if (stale) {
     state.bundles = JSON.parse(JSON.stringify(DEFAULT_BUNDLES));
     save('vi_bundles', state.bundles);
   }
+  // One-time cleanup of calendar.view_all (introduced and removed in v1.43)
+  // Strip from all bundles + user perms if present
+  let cleanedCalendarPerm = false;
+  Object.keys(state.bundles || {}).forEach(bk => {
+    const perms = state.bundles[bk]?.permissions;
+    if (Array.isArray(perms)) {
+      const before = perms.length;
+      state.bundles[bk].permissions = perms.filter(p => p !== 'calendar.view_all');
+      if (state.bundles[bk].permissions.length !== before) cleanedCalendarPerm = true;
+    }
+  });
+  if (cleanedCalendarPerm) save('vi_bundles', state.bundles);
+  Object.keys(state.userPermissions || {}).forEach(uid => {
+    const up = state.userPermissions[uid];
+    if (up?.add?.includes('calendar.view_all')) {
+      up.add = up.add.filter(p => p !== 'calendar.view_all');
+      cleanedCalendarPerm = true;
+    }
+    if (up?.remove?.includes('calendar.view_all')) {
+      up.remove = up.remove.filter(p => p !== 'calendar.view_all');
+      cleanedCalendarPerm = true;
+    }
+  });
+  if (cleanedCalendarPerm) save('vi_user_perms', state.userPermissions);
 
   let changed = false;
   const roleToBundle = {
@@ -1007,7 +1024,51 @@ function getInstallDateDisplay(project) {
   return { label: 'Est.', value: 'Not set', color: '#6E7681' };
 }
 
+// Edit permission for install window (booked + estimated dates).
+// As of v1.43:
+//   - PM lead of THIS project can edit
+//   - Master Admin / admin.system can edit
+//   - Lead Installer can REQUEST changes (Round 2 — pending approval flow)
+//   - Anyone else: read-only
+// During mobilization (project still in Sales' mobilization queue), members
+// with assign_team perms can also set the initial estimated window.
+function canEditInstallWindow(projectId) {
+  // Master Admin / system override
+  if (currentUserHasPermission('admin.system')) return true;
+  const viewerId = getActiveTeamMemberId();
+  const a = getProjectAssignment(projectId);
+  // PM lead of this project
+  const pmLead = (a.pm || []).find(x => x.lead);
+  if (pmLead && pmLead.id === viewerId) return true;
+  // During mobilization — anyone with assign_team perms can finalize the
+  // initial estimated install window (they're getting the project off the ground)
+  const p = state.projects.find(x => x.id === projectId);
+  if (p && p.stage === 'contract' && !isMobilizationComplete(projectId)) {
+    if (currentUserHasPermission('assign_team.pm')) return true;
+    if (currentUserHasPermission('assign_team.sales')) return true;
+  }
+  return false;
+}
+
+// Lead Installer (lead in assignment.install) can request a change. Used by
+// Round 2 to gate the "request change" path. Round 1 just returns true if
+// person is lead installer — UI shows tooltip but doesn't action yet.
+function canRequestInstallWindowChange(projectId) {
+  const viewerId = getActiveTeamMemberId();
+  const a = getProjectAssignment(projectId);
+  const installLead = (a.install || []).find(x => x.lead);
+  return !!(installLead && installLead.id === viewerId);
+}
+
 function showSetBookedDatesDialog(projectId) {
+  if (!canEditInstallWindow(projectId)) {
+    if (canRequestInstallWindowChange(projectId)) {
+      showToast('Lead installers can request schedule changes via the PM (coming soon)', 'info');
+    } else {
+      showToast('Only the project PM can edit install dates', 'info');
+    }
+    return;
+  }
   const p = state.projects.find(x => x.id === projectId);
   if (!p) return;
   // Determine current state — what window does this project have?
@@ -4100,7 +4161,7 @@ function renderProjectOverviewHTML(p) {
         <div style="padding:12px;background:#0D1117;border-radius:8px;border:1px solid #1C2333">
           <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px">
             <div style="font-size:10px;color:#6E7681;text-transform:uppercase;letter-spacing:0.06em">Estimated (from Jetbuilt)</div>
-            ${currentUserHasPermission('projects.edit') ? `<button class="btn btn-sm" onclick="showEstimatedInstallDialog(${p.id})" style="font-size:10px;padding:3px 8px">Edit</button>` : ''}
+            ${canEditInstallWindow(p.id) ? `<button class="btn btn-sm" onclick="showEstimatedInstallDialog(${p.id})" style="font-size:10px;padding:3px 8px">Edit</button>` : ''}
           </div>
           ${(() => {
             const est = getEstimatedInstall(p);
@@ -4116,7 +4177,7 @@ function renderProjectOverviewHTML(p) {
         <div style="padding:12px;background:${getBookedTimeline(p.id) ? '#0D1A0E' : '#0D1117'};border-radius:8px;border:1px solid ${getBookedTimeline(p.id) ? '#238636' : '#1C2333'}">
           <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px">
             <div style="font-size:10px;color:#6E7681;text-transform:uppercase;letter-spacing:0.06em">Booked Install Window</div>
-            ${currentUserHasPermission('projects.edit') ? `<button class="btn btn-sm" onclick="showSetBookedDatesDialog(${p.id})" style="font-size:10px;padding:3px 8px">${getBookedTimeline(p.id) ? 'Edit' : 'Book'}</button>` : ''}
+            ${canEditInstallWindow(p.id) ? `<button class="btn btn-sm" onclick="showSetBookedDatesDialog(${p.id})" style="font-size:10px;padding:3px 8px">${getBookedTimeline(p.id) ? 'Edit' : 'Book'}</button>` : ''}
           </div>
           ${(() => {
             const b = getBookedTimeline(p.id);
@@ -5050,6 +5111,14 @@ function setEstimatedInstallOverride(projectId, dateOrRange) {
 }
 
 function showEstimatedInstallDialog(projectId) {
+  if (!canEditInstallWindow(projectId)) {
+    if (canRequestInstallWindowChange(projectId)) {
+      showToast('Lead installers can request schedule changes via the PM (coming soon)', 'info');
+    } else {
+      showToast('Only the project PM can edit install dates', 'info');
+    }
+    return;
+  }
   const p = state.projects.find(pr => pr.id === projectId);
   if (!p) return;
   const win = getInstallWindow(p);
@@ -6312,7 +6381,7 @@ function renderCalendar(c) {
             const viewerId = getActiveTeamMemberId();
             const viewerIsOwner = pe.memberId === viewerId;
             const label = getPersonalEventDisplayLabel(pe, viewerIsOwner);
-            const ownerLabel = (state.calendarViewMode === 'all' && !viewerIsOwner && owner) ? `${owner.name.split(' ')[0]}: ` : '';
+            const ownerLabel = (!viewerIsOwner && owner) ? `${owner.name.split(' ')[0]}: ` : '';
             return `<div class="cal-event cal-event-personal" style="background:${getPersonalEventColor(pe)}1F;border-color:${getPersonalEventColor(pe)};color:${getPersonalEventColor(pe)}" onclick="event.stopPropagation();openCalendarDayDetail('${dateStr}')" title="${esc(ownerLabel + label)}">${esc(ownerLabel + label)}</div>`;
           }).join('')}
           ${totalCount > visibleCount ? `<div class="cal-event-overflow">+${totalCount - visibleCount} more</div>` : ''}
@@ -6324,9 +6393,10 @@ function renderCalendar(c) {
     if (dayCount > daysInMonth) break;
   }
 
-  const canViewAll = currentUserHasPermission('calendar.view_all');
-  const viewMode = state.calendarViewMode || 'mine';
   const viewerId = getActiveTeamMemberId();
+  // Booked + Estimated visibility toggles (default OFF — opt-in to reduce information overload)
+  const showBooked = state.calendarShowBooked === true;
+  const showEstimated = state.calendarShowEstimated === true;
 
   c.innerHTML = `
     <div class="calendar-container">
@@ -6337,25 +6407,11 @@ function renderCalendar(c) {
           <button class="cal-btn" onclick="calNav(1)"><svg width="12" height="12" viewBox="0 0 12 12" fill="none"><path d="M4 2l4 4-4 4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg></button>
         </div>
         <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
-          ${canViewAll ? `
-            <div class="cal-view-toggle">
-              <button class="cal-view-btn ${viewMode === 'mine' ? 'active' : ''}" onclick="setCalendarViewMode('mine')">My Calendar</button>
-              <button class="cal-view-btn ${viewMode === 'all' ? 'active' : ''}" onclick="setCalendarViewMode('all')">All People</button>
-            </div>
-          ` : ''}
-          <div style="display:flex;align-items:center;gap:10px;font-size:11px">
-            <span style="display:inline-flex;align-items:center;gap:4px;color:#8B949E">
-              <span style="width:10px;height:10px;border-radius:2px;background:#58A6FF"></span> Estimated
-            </span>
-            <span style="display:inline-flex;align-items:center;gap:4px;color:#8B949E">
-              <span style="width:10px;height:10px;border-radius:2px;background:#3FB950"></span> Booked
-            </span>
-          </div>
           <button class="cal-btn" onclick="calToday()" style="width:auto;padding:0 10px;font-size:11px">Today</button>
           <button class="btn-primary" onclick="openAddPersonalEventDialog()" style="font-size:11px;padding:6px 12px">+ Personal Event</button>
         </div>
       </div>
-      ${canViewAll && viewMode === 'all' ? renderCalendarMemberFilter() : ''}
+      ${renderCalendarFilters()}
       <table class="calendar-grid">
         <thead><tr>${days.map(d => `<th>${d}</th>`).join('')}</tr></thead>
         <tbody>${cells}</tbody>
@@ -6364,27 +6420,49 @@ function renderCalendar(c) {
   `;
 }
 
-function renderCalendarMemberFilter() {
+// Calendar filter bar — always shown. Three filter groups:
+//   1. People — chip selector. Defaults to current viewer.
+//   2. Booked Jobs toggle — default OFF
+//   3. Estimated Jobs toggle — default OFF
+// Job toggles only show jobs the viewer is assigned to (assignment.install,
+// assignment.pm, assignment.design, etc.) to avoid information overload.
+function renderCalendarFilters() {
   const team = state.team.filter(m => !m.archived);
   const selected = state.calendarSelectedMembers || [];
-  // If empty, default to all (we'll mark all visually selected)
-  const isAllSelected = selected.length === 0 || selected.length === team.length;
+  const viewerId = getActiveTeamMemberId();
+  const showBooked = state.calendarShowBooked === true;
+  const showEstimated = state.calendarShowEstimated === true;
+
+  // Default: if no members selected, treat as just viewer
+  const effectiveSelected = selected.length === 0 ? [viewerId] : selected;
+  const isMineOnly = effectiveSelected.length === 1 && effectiveSelected[0] === viewerId;
+  const isAllSelected = effectiveSelected.length === team.length;
+
   return `
-    <div class="cal-member-filter">
-      <span class="cal-member-filter-label">Show:</span>
-      <button class="cal-member-chip ${isAllSelected ? 'active' : ''}" onclick="setCalendarMembers([])">All</button>
-      ${team.map(m => {
-        const isOn = selected.includes(m.id);
-        return `<button class="cal-member-chip ${isOn ? 'active' : ''}" onclick="toggleCalendarMember(${m.id})" style="${isOn ? `background:${m.color || '#1565C0'}33;border-color:${m.color || '#1565C0'};color:${m.color || '#58A6FF'}` : ''}">${esc(m.name.split(' ')[0])}</button>`;
-      }).join('')}
+    <div class="cal-filter-bar">
+      <div class="cal-filter-group">
+        <span class="cal-filter-label">People:</span>
+        <button class="cal-member-chip ${isMineOnly ? 'active' : ''}" onclick="setCalendarMembers([${viewerId}])" title="Just me">Me</button>
+        <button class="cal-member-chip ${isAllSelected ? 'active' : ''}" onclick="setCalendarMembers([${team.map(m => m.id).join(',')}])">All</button>
+        ${team.filter(m => m.id !== viewerId).map(m => {
+          const isOn = selected.includes(m.id);
+          return `<button class="cal-member-chip ${isOn ? 'active' : ''}" onclick="toggleCalendarMember(${m.id})" style="${isOn ? `background:${m.color || '#1565C0'}33;border-color:${m.color || '#1565C0'};color:${m.color || '#58A6FF'}` : ''}">${esc(m.name.split(' ')[0])}</button>`;
+        }).join('')}
+      </div>
+      <div class="cal-filter-group">
+        <span class="cal-filter-label">Jobs:</span>
+        <button class="cal-toggle-chip ${showBooked ? 'active' : ''}" onclick="toggleCalendarShowBooked()" style="${showBooked ? 'border-color:#3FB950;color:#3FB950;background:#0F4C2E33' : ''}">
+          <span class="cal-toggle-dot" style="background:#3FB950"></span>
+          Booked
+        </button>
+        <button class="cal-toggle-chip ${showEstimated ? 'active' : ''}" onclick="toggleCalendarShowEstimated()" style="${showEstimated ? 'border-color:#58A6FF;color:#58A6FF;background:#0D262633' : ''}">
+          <span class="cal-toggle-dot" style="background:#58A6FF"></span>
+          Estimated
+        </button>
+        <span style="font-size:10px;color:#6E7681;margin-left:4px">your assignments only</span>
+      </div>
     </div>
   `;
-}
-
-function setCalendarViewMode(mode) {
-  state.calendarViewMode = mode;
-  localStorage.setItem('vi_calendar_view_mode', mode);
-  renderCalendar(document.getElementById('content'));
 }
 
 function setCalendarMembers(ids) {
@@ -6394,7 +6472,10 @@ function setCalendarMembers(ids) {
 }
 
 function toggleCalendarMember(id) {
-  const cur = state.calendarSelectedMembers || [];
+  const cur = (state.calendarSelectedMembers || []).slice();
+  const viewerId = getActiveTeamMemberId();
+  // If empty, treat current state as just viewer
+  if (cur.length === 0) cur.push(viewerId);
   const idx = cur.indexOf(id);
   if (idx >= 0) cur.splice(idx, 1);
   else cur.push(id);
@@ -6403,23 +6484,26 @@ function toggleCalendarMember(id) {
   renderCalendar(document.getElementById('content'));
 }
 
+function toggleCalendarShowBooked() {
+  state.calendarShowBooked = !state.calendarShowBooked;
+  localStorage.setItem('vi_calendar_show_booked', JSON.stringify(state.calendarShowBooked));
+  renderCalendar(document.getElementById('content'));
+}
+
+function toggleCalendarShowEstimated() {
+  state.calendarShowEstimated = !state.calendarShowEstimated;
+  localStorage.setItem('vi_calendar_show_estimated', JSON.stringify(state.calendarShowEstimated));
+  renderCalendar(document.getElementById('content'));
+}
+
 // Returns personal events visible based on current view mode + selected members
 function getPersonalEventsForDateForViewMode(dateStr) {
   const viewerId = getActiveTeamMemberId();
-  const viewMode = state.calendarViewMode || 'mine';
   const all = (state.personalEvents || []).filter(e => e.date === dateStr);
-  if (viewMode === 'mine') {
-    // Only viewer's own events
-    return all.filter(e => e.memberId === viewerId);
-  }
-  // 'all' mode — but check viewer permission
-  if (!currentUserHasPermission('calendar.view_all')) {
-    return all.filter(e => e.memberId === viewerId);
-  }
-  // Filter to selected members (empty = all)
+  // Default: show only viewer's own events when no selection
   const selected = state.calendarSelectedMembers || [];
-  if (selected.length === 0) return all;
-  return all.filter(e => selected.includes(e.memberId));
+  const effective = selected.length === 0 ? [viewerId] : selected;
+  return all.filter(e => effective.includes(e.memberId));
 }
 
 function getCalendarDates(p) {
@@ -6431,26 +6515,55 @@ function getCalendarDates(p) {
   return { start: null, end: null, source: null };
 }
 
+// Returns project events for a date.
+// Filtered by:
+//   1. Booked/Estimated toggles (default OFF — must be opted in)
+//   2. Viewer's assignments (only show jobs viewer is assigned to)
 function getEventsForDate(dateStr) {
+  const showBooked = state.calendarShowBooked === true;
+  const showEstimated = state.calendarShowEstimated === true;
+  if (!showBooked && !showEstimated) return [];
+
+  const viewerId = getActiveTeamMemberId();
+  // Selected members on the calendar — if "all" or specific people are selected,
+  // show jobs anyone in selection is assigned to. Default: viewer only.
+  const selected = state.calendarSelectedMembers || [];
+  const effectiveMembers = selected.length === 0 ? [viewerId] : selected;
+
   return state.projects
     .filter(p => {
       if (p.archived) return false;
       const dates = getCalendarDates(p);
       if (!dates.start) return false;
+      // Booked/Estimated source filter
+      if (dates.source === 'booked' && !showBooked) return false;
+      if (dates.source === 'estimated' && !showEstimated) return false;
+      // Date range check
       const sd = dates.start.substring(0, 10);
-      if (sd === dateStr) return true;
-      if (dates.end) {
-        const start = new Date(dates.start);
-        const end = new Date(dates.end);
-        const check = new Date(dateStr);
-        return check >= start && check <= end;
-      }
-      return false;
+      const inRange = (() => {
+        if (sd === dateStr) return true;
+        if (dates.end) {
+          const start = new Date(dates.start);
+          const end = new Date(dates.end);
+          const check = new Date(dateStr);
+          return check >= start && check <= end;
+        }
+        return false;
+      })();
+      if (!inRange) return false;
+      // Assignment filter — at least one of the effective members must be assigned
+      // to this project (any role: sales/design/pm/install/warehouse)
+      const a = getProjectAssignment(p.id);
+      const allAssigneeIds = []
+        .concat((a.sales || []).map(x => x.id))
+        .concat((a.design || []).map(x => x.id))
+        .concat((a.pm || []).map(x => x.id))
+        .concat((a.install || []).map(x => x.id))
+        .concat((a.warehouse || []).map(x => x.id));
+      return effectiveMembers.some(mid => allAssigneeIds.includes(mid));
     })
     .map(p => {
       const dates = getCalendarDates(p);
-      // Color is now determined by booked vs estimated, not by stage
-      // Booked = green, Estimated = blue
       return {
         id: p.id,
         name: p.name,
@@ -12507,7 +12620,7 @@ function renderSchedulingNotesCard(project) {
           <div style="font-size:11px;font-weight:700;color:${sourceColor};text-transform:uppercase;letter-spacing:0.06em">${esc(sourceLabel || 'Install Window')}</div>
           <div style="font-size:14px;color:#E6EDF3;font-weight:500;margin-top:2px">${esc(dateRange)}</div>
         </div>
-        <button type="button" class="btn btn-sm" onclick="showSetBookedDatesDialog(${project.id})" style="font-size:11px;padding:4px 10px">${win ? 'Edit Window' : 'Set Window'}</button>
+        ${canEditInstallWindow(project.id) ? `<button type="button" class="btn btn-sm" onclick="showSetBookedDatesDialog(${project.id})" style="font-size:11px;padding:4px 10px">${win ? 'Edit Window' : 'Set Window'}</button>` : ''}
       </div>
       <div style="margin-top:10px;padding-top:10px;border-top:1px solid #1C2333">
         <div style="font-size:11px;font-weight:600;color:#8B949E;text-transform:uppercase;letter-spacing:0.05em;margin-bottom:6px">Scheduling Notes</div>
@@ -12708,11 +12821,16 @@ function getMemberBusyBlocks(memberId, startDate, endDate) {
 
   // 1. Personal events
   getPersonalEventsForMember(memberId, startDate, endDate).forEach(e => {
+    // For typed events (PTO/Sick/etc), use the type label.
+    // For custom events, use the user-entered title (or "Personal Event" fallback).
+    // Owner sees real title for private; others see "Busy — Personal".
+    const viewerIsOwner = (memberId === getActiveTeamMemberId());
+    const displayTitle = getPersonalEventDisplayLabel(e, viewerIsOwner);
     blocks.push({
       date: e.date,
       startTime: e.startTime,
       endTime: e.endTime,
-      title: e.title,
+      title: displayTitle,
       type: 'personal',
       personalType: e.type,
       isPrivate: e.isPrivate,
@@ -12781,9 +12899,9 @@ function getMemberBusyBlocks(memberId, startDate, endDate) {
 }
 
 // Helper: viewer can see this person's calendar in detail?
+// As of v1.43 — everyone sees everyone's calendar (private custom events still masked).
 function viewerCanSeeMemberCalendar(viewerId, targetMemberId) {
-  if (viewerId === targetMemberId) return true;
-  return currentUserHasPermission('calendar.view_all');
+  return true;
 }
 
 // Run migration on first load
@@ -12813,15 +12931,16 @@ function renderCalendarDayDetail(dateStr) {
 
   // Project events on this day
   const projectEvents = getEventsForDate(dateStr);
-  // Personal events on this day (respecting view mode + permissions)
+  // Personal events on this day (filter by selected members)
   const personalEvents = getPersonalEventsForDateForViewMode(dateStr);
-  // Meetings on this day for projects/people the viewer cares about
+  // Meetings on this day — show meetings where any selected member is an attendee
   const viewerId = getActiveTeamMemberId();
-  const canSeeAll = currentUserHasPermission('calendar.view_all');
-  const allMeetings = (state.meetings || []).filter(m =>
-    m.date === dateStr && m.status !== 'denied' &&
-    (canSeeAll || (m.attendees || []).includes(viewerId))
-  );
+  const selected = state.calendarSelectedMembers || [];
+  const effectiveMembers = selected.length === 0 ? [viewerId] : selected;
+  const allMeetings = (state.meetings || []).filter(m => {
+    if (m.date !== dateStr || m.status === 'denied') return false;
+    return effectiveMembers.some(mid => (m.attendees || []).includes(mid));
+  });
 
   const totalCount = projectEvents.length + personalEvents.length + allMeetings.length;
 
