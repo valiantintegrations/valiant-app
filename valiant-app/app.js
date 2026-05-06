@@ -940,11 +940,16 @@ function getProjectDates(project) {
   return { start: project.start_date || null, end: project.end_date || null, source: 'estimated' };
 }
 
-function setBookedDates(projectId, start, end) {
+function setBookedDates(projectId, start, end, opts) {
   if (!start) {
     delete state.bookedDates[projectId];
   } else {
-    state.bookedDates[projectId] = { start, end: end || '' };
+    const entry = { start, end: end || '' };
+    if (opts) {
+      if (opts.excludeWeekends !== undefined) entry.excludeWeekends = !!opts.excludeWeekends;
+      if (Array.isArray(opts.weekendIncludes)) entry.weekendIncludes = [...opts.weekendIncludes];
+    }
+    state.bookedDates[projectId] = entry;
   }
   save('vi_booked_dates', state.bookedDates);
 }
@@ -994,14 +999,20 @@ function showSetBookedDatesDialog(projectId) {
   const p = state.projects.find(x => x.id === projectId);
   if (!p) return;
   const existing = getBookedTimeline(projectId);
+  const stored = state.bookedDates?.[projectId] || {};
 
   openInstallWindowPicker({
     projectId,
     mode: 'booked',
     initialStart: existing?.start,
     initialEnd: existing?.end,
-    onConfirm: (start, end) => {
-      setBookedDates(projectId, start, end);
+    initialExcludeWeekends: stored.excludeWeekends !== false, // default true if not stored
+    initialWeekendIncludes: stored.weekendIncludes || [],
+    onConfirm: (start, end, result) => {
+      setBookedDates(projectId, start, end, {
+        excludeWeekends: result.excludeWeekends,
+        weekendIncludes: result.weekendIncludes
+      });
       renderCurrentPage();
     }
   });
@@ -4934,11 +4945,14 @@ function setEstimatedInstallOverride(projectId, dateOrRange) {
   } else if (typeof dateOrRange === 'string') {
     state.estimatedInstallOverride[projectId] = dateOrRange;
   } else {
-    // Object with {start, end}
-    state.estimatedInstallOverride[projectId] = {
+    // Object with {start, end, [excludeWeekends], [weekendIncludes]}
+    const entry = {
       start: dateOrRange.start,
       end: dateOrRange.end || dateOrRange.start
     };
+    if (dateOrRange.excludeWeekends !== undefined) entry.excludeWeekends = !!dateOrRange.excludeWeekends;
+    if (Array.isArray(dateOrRange.weekendIncludes)) entry.weekendIncludes = [...dateOrRange.weekendIncludes];
+    state.estimatedInstallOverride[projectId] = entry;
   }
   save('vi_estimated_install', state.estimatedInstallOverride);
 }
@@ -4947,13 +4961,21 @@ function showEstimatedInstallDialog(projectId) {
   const p = state.projects.find(pr => pr.id === projectId);
   if (!p) return;
   const existing = getEstimatedInstallRange(p);
+  const stored = state.estimatedInstallOverride?.[projectId];
+  const storedObj = (stored && typeof stored === 'object') ? stored : {};
   openInstallWindowPicker({
     projectId,
     mode: 'estimated',
     initialStart: existing?.start,
     initialEnd: existing?.end,
-    onConfirm: (start, end) => {
-      setEstimatedInstallOverride(projectId, { start, end });
+    initialExcludeWeekends: storedObj.excludeWeekends !== false,
+    initialWeekendIncludes: storedObj.weekendIncludes || [],
+    onConfirm: (start, end, result) => {
+      setEstimatedInstallOverride(projectId, {
+        start, end,
+        excludeWeekends: result.excludeWeekends,
+        weekendIncludes: result.weekendIncludes
+      });
       renderCurrentPage();
     }
   });
@@ -11722,14 +11744,21 @@ function openMobilizationInstallEditor(projectId) {
   const p = state.projects.find(x => x.id === projectId);
   if (!p) return;
   const existing = getEstimatedInstallRange(p);
+  const stored = state.estimatedInstallOverride?.[projectId];
+  const storedObj = (stored && typeof stored === 'object') ? stored : {};
   openInstallWindowPicker({
     projectId,
     mode: 'estimated',
     initialStart: existing?.start,
     initialEnd: existing?.end,
-    onConfirm: (start, end) => {
-      setEstimatedInstallOverride(projectId, { start, end });
-      // Refresh just the mobilization dialog body
+    initialExcludeWeekends: storedObj.excludeWeekends !== false,
+    initialWeekendIncludes: storedObj.weekendIncludes || [],
+    onConfirm: (start, end, result) => {
+      setEstimatedInstallOverride(projectId, {
+        start, end,
+        excludeWeekends: result.excludeWeekends,
+        weekendIncludes: result.weekendIncludes
+      });
       refreshMobilizationBody(projectId);
     }
   });
@@ -11810,10 +11839,12 @@ function toggleMobilizationFlag(projectId, flagKey) {
 const _pickerState = {
   projectId: null,
   mode: 'booked',
-  selectStart: null,  // YYYY-MM-DD
-  selectEnd: null,    // YYYY-MM-DD
+  selectStart: null,        // YYYY-MM-DD
+  selectEnd: null,          // YYYY-MM-DD
   hoveredDate: null,
-  visibleMonth: null, // {year, month}
+  visibleMonth: null,       // {year, month}
+  excludeWeekends: true,    // default ON — weekends are off-days unless explicitly included
+  weekendIncludes: [],      // array of YYYY-MM-DD strings — weekends user opted INTO as work days
   onConfirm: null
 };
 
@@ -11824,6 +11855,11 @@ function openInstallWindowPicker(opts) {
   _pickerState.selectStart = opts.initialStart || null;
   _pickerState.selectEnd = opts.initialEnd || null;
   _pickerState.hoveredDate = null;
+  // Default: exclude weekends. If editing existing window, preserve their setting.
+  _pickerState.excludeWeekends = (opts.initialExcludeWeekends !== undefined)
+    ? !!opts.initialExcludeWeekends : true;
+  _pickerState.weekendIncludes = Array.isArray(opts.initialWeekendIncludes)
+    ? [...opts.initialWeekendIncludes] : [];
   _pickerState.onConfirm = opts.onConfirm;
 
   // Default visible month: month of initialStart, or current month
@@ -11835,11 +11871,8 @@ function openInstallWindowPicker(opts) {
   overlay.className = 'iwp-overlay';
   overlay.innerHTML = renderInstallWindowPickerShell();
   document.body.appendChild(overlay);
-  // Prevent body scroll while picker is open
   document.body.style.overflow = 'hidden';
-  // Wire up date click delegation
   overlay.addEventListener('click', _iwpHandleClick);
-  // Render initial body
   refreshInstallWindowPicker();
 }
 
@@ -11858,12 +11891,41 @@ function _iwpHandleClick(ev) {
   }
 }
 
+// Returns true if dateStr is a Saturday or Sunday
+function _iwpIsWeekend(dateStr) {
+  const d = new Date(dateStr + 'T00:00:00');
+  const dow = d.getDay();
+  return dow === 0 || dow === 6;
+}
+
+// Returns true if dateStr is inside [start, end] inclusive
+function _iwpInRange(dateStr, start, end) {
+  if (!start || !end) return false;
+  return dateStr >= start && dateStr <= end;
+}
+
 function _iwpSelectDate(date) {
   const s = _pickerState;
+
+  // If we have a complete range and user taps INSIDE it on a weekend → toggle weekend include
+  if (s.selectStart && s.selectEnd && _iwpInRange(date, s.selectStart, s.selectEnd)) {
+    if (_iwpIsWeekend(date) && s.excludeWeekends) {
+      const idx = s.weekendIncludes.indexOf(date);
+      if (idx >= 0) s.weekendIncludes.splice(idx, 1);
+      else s.weekendIncludes.push(date);
+      refreshInstallWindowPicker();
+      return;
+    }
+    // Tap a weekday inside the range — no-op (don't accidentally restart selection)
+    return;
+  }
+
+  // Otherwise: standard range selection (start, then end)
   if (!s.selectStart || (s.selectStart && s.selectEnd)) {
-    // Starting a new selection
+    // Starting a new selection — clear any weekend-includes that were range-specific
     s.selectStart = date;
     s.selectEnd = null;
+    s.weekendIncludes = [];
   } else {
     // We have a start, no end — set the end
     if (date < s.selectStart) {
@@ -11873,6 +11935,8 @@ function _iwpSelectDate(date) {
     } else {
       s.selectEnd = date;
     }
+    // Drop weekend-includes outside the new range
+    s.weekendIncludes = s.weekendIncludes.filter(d => _iwpInRange(d, s.selectStart, s.selectEnd));
   }
   refreshInstallWindowPicker();
 }
@@ -11890,6 +11954,14 @@ function _iwpChangeMonth(delta) {
 function _iwpClearSelection() {
   _pickerState.selectStart = null;
   _pickerState.selectEnd = null;
+  _pickerState.weekendIncludes = [];
+  refreshInstallWindowPicker();
+}
+
+function _iwpToggleExcludeWeekends() {
+  _pickerState.excludeWeekends = !_pickerState.excludeWeekends;
+  // If we just turned it OFF, clear weekendIncludes (they're no longer relevant)
+  if (!_pickerState.excludeWeekends) _pickerState.weekendIncludes = [];
   refreshInstallWindowPicker();
 }
 
@@ -11898,8 +11970,14 @@ function _iwpConfirm() {
   if (!s.selectStart) return;
   const end = s.selectEnd || s.selectStart;
   const cb = s.onConfirm;
+  const result = {
+    start: s.selectStart,
+    end,
+    excludeWeekends: s.excludeWeekends,
+    weekendIncludes: [...s.weekendIncludes]
+  };
   closeInstallWindowPicker();
-  if (typeof cb === 'function') cb(s.selectStart, end);
+  if (typeof cb === 'function') cb(result.start, result.end, result);
 }
 
 function renderInstallWindowPickerShell() {
@@ -11978,6 +12056,8 @@ function renderInstallWindowPickerCalendar() {
   for (let day = 1; day <= daysInMonth; day++) {
     const d = new Date(year, month, day);
     const dateStr = d.toISOString().slice(0, 10);
+    const dow = d.getDay(); // 0=Sun, 6=Sat
+    const isWeekend = dow === 0 || dow === 6;
     const isToday = dateStr === todayStr;
     const isPast = dateStr < todayStr;
     const events = eventsByDate[dateStr] || [];
@@ -11992,16 +12072,31 @@ function renderInstallWindowPickerCalendar() {
       isStart = dateStr === s.selectStart;
     }
 
+    // Off-day = excluded weekend in the range that hasn't been opted into
+    const optedIn = s.weekendIncludes.includes(dateStr);
+    const isOffDay = inRange && isWeekend && s.excludeWeekends && !optedIn;
+    const isWorkDay = inRange && (!isWeekend || !s.excludeWeekends || optedIn);
+
     const classes = ['iwp-day'];
+    if (isWeekend) classes.push('iwp-day-weekend');
     if (isToday) classes.push('iwp-day-today');
     if (isPast) classes.push('iwp-day-past');
     if (isStart) classes.push('iwp-day-range-start');
     if (isEnd) classes.push('iwp-day-range-end');
-    if (inRange && !isStart && !isEnd) classes.push('iwp-day-range-mid');
+    if (inRange && !isStart && !isEnd) classes.push(isOffDay ? 'iwp-day-range-off' : 'iwp-day-range-mid');
     if (events.length > 0) classes.push('iwp-day-has-events');
+    if (optedIn) classes.push('iwp-day-weekend-opted-in');
+
+    // Title hint for off-days / opted-in weekends
+    let titleHint = '';
+    if (inRange && isWeekend && s.excludeWeekends) {
+      titleHint = optedIn
+        ? 'title="Weekend included as work day — tap to remove"'
+        : 'title="Weekend excluded — tap to include as work day"';
+    }
 
     cells.push(`
-      <div class="${classes.join(' ')}" data-iwp-day="${dateStr}">
+      <div class="${classes.join(' ')}" data-iwp-day="${dateStr}" ${titleHint}>
         <div class="iwp-day-num">${day}</div>
         <div class="iwp-day-events">
           ${events.slice(0, 3).map(e => `
@@ -12027,12 +12122,13 @@ function renderInstallWindowPickerCalendar() {
       </button>
     </div>
     <div class="iwp-dow">
-      ${['Mon','Tue','Wed','Thu','Fri','Sat','Sun'].map(d => `<div class="iwp-dow-cell">${d}</div>`).join('')}
+      ${['Mon','Tue','Wed','Thu','Fri','Sat','Sun'].map((d, i) => `<div class="iwp-dow-cell${i >= 5 ? ' iwp-dow-weekend' : ''}">${d}</div>`).join('')}
     </div>
     <div class="iwp-grid">${cells.join('')}</div>
     <div class="iwp-legend">
       <span class="iwp-legend-item"><span class="iwp-event-dot" style="background:#3FB950"></span>Booked</span>
       <span class="iwp-legend-item"><span class="iwp-event-dot" style="background:#58A6FF"></span>Estimated</span>
+      <span class="iwp-legend-item"><span class="iwp-legend-swatch iwp-legend-weekend"></span>Weekend</span>
     </div>
   `;
 }
@@ -12051,17 +12147,61 @@ function _addEventsForRange(map, start, end, project, type, clipStart, clipEnd) 
 
 function renderInstallWindowPickerFooter() {
   const s = _pickerState;
+
+  // Step indicator at top
+  let step = '';
+  if (!s.selectStart) {
+    step = `<div class="iwp-step iwp-step-active"><span class="iwp-step-num">1</span> Tap a date to set the <strong>START</strong></div>`;
+  } else if (s.selectStart && !s.selectEnd) {
+    step = `<div class="iwp-step iwp-step-active"><span class="iwp-step-num">2</span> Tap a date to set the <strong>END</strong></div>`;
+  } else {
+    step = `<div class="iwp-step iwp-step-done"><svg width="12" height="12" viewBox="0 0 14 14" fill="none"><path d="M2 7.5l3.5 3.5L12 4" stroke="#3FB950" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg> Range selected &middot; tap weekend dates inside to include them</div>`;
+  }
+
+  // Summary line
   let summary = '';
   if (s.selectStart && s.selectEnd) {
-    const days = Math.round((new Date(s.selectEnd) - new Date(s.selectStart)) / 86400000) + 1;
-    summary = `<div class="iwp-summary"><strong>${fmtDate(s.selectStart)}</strong> &mdash; <strong>${fmtDate(s.selectEnd)}</strong> &middot; ${days} day${days === 1 ? '' : 's'}</div>`;
+    const totalDays = Math.round((new Date(s.selectEnd) - new Date(s.selectStart)) / 86400000) + 1;
+    let workDays = 0;
+    let weekendCount = 0;
+    let weekendIncluded = 0;
+    const startD = new Date(s.selectStart + 'T00:00:00');
+    for (let i = 0; i < totalDays; i++) {
+      const d = new Date(startD);
+      d.setDate(startD.getDate() + i);
+      const ds = d.toISOString().slice(0, 10);
+      const dow = d.getDay();
+      const isWeekend = dow === 0 || dow === 6;
+      if (isWeekend) {
+        weekendCount++;
+        if (s.weekendIncludes.includes(ds)) weekendIncluded++;
+        if (!s.excludeWeekends || s.weekendIncludes.includes(ds)) workDays++;
+      } else {
+        workDays++;
+      }
+    }
+    summary = `
+      <div class="iwp-summary">
+        <div><strong>${fmtDate(s.selectStart)}</strong> &mdash; <strong>${fmtDate(s.selectEnd)}</strong></div>
+        <div class="iwp-summary-counts">
+          <span><strong>${totalDays}</strong> total day${totalDays === 1 ? '' : 's'}</span>
+          <span class="iwp-sep">&middot;</span>
+          <span style="color:#3FB950"><strong>${workDays}</strong> work day${workDays === 1 ? '' : 's'}</span>
+          ${s.excludeWeekends && weekendCount > 0 ? `<span class="iwp-sep">&middot;</span><span style="color:#8B949E">${weekendCount - weekendIncluded} weekend${(weekendCount - weekendIncluded) === 1 ? '' : 's'} excluded${weekendIncluded > 0 ? `, ${weekendIncluded} included` : ''}</span>` : ''}
+        </div>
+      </div>
+    `;
   } else if (s.selectStart) {
-    summary = `<div class="iwp-summary"><strong>${fmtDate(s.selectStart)}</strong> &middot; <span style="color:#8B949E">tap end date</span></div>`;
-  } else {
-    summary = `<div class="iwp-summary" style="color:#8B949E">Tap a date to start</div>`;
+    summary = `<div class="iwp-summary">Start: <strong>${fmtDate(s.selectStart)}</strong></div>`;
   }
+
   return `
+    ${step}
     ${summary}
+    <label class="iwp-toggle">
+      <input type="checkbox" ${s.excludeWeekends ? 'checked' : ''} onchange="_iwpToggleExcludeWeekends()">
+      <span>Exclude weekends from work days</span>
+    </label>
     <div class="iwp-actions">
       <button type="button" class="btn" onclick="_iwpClearSelection()" ${!s.selectStart ? 'disabled' : ''} style="${!s.selectStart ? 'opacity:0.4;cursor:not-allowed' : ''}">Clear</button>
       <button type="button" class="btn" onclick="closeInstallWindowPicker()">Cancel</button>
