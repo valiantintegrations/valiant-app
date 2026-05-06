@@ -2617,3 +2617,176 @@ td.today .cal-day-num {
   background: #2A1D08 !important;
   border-color: #D29922 !important;
 }
+
+/* ── Planning Dashboard ── */
+.planning-week-strip {
+  display: grid;
+  grid-template-columns: repeat(7, 1fr);
+  gap: 4px;
+}
+.planning-week-day {
+  background: #0D1117;
+  border: 1px solid #1C2333;
+  border-radius: 6px;
+  padding: 8px 6px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-height: 80px;
+}
+.planning-week-day.is-today {
+  border-color: #58A6FF;
+  background: #0D1626;
+}
+.planning-week-day.is-past { opacity: 0.55; }
+.planning-week-dow {
+  font-size: 9px;
+  font-weight: 700;
+  color: #6E7681;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+.planning-week-day.is-today .planning-week-dow { color: #58A6FF; }
+.planning-week-date {
+  font-size: 14px;
+  font-weight: 600;
+  color: #C9D1D9;
+}
+.planning-week-day.is-today .planning-week-date { color: #58A6FF; }
+.planning-week-items {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin-top: 2px;
+}
+.planning-week-empty {
+  font-size: 10px;
+  color: #30363D;
+  font-style: italic;
+  padding: 2px 0;
+}
+.planning-week-item {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 3px 4px;
+  background: #161B22;
+  border: 1px solid #1C2333;
+  border-radius: 3px;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+  transition: border-color 0.12s;
+}
+.planning-week-item:hover { border-color: #30363D; }
+.planning-week-item-kind {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 14px;
+  height: 14px;
+  border-radius: 2px;
+  font-size: 9px;
+  font-weight: 700;
+  flex-shrink: 0;
+}
+.planning-week-install .planning-week-item-kind {
+  background: #F0883E;
+  color: #fff;
+}
+.planning-week-prep .planning-week-item-kind {
+  background: #D29922;
+  color: #fff;
+}
+.planning-week-item-name {
+  font-size: 10px;
+  color: #C9D1D9;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  flex: 1;
+  min-width: 0;
+}
+
+/* Mobile: week strip stacks vertical */
+@media (max-width: 700px) {
+  .planning-week-strip {
+    grid-template-columns: 1fr;
+    gap: 2px;
+  }
+  .planning-week-day {
+    flex-direction: row;
+    align-items: center;
+    min-height: 0;
+    padding: 8px 10px;
+  }
+  .planning-week-dow { width: 30px; flex-shrink: 0; }
+  .planning-week-date { width: 24px; flex-shrink: 0; }
+  .planning-week-items {
+    flex-direction: row;
+    flex-wrap: wrap;
+    margin-top: 0;
+    flex: 1;
+  }
+  .planning-week-empty { padding-left: 10px; }
+}
+
+/* Planning row in status groups */
+.planning-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+  background: #0D1117;
+  border: 1px solid #1C2333;
+  border-radius: 6px;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+  transition: border-color 0.12s, background 0.12s;
+}
+.planning-row:hover {
+  border-color: #30363D;
+  background: #161B22;
+}
+.planning-row-main { flex: 1; min-width: 0; }
+.planning-row-name {
+  font-size: 13px;
+  color: #E6EDF3;
+  font-weight: 500;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.planning-row-client {
+  color: #8B949E;
+  font-weight: 400;
+}
+.planning-row-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  font-size: 11px;
+  color: #8B949E;
+  margin-top: 3px;
+}
+.planning-row-gates {
+  margin-top: 6px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  align-items: center;
+}
+.planning-row-gates-label {
+  font-size: 10px;
+  color: #D29922;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+.planning-row-gate-chip {
+  font-size: 10px;
+  padding: 2px 6px;
+  background: #1A150D;
+  color: #D29922;
+  border: 1px solid #9E6A03;
+  border-radius: 3px;
+}
