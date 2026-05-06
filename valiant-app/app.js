@@ -1071,22 +1071,23 @@ function showSetBookedDatesDialog(projectId) {
   }
   const p = state.projects.find(x => x.id === projectId);
   if (!p) return;
-  // Determine current state — what window does this project have?
+  // This entry point is for setting BOOKED dates specifically.
+  // If the project currently has a booked window, pre-fill from it.
+  // If only an estimated window exists, pre-fill the dates from that (so the user
+  // can promote it to booked) but still open in booked mode.
   const win = getInstallWindow(p);
-  const stored = win?.source === 'booked'
-    ? (state.bookedDates?.[projectId] || {})
-    : (state.estimatedInstallOverride?.[projectId] || {});
+  const bookedStored = state.bookedDates?.[projectId];
+  const stored = bookedStored && bookedStored.start ? bookedStored : (state.estimatedInstallOverride?.[projectId] || {});
   const storedObj = (stored && typeof stored === 'object') ? stored : {};
 
   openInstallWindowPicker({
     projectId,
-    mode: win?.source || 'booked',
+    mode: 'booked',
     initialStart: win?.start,
     initialEnd: win?.end,
     initialExcludeWeekends: storedObj.excludeWeekends !== false,
     initialWeekendIncludes: storedObj.weekendIncludes || [],
     onConfirm: () => {
-      // Picker saved the data. Just re-render.
       renderCurrentPage();
     }
   });
@@ -5121,14 +5122,14 @@ function showEstimatedInstallDialog(projectId) {
   }
   const p = state.projects.find(pr => pr.id === projectId);
   if (!p) return;
+  // This entry point is for setting ESTIMATED dates specifically.
   const win = getInstallWindow(p);
-  const stored = win?.source === 'booked'
-    ? (state.bookedDates?.[projectId] || {})
-    : (state.estimatedInstallOverride?.[projectId] || {});
+  const estStored = state.estimatedInstallOverride?.[projectId];
+  const stored = (estStored && typeof estStored === 'object' && estStored.start) ? estStored : (state.bookedDates?.[projectId] || {});
   const storedObj = (stored && typeof stored === 'object') ? stored : {};
   openInstallWindowPicker({
     projectId,
-    mode: win?.source || 'estimated',
+    mode: 'estimated',
     initialStart: win?.start,
     initialEnd: win?.end,
     initialExcludeWeekends: storedObj.excludeWeekends !== false,
@@ -12218,35 +12219,32 @@ function _iwpInRange(dateStr, start, end) {
 function _iwpSelectDate(date) {
   const s = _pickerState;
 
-  // If we have a complete range and user taps INSIDE it on a weekend → toggle weekend include
-  if (s.selectStart && s.selectEnd && _iwpInRange(date, s.selectStart, s.selectEnd)) {
-    if (_iwpIsWeekend(date) && s.excludeWeekends) {
-      const idx = s.weekendIncludes.indexOf(date);
-      if (idx >= 0) s.weekendIncludes.splice(idx, 1);
-      else s.weekendIncludes.push(date);
-      refreshInstallWindowPicker();
-      return;
-    }
-    // Tap a weekday inside the range — no-op (don't accidentally restart selection)
+  // If we have a complete range and user taps INSIDE it on a WEEKEND → toggle weekend include
+  // (only when excludeWeekends is on — this is the per-day opt-in)
+  if (s.selectStart && s.selectEnd && _iwpInRange(date, s.selectStart, s.selectEnd) &&
+      _iwpIsWeekend(date) && s.excludeWeekends) {
+    const idx = s.weekendIncludes.indexOf(date);
+    if (idx >= 0) s.weekendIncludes.splice(idx, 1);
+    else s.weekendIncludes.push(date);
+    refreshInstallWindowPicker();
     return;
   }
 
-  // Otherwise: standard range selection (start, then end)
+  // For all other cases (including tapping a weekday inside the existing range):
+  // start a fresh selection. This lets the user re-pick easily without
+  // having to clear first.
   if (!s.selectStart || (s.selectStart && s.selectEnd)) {
-    // Starting a new selection — clear any weekend-includes that were range-specific
     s.selectStart = date;
     s.selectEnd = null;
     s.weekendIncludes = [];
   } else {
     // We have a start, no end — set the end
     if (date < s.selectStart) {
-      // User clicked earlier than start — swap
       s.selectEnd = s.selectStart;
       s.selectStart = date;
     } else {
       s.selectEnd = date;
     }
-    // Drop weekend-includes outside the new range
     s.weekendIncludes = s.weekendIncludes.filter(d => _iwpInRange(d, s.selectStart, s.selectEnd));
   }
   refreshInstallWindowPicker();
@@ -12642,7 +12640,7 @@ function renderSchedulingNotesCard(project) {
 
 // Predefined personal event types — render to everyone, never private
 const PERSONAL_EVENT_TYPES = [
-  { key: 'pto',       label: 'PTO',           color: '#3FB950' },
+  { key: 'pto',       label: 'PTO',           color: '#39C5BB' },
   { key: 'sick',      label: 'Sick',          color: '#F85149' },
   { key: 'doctor',    label: 'Doctor',        color: '#58A6FF' },
   { key: 'oof',       label: 'Out of Office', color: '#D29922' },
