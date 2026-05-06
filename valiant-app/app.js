@@ -77,7 +77,8 @@ const PERMISSION_KEYS = [
   // Sales / client
   'sales.view_pipeline',
   'sales.send_proposals',
-  'client.view_contact'
+  'client.view_contact',
+  'calendar.view_all'
 ];
 
 // Helper: all user-management permissions (used in Master Admin / Owner bundles)
@@ -122,7 +123,8 @@ const DEFAULT_BUNDLES = {
       'design.view','design.assign_tasks',
       'client.view_contact',
       'templates.review',
-      'dashboards.install_mgmt'
+      'dashboards.install_mgmt',
+      'calendar.view_all'
     ]
   },
   'design_admin': {
@@ -141,7 +143,8 @@ const DEFAULT_BUNDLES = {
       'financials.view_project_totals',
       'client.view_contact',
       'templates.review',
-      'dashboards.design_mgmt'
+      'dashboards.design_mgmt',
+      'calendar.view_all'
     ]
   },
   'sales': {
@@ -157,7 +160,8 @@ const DEFAULT_BUNDLES = {
       'financials.view_project_totals',
       'client.view_contact',
       'vendors.view',
-      'dashboards.sales_mgmt'
+      'dashboards.sales_mgmt',
+      'calendar.view_all'
     ]
   },
   'project_manager': {
@@ -173,7 +177,8 @@ const DEFAULT_BUNDLES = {
       'vendors.view',
       'financials.view_project_totals',
       'client.view_contact',
-      'dashboards.install_mgmt','dashboards.design_mgmt','dashboards.sales_mgmt'
+      'dashboards.install_mgmt','dashboards.design_mgmt','dashboards.sales_mgmt',
+      'calendar.view_all'
     ]
   },
   'designer': {
@@ -186,7 +191,8 @@ const DEFAULT_BUNDLES = {
       'purchasing.view',
       'vendors.view',
       'financials.view_project_totals',
-      'client.view_contact'
+      'client.view_contact',
+      'calendar.view_all'
     ]
   },
   'installer': {
@@ -364,6 +370,10 @@ const state = {
   readyForInstall: JSON.parse(localStorage.getItem('vi_ready_install') || '{}'),
   estimatedInstallOverride: JSON.parse(localStorage.getItem('vi_estimated_install') || '{}'),
   meetingLogs: JSON.parse(localStorage.getItem('vi_meeting_logs') || '{}'),
+  meetings: JSON.parse(localStorage.getItem('vi_meetings') || '[]'),
+  personalEvents: JSON.parse(localStorage.getItem('vi_personal_events') || '[]'),
+  calendarViewMode: localStorage.getItem('vi_calendar_view_mode') || 'mine',
+  calendarSelectedMembers: JSON.parse(localStorage.getItem('vi_calendar_selected_members') || '[]'),
   planningAssignments: JSON.parse(localStorage.getItem('vi_planning_assignments') || '{}'),
   vehicles: JSON.parse(localStorage.getItem('vi_vehicles') || '[]'),
   tools: JSON.parse(localStorage.getItem('vi_tools') || '[]'),
@@ -409,7 +419,9 @@ state.team.forEach(m => {
   // Detect stale bundles (old permission keys) and refresh to new DEFAULT_BUNDLES
   // Check Master Admin bundle for the presence of old 'admin.edit_users' (without suffix)
   const stale = state.bundles?.master_admin?.permissions?.includes('admin.edit_users');
-  if (stale) {
+  // Also refresh if calendar.view_all is missing from Master Admin (added in v1.43)
+  const missingCalendarPerm = !state.bundles?.master_admin?.permissions?.includes('calendar.view_all');
+  if (stale || missingCalendarPerm) {
     state.bundles = JSON.parse(JSON.stringify(DEFAULT_BUNDLES));
     save('vi_bundles', state.bundles);
   }
@@ -3160,7 +3172,83 @@ function renderMyWorkDashboard(memberId, activeProjects, myAssignments, activeMe
     ${closeoutBanner}
     ${summaryRow}
     ${myActionsHTML}
+    ${renderMyCalendarCard(memberId)}
     ${sections}
+  `;
+}
+
+// "My Calendar" card on My Work — shows today + week ahead at a glance.
+function renderMyCalendarCard(memberId) {
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  const startStr = today.toISOString().slice(0, 10);
+  const weekAhead = new Date(today);
+  weekAhead.setDate(today.getDate() + 6);
+  const endStr = weekAhead.toISOString().slice(0, 10);
+
+  const blocks = getMemberBusyBlocks(memberId, startStr, endStr);
+  if (blocks.length === 0) {
+    return `
+      <div data-context-section="my-calendar" class="dashboard-card" style="margin-bottom:14px">
+        <div class="dashboard-card-title" style="display:flex;align-items:center;justify-content:space-between">
+          <span>My Calendar &middot; Next 7 Days</span>
+          <button type="button" class="btn btn-sm" onclick="openAddPersonalEventDialog()" style="font-size:10px;padding:3px 8px">+ Add</button>
+        </div>
+        <div style="font-size:12px;color:#6E7681;font-style:italic;padding:8px 0">Nothing scheduled this week</div>
+      </div>
+    `;
+  }
+
+  // Group blocks by date
+  const byDate = {};
+  blocks.forEach(b => {
+    if (!byDate[b.date]) byDate[b.date] = [];
+    byDate[b.date].push(b);
+  });
+
+  const dayList = [];
+  for (let i = 0; i < 7; i++) {
+    const d = new Date(today);
+    d.setDate(today.getDate() + i);
+    const ds = d.toISOString().slice(0, 10);
+    const items = byDate[ds] || [];
+    if (items.length === 0) continue;
+    dayList.push({
+      date: d,
+      dateStr: ds,
+      isToday: i === 0,
+      label: i === 0 ? 'Today' : (i === 1 ? 'Tomorrow' : d.toLocaleDateString('en-US', { weekday:'short', month:'short', day:'numeric' })),
+      items
+    });
+  }
+
+  return `
+    <div data-context-section="my-calendar" class="dashboard-card" style="margin-bottom:14px">
+      <div class="dashboard-card-title" style="display:flex;align-items:center;justify-content:space-between">
+        <span>My Calendar &middot; Next 7 Days</span>
+        <button type="button" class="btn btn-sm" onclick="openAddPersonalEventDialog()" style="font-size:10px;padding:3px 8px">+ Add</button>
+      </div>
+      <div class="my-cal-list">
+        ${dayList.map(d => `
+          <div class="my-cal-day${d.isToday ? ' is-today' : ''}" onclick="openCalendarDayDetail('${d.dateStr}')">
+            <div class="my-cal-day-header">
+              <span class="my-cal-day-label">${esc(d.label)}</span>
+              <span class="my-cal-day-count">${d.items.length} event${d.items.length === 1 ? '' : 's'}</span>
+            </div>
+            <div class="my-cal-day-items">
+              ${d.items.slice(0, 3).map(item => `
+                <div class="my-cal-item" style="border-left-color:${item.color}">
+                  <span class="my-cal-item-dot" style="background:${item.color}"></span>
+                  <span class="my-cal-item-title">${esc(item.title)}</span>
+                  ${item.startTime ? `<span class="my-cal-item-time">${esc(item.startTime)}${item.endTime ? '–' + item.endTime : ''}</span>` : ''}
+                </div>
+              `).join('')}
+              ${d.items.length > 3 ? `<div class="my-cal-item-more">+${d.items.length - 3} more</div>` : ''}
+            </div>
+          </div>
+        `).join('')}
+      </div>
+    </div>
   `;
 }
 
@@ -6204,16 +6292,30 @@ function renderCalendar(c) {
       } else {
         const isToday = dayCount === today.getDate() && month === today.getMonth() && year === today.getFullYear();
         const dateStr = `${year}-${String(month + 1).padStart(2, '0')}-${String(dayCount).padStart(2, '0')}`;
-        const events = getEventsForDate(dateStr);
-        cells += `<td class="${isToday ? 'today' : ''}">
+        const projectEvents = getEventsForDate(dateStr);
+        const personalEvents = getPersonalEventsForDateForViewMode(dateStr);
+        const allEvents = [...projectEvents, ...personalEvents];
+        const totalCount = allEvents.length;
+        const visibleCount = 3;
+
+        cells += `<td class="${isToday ? 'today' : ''}" onclick="openCalendarDayDetail('${dateStr}')" style="cursor:pointer">
           <span class="cal-day-num">${dayCount}</span>
-          ${events.map(e => {
+          ${projectEvents.slice(0, visibleCount).map(e => {
             const proj = state.projects.find(pp => pp.id === e.id);
             const notesPart = proj?.scheduling_notes ? `\n\nNotes: ${proj.scheduling_notes}` : '';
             const tooltip = `${e.name}${e.booked ? ' (Booked)' : ' (Estimated)'}${notesPart}`;
             const hasNotes = !!proj?.scheduling_notes;
-            return `<div class="cal-event cal-event-${e.color}${hasNotes ? ' cal-event-has-notes' : ''}" onclick="openProject(${e.id},'install')" title="${esc(tooltip)}">${hasNotes ? '📝 ' : ''}${esc(e.name)}</div>`;
+            return `<div class="cal-event cal-event-${e.color}${hasNotes ? ' cal-event-has-notes' : ''}" onclick="event.stopPropagation();openProject(${e.id},'install')" title="${esc(tooltip)}">${hasNotes ? '📝 ' : ''}${esc(e.name)}</div>`;
           }).join('')}
+          ${personalEvents.slice(0, Math.max(0, visibleCount - projectEvents.length)).map(pe => {
+            const owner = getTeamMember(pe.memberId);
+            const viewerId = getActiveTeamMemberId();
+            const viewerIsOwner = pe.memberId === viewerId;
+            const label = getPersonalEventDisplayLabel(pe, viewerIsOwner);
+            const ownerLabel = (state.calendarViewMode === 'all' && !viewerIsOwner && owner) ? `${owner.name.split(' ')[0]}: ` : '';
+            return `<div class="cal-event cal-event-personal" style="background:${getPersonalEventColor(pe)}1F;border-color:${getPersonalEventColor(pe)};color:${getPersonalEventColor(pe)}" onclick="event.stopPropagation();openCalendarDayDetail('${dateStr}')" title="${esc(ownerLabel + label)}">${esc(ownerLabel + label)}</div>`;
+          }).join('')}
+          ${totalCount > visibleCount ? `<div class="cal-event-overflow">+${totalCount - visibleCount} more</div>` : ''}
         </td>`;
         dayCount++;
       }
@@ -6221,6 +6323,10 @@ function renderCalendar(c) {
     cells += '</tr>';
     if (dayCount > daysInMonth) break;
   }
+
+  const canViewAll = currentUserHasPermission('calendar.view_all');
+  const viewMode = state.calendarViewMode || 'mine';
+  const viewerId = getActiveTeamMemberId();
 
   c.innerHTML = `
     <div class="calendar-container">
@@ -6230,7 +6336,13 @@ function renderCalendar(c) {
           <span class="cal-month">${months[month]} ${year}</span>
           <button class="cal-btn" onclick="calNav(1)"><svg width="12" height="12" viewBox="0 0 12 12" fill="none"><path d="M4 2l4 4-4 4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg></button>
         </div>
-        <div style="display:flex;align-items:center;gap:10px">
+        <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+          ${canViewAll ? `
+            <div class="cal-view-toggle">
+              <button class="cal-view-btn ${viewMode === 'mine' ? 'active' : ''}" onclick="setCalendarViewMode('mine')">My Calendar</button>
+              <button class="cal-view-btn ${viewMode === 'all' ? 'active' : ''}" onclick="setCalendarViewMode('all')">All People</button>
+            </div>
+          ` : ''}
           <div style="display:flex;align-items:center;gap:10px;font-size:11px">
             <span style="display:inline-flex;align-items:center;gap:4px;color:#8B949E">
               <span style="width:10px;height:10px;border-radius:2px;background:#58A6FF"></span> Estimated
@@ -6240,14 +6352,74 @@ function renderCalendar(c) {
             </span>
           </div>
           <button class="cal-btn" onclick="calToday()" style="width:auto;padding:0 10px;font-size:11px">Today</button>
+          <button class="btn-primary" onclick="openAddPersonalEventDialog()" style="font-size:11px;padding:6px 12px">+ Personal Event</button>
         </div>
       </div>
+      ${canViewAll && viewMode === 'all' ? renderCalendarMemberFilter() : ''}
       <table class="calendar-grid">
         <thead><tr>${days.map(d => `<th>${d}</th>`).join('')}</tr></thead>
         <tbody>${cells}</tbody>
       </table>
     </div>
   `;
+}
+
+function renderCalendarMemberFilter() {
+  const team = state.team.filter(m => !m.archived);
+  const selected = state.calendarSelectedMembers || [];
+  // If empty, default to all (we'll mark all visually selected)
+  const isAllSelected = selected.length === 0 || selected.length === team.length;
+  return `
+    <div class="cal-member-filter">
+      <span class="cal-member-filter-label">Show:</span>
+      <button class="cal-member-chip ${isAllSelected ? 'active' : ''}" onclick="setCalendarMembers([])">All</button>
+      ${team.map(m => {
+        const isOn = selected.includes(m.id);
+        return `<button class="cal-member-chip ${isOn ? 'active' : ''}" onclick="toggleCalendarMember(${m.id})" style="${isOn ? `background:${m.color || '#1565C0'}33;border-color:${m.color || '#1565C0'};color:${m.color || '#58A6FF'}` : ''}">${esc(m.name.split(' ')[0])}</button>`;
+      }).join('')}
+    </div>
+  `;
+}
+
+function setCalendarViewMode(mode) {
+  state.calendarViewMode = mode;
+  localStorage.setItem('vi_calendar_view_mode', mode);
+  renderCalendar(document.getElementById('content'));
+}
+
+function setCalendarMembers(ids) {
+  state.calendarSelectedMembers = [...ids];
+  localStorage.setItem('vi_calendar_selected_members', JSON.stringify(state.calendarSelectedMembers));
+  renderCalendar(document.getElementById('content'));
+}
+
+function toggleCalendarMember(id) {
+  const cur = state.calendarSelectedMembers || [];
+  const idx = cur.indexOf(id);
+  if (idx >= 0) cur.splice(idx, 1);
+  else cur.push(id);
+  state.calendarSelectedMembers = cur;
+  localStorage.setItem('vi_calendar_selected_members', JSON.stringify(cur));
+  renderCalendar(document.getElementById('content'));
+}
+
+// Returns personal events visible based on current view mode + selected members
+function getPersonalEventsForDateForViewMode(dateStr) {
+  const viewerId = getActiveTeamMemberId();
+  const viewMode = state.calendarViewMode || 'mine';
+  const all = (state.personalEvents || []).filter(e => e.date === dateStr);
+  if (viewMode === 'mine') {
+    // Only viewer's own events
+    return all.filter(e => e.memberId === viewerId);
+  }
+  // 'all' mode — but check viewer permission
+  if (!currentUserHasPermission('calendar.view_all')) {
+    return all.filter(e => e.memberId === viewerId);
+  }
+  // Filter to selected members (empty = all)
+  const selected = state.calendarSelectedMembers || [];
+  if (selected.length === 0) return all;
+  return all.filter(e => selected.includes(e.memberId));
 }
 
 function getCalendarDates(p) {
@@ -12346,4 +12518,582 @@ function renderSchedulingNotesCard(project) {
       </div>
     </div>
   `;
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// PERSONAL CALENDAR + MEETINGS SYSTEM (v1.43 — Round 1)
+// Foundation for personal calendars, unified meetings, and busy-block
+// derivation. Round 2 will add the meeting picker; Round 3 extends to
+// all meeting types with conflict approval.
+// ═══════════════════════════════════════════════════════════════════
+
+// Predefined personal event types — render to everyone, never private
+const PERSONAL_EVENT_TYPES = [
+  { key: 'pto',       label: 'PTO',           color: '#3FB950' },
+  { key: 'sick',      label: 'Sick',          color: '#F85149' },
+  { key: 'doctor',    label: 'Doctor',        color: '#58A6FF' },
+  { key: 'oof',       label: 'Out of Office', color: '#D29922' },
+  { key: 'errand',    label: 'Errand',        color: '#A371F7' },
+  { key: 'custom',    label: 'Other',         color: '#8B949E' }
+];
+
+function _personalEventTypeMeta(typeKey) {
+  return PERSONAL_EVENT_TYPES.find(t => t.key === typeKey) || PERSONAL_EVENT_TYPES[5];
+}
+
+// Display label: respects type + privacy. Caller indicates if viewer is the owner.
+// Returns "{label}" for typed events, "{title}" for custom non-private,
+// or "Busy — Personal" for custom private events when viewer != owner.
+function getPersonalEventDisplayLabel(event, viewerIsOwner) {
+  if (!event) return '';
+  if (event.type !== 'custom') {
+    return _personalEventTypeMeta(event.type).label;
+  }
+  if (event.isPrivate && !viewerIsOwner) {
+    return 'Busy — Personal';
+  }
+  return event.title || 'Personal Event';
+}
+
+function getPersonalEventColor(event) {
+  return _personalEventTypeMeta(event.type).color;
+}
+
+// CRUD ---------------------------------------------------------------
+function addPersonalEvent({ memberId, date, startTime, endTime, type, title, isPrivate, detail }) {
+  if (!state.personalEvents) state.personalEvents = [];
+  const maxId = state.personalEvents.reduce((m, e) => Math.max(m, e.id || 0), 0);
+  const evt = {
+    id: maxId + 1,
+    memberId,
+    date,                 // 'YYYY-MM-DD'
+    startTime: startTime || null,  // 'HH:MM' (24h) or null = all-day
+    endTime: endTime || null,
+    type: type || 'custom',
+    title: title || '',
+    isPrivate: !!isPrivate,
+    detail: detail || '',
+    createdAt: new Date().toISOString()
+  };
+  state.personalEvents.push(evt);
+  save('vi_personal_events', state.personalEvents);
+  return evt;
+}
+
+function editPersonalEvent(id, updates) {
+  if (!state.personalEvents) return null;
+  const idx = state.personalEvents.findIndex(e => e.id === id);
+  if (idx < 0) return null;
+  state.personalEvents[idx] = { ...state.personalEvents[idx], ...updates };
+  save('vi_personal_events', state.personalEvents);
+  return state.personalEvents[idx];
+}
+
+function deletePersonalEvent(id) {
+  if (!state.personalEvents) return;
+  state.personalEvents = state.personalEvents.filter(e => e.id !== id);
+  save('vi_personal_events', state.personalEvents);
+}
+
+function getPersonalEventsForMember(memberId, startDate, endDate) {
+  return (state.personalEvents || []).filter(e =>
+    e.memberId === memberId &&
+    e.date >= startDate && e.date <= endDate
+  );
+}
+
+// ── Meetings ────────────────────────────────────────────────────────
+// Unified meeting model. Each meeting:
+//   { id, projectId, type, title, date, startTime, endTime,
+//     attendees: [memberIds], status: 'confirmed'|'pending_approval'|'denied',
+//     source, createdAt, createdBy, notes }
+// Round 2 will use this; Round 1 just sets it up + migrates legacy meetingLogs.
+
+const MEETING_TYPES = [
+  { key: 'walkthrough',      label: 'Walkthrough' },
+  { key: 'design_kickoff',   label: 'Design Kickoff' },
+  { key: 'handoff',          label: 'Hand-off' },
+  { key: 'install_kickoff',  label: 'Install Kickoff' },
+  { key: 'closeout',         label: 'Closeout' },
+  { key: 'misc',             label: 'Other' }
+];
+
+function _meetingTypeLabel(typeKey) {
+  return MEETING_TYPES.find(t => t.key === typeKey)?.label || 'Meeting';
+}
+
+// One-time migration of old meetingLogs[projectId][type] to meetings[]
+function _migrateMeetingLogsOnce() {
+  if (state._meetingMigrationDone) return;
+  if (!state.meetings) state.meetings = [];
+  const logs = state.meetingLogs || {};
+  let maxId = state.meetings.reduce((m, x) => Math.max(m, x.id || 0), 0);
+  Object.keys(logs).forEach(projectIdStr => {
+    const pid = Number(projectIdStr);
+    const projectLogs = logs[projectIdStr] || {};
+    Object.keys(projectLogs).forEach(typeKey => {
+      const log = projectLogs[typeKey];
+      if (!log) return;
+      // Skip if already migrated (look for existing meeting matching this projectId+type+createdAt)
+      const alreadyMigrated = state.meetings.some(m =>
+        m.projectId === pid && m.type === typeKey && m.createdAt === log.logged_at && m._migrated
+      );
+      if (alreadyMigrated) return;
+      maxId += 1;
+      state.meetings.push({
+        id: maxId,
+        projectId: pid,
+        type: typeKey,
+        title: _meetingTypeLabel(typeKey),
+        date: log.date || (log.logged_at || '').slice(0, 10),
+        startTime: null,
+        endTime: null,
+        attendees: [],
+        status: 'confirmed',
+        source: log.source || 'legacy_meeting_log',
+        createdAt: log.logged_at || new Date().toISOString(),
+        createdBy: null,
+        notes: '',
+        _migrated: true
+      });
+    });
+  });
+  state._meetingMigrationDone = true;
+  save('vi_meetings', state.meetings);
+}
+
+function addMeeting({ projectId, type, title, date, startTime, endTime, attendees, status, source, notes }) {
+  if (!state.meetings) state.meetings = [];
+  const maxId = state.meetings.reduce((m, x) => Math.max(m, x.id || 0), 0);
+  const meeting = {
+    id: maxId + 1,
+    projectId: projectId || null,
+    type: type || 'misc',
+    title: title || _meetingTypeLabel(type),
+    date,
+    startTime: startTime || null,
+    endTime: endTime || null,
+    attendees: Array.isArray(attendees) ? [...attendees] : [],
+    status: status || 'confirmed',
+    source: source || 'manual',
+    createdAt: new Date().toISOString(),
+    createdBy: getActiveTeamMemberId(),
+    notes: notes || ''
+  };
+  state.meetings.push(meeting);
+  save('vi_meetings', state.meetings);
+  return meeting;
+}
+
+function getMeetingsForMember(memberId, startDate, endDate) {
+  return (state.meetings || []).filter(m =>
+    (m.attendees || []).includes(memberId) &&
+    m.date >= startDate && m.date <= endDate &&
+    m.status !== 'denied'
+  );
+}
+
+function getMeetingsForProject(projectId) {
+  return (state.meetings || []).filter(m => m.projectId === projectId && m.status !== 'denied');
+}
+
+// ── Busy-block derivation ───────────────────────────────────────────
+// Returns array of busy blocks for a member in [startDate, endDate].
+// Each block: { date, startTime, endTime, title, type, color, isPrivate, source }
+//   type: 'personal' | 'meeting' | 'install' | 'design'
+//   source: optional reference (project, meeting, event)
+// startTime/endTime are null for all-day blocks.
+function getMemberBusyBlocks(memberId, startDate, endDate) {
+  const blocks = [];
+
+  // 1. Personal events
+  getPersonalEventsForMember(memberId, startDate, endDate).forEach(e => {
+    blocks.push({
+      date: e.date,
+      startTime: e.startTime,
+      endTime: e.endTime,
+      title: e.title,
+      type: 'personal',
+      personalType: e.type,
+      isPrivate: e.isPrivate,
+      color: getPersonalEventColor(e),
+      sourceRef: { kind: 'personal_event', id: e.id }
+    });
+  });
+
+  // 2. Meetings where this member is an attendee
+  getMeetingsForMember(memberId, startDate, endDate).forEach(m => {
+    blocks.push({
+      date: m.date,
+      startTime: m.startTime,
+      endTime: m.endTime,
+      title: m.title,
+      type: 'meeting',
+      isPrivate: false,
+      color: m.status === 'pending_approval' ? '#D29922' : '#58A6FF',
+      sourceRef: { kind: 'meeting', id: m.id, projectId: m.projectId }
+    });
+  });
+
+  // 3. Install windows where this member is on the install crew or PM
+  state.projects.forEach(p => {
+    if (p.archived) return;
+    const a = getProjectAssignment(p.id);
+    const onInstall = (a.install || []).some(x => x.id === memberId);
+    const onPM = (a.pm || []).some(x => x.id === memberId);
+    if (!onInstall && !onPM) return;
+    const win = getInstallWindow(p);
+    if (!win || !win.start) return;
+    // Iterate days in window that overlap [startDate, endDate]
+    const ws = win.start > startDate ? win.start : startDate;
+    const we = win.end < endDate ? win.end : endDate;
+    if (ws > we) return;
+    const cur = new Date(ws + 'T00:00:00');
+    const lim = new Date(we + 'T00:00:00');
+    while (cur <= lim) {
+      const ds = cur.toISOString().slice(0, 10);
+      // Honor weekend exclusion
+      const stored = win.source === 'booked'
+        ? (state.bookedDates?.[p.id] || {})
+        : (state.estimatedInstallOverride?.[p.id] || {});
+      const storedObj = (stored && typeof stored === 'object') ? stored : {};
+      const dow = cur.getDay();
+      const isWeekend = dow === 0 || dow === 6;
+      const skipWeekend = isWeekend && storedObj.excludeWeekends !== false &&
+                          !(storedObj.weekendIncludes || []).includes(ds);
+      if (!skipWeekend) {
+        blocks.push({
+          date: ds,
+          startTime: null,
+          endTime: null,
+          title: `${p.name} — Install`,
+          type: 'install',
+          isPrivate: false,
+          color: win.source === 'booked' ? '#3FB950' : '#58A6FF',
+          sourceRef: { kind: 'project_install', projectId: p.id }
+        });
+      }
+      cur.setDate(cur.getDate() + 1);
+    }
+  });
+
+  return blocks;
+}
+
+// Helper: viewer can see this person's calendar in detail?
+function viewerCanSeeMemberCalendar(viewerId, targetMemberId) {
+  if (viewerId === targetMemberId) return true;
+  return currentUserHasPermission('calendar.view_all');
+}
+
+// Run migration on first load
+_migrateMeetingLogsOnce();
+
+// ── Calendar Day Detail Dialog ──
+// Tap a day in the Calendar to see all events that day in full detail.
+function openCalendarDayDetail(dateStr) {
+  document.getElementById('cal-day-detail-dialog')?.remove();
+  const overlay = document.createElement('div');
+  overlay.id = 'cal-day-detail-dialog';
+  overlay.className = 'modal-overlay';
+  overlay.innerHTML = renderCalendarDayDetail(dateStr);
+  document.body.appendChild(overlay);
+  overlay.addEventListener('click', e => { if (e.target === overlay) overlay.remove(); });
+}
+
+function refreshCalendarDayDetail(dateStr) {
+  const dialog = document.getElementById('cal-day-detail-dialog');
+  if (!dialog) return;
+  dialog.innerHTML = renderCalendarDayDetail(dateStr);
+}
+
+function renderCalendarDayDetail(dateStr) {
+  const d = new Date(dateStr + 'T00:00:00');
+  const longDate = d.toLocaleDateString('en-US', { weekday:'long', month:'long', day:'numeric', year:'numeric' });
+
+  // Project events on this day
+  const projectEvents = getEventsForDate(dateStr);
+  // Personal events on this day (respecting view mode + permissions)
+  const personalEvents = getPersonalEventsForDateForViewMode(dateStr);
+  // Meetings on this day for projects/people the viewer cares about
+  const viewerId = getActiveTeamMemberId();
+  const canSeeAll = currentUserHasPermission('calendar.view_all');
+  const allMeetings = (state.meetings || []).filter(m =>
+    m.date === dateStr && m.status !== 'denied' &&
+    (canSeeAll || (m.attendees || []).includes(viewerId))
+  );
+
+  const totalCount = projectEvents.length + personalEvents.length + allMeetings.length;
+
+  return `
+    <div class="modal-container" style="max-width:480px;max-height:85vh;display:flex;flex-direction:column">
+      <div class="modal-header">
+        <div>
+          <div class="modal-title">${esc(longDate)}</div>
+          <div class="modal-sub">${totalCount} event${totalCount === 1 ? '' : 's'}</div>
+        </div>
+        <button class="modal-close" onclick="document.getElementById('cal-day-detail-dialog')?.remove()">&times;</button>
+      </div>
+      <div class="modal-body" style="overflow-y:auto;flex:1">
+        ${totalCount === 0 ? `<div style="font-size:12px;color:#6E7681;font-style:italic;text-align:center;padding:20px">Nothing scheduled this day</div>` : ''}
+
+        ${projectEvents.length > 0 ? `
+          <div class="day-detail-section">
+            <div class="day-detail-section-title">Project Install</div>
+            ${projectEvents.map(e => {
+              const proj = state.projects.find(pp => pp.id === e.id);
+              const win = getInstallWindow(proj);
+              const dateColor = e.color === 'booked' ? '#3FB950' : '#58A6FF';
+              return `
+                <div class="day-detail-item" onclick="document.getElementById('cal-day-detail-dialog')?.remove();openProject(${e.id},'install')" style="border-left-color:${dateColor};cursor:pointer">
+                  <div class="day-detail-item-title">${esc(e.name)}</div>
+                  <div class="day-detail-item-meta">
+                    <span style="color:${dateColor}">${e.booked ? 'Booked' : 'Estimated'}</span>
+                    ${win ? `<span>· ${fmtDate(win.start)}${win.end && win.end !== win.start ? ' — ' + fmtDate(win.end) : ''}</span>` : ''}
+                  </div>
+                  ${proj?.scheduling_notes ? `<div class="day-detail-item-notes">📝 ${esc(proj.scheduling_notes)}</div>` : ''}
+                </div>
+              `;
+            }).join('')}
+          </div>
+        ` : ''}
+
+        ${allMeetings.length > 0 ? `
+          <div class="day-detail-section">
+            <div class="day-detail-section-title">Meetings</div>
+            ${allMeetings.map(m => {
+              const proj = m.projectId ? state.projects.find(pp => pp.id === m.projectId) : null;
+              const timeStr = m.startTime && m.endTime ? `${m.startTime} – ${m.endTime}` : (m.startTime || 'All day');
+              return `
+                <div class="day-detail-item" style="border-left-color:#58A6FF">
+                  <div class="day-detail-item-title">${esc(m.title)}</div>
+                  <div class="day-detail-item-meta">
+                    <span>${esc(timeStr)}</span>
+                    ${proj ? `<span>· ${esc(proj.name)}</span>` : ''}
+                    ${m.status === 'pending_approval' ? `<span style="color:#D29922">· Pending approval</span>` : ''}
+                  </div>
+                  ${m.attendees?.length ? `
+                    <div class="day-detail-item-attendees">
+                      ${m.attendees.map(aid => {
+                        const at = getTeamMember(aid);
+                        return at ? `<span class="day-detail-attendee">${esc(at.name.split(' ')[0])}</span>` : '';
+                      }).join('')}
+                    </div>
+                  ` : ''}
+                </div>
+              `;
+            }).join('')}
+          </div>
+        ` : ''}
+
+        ${personalEvents.length > 0 ? `
+          <div class="day-detail-section">
+            <div class="day-detail-section-title">Personal Events</div>
+            ${personalEvents.map(pe => {
+              const owner = getTeamMember(pe.memberId);
+              const viewerIsOwner = pe.memberId === viewerId;
+              const label = getPersonalEventDisplayLabel(pe, viewerIsOwner);
+              const color = getPersonalEventColor(pe);
+              const timeStr = pe.startTime && pe.endTime ? `${pe.startTime} – ${pe.endTime}` : 'All day';
+              return `
+                <div class="day-detail-item" style="border-left-color:${color}">
+                  <div class="day-detail-item-title" style="color:${color}">${esc(label)}</div>
+                  <div class="day-detail-item-meta">
+                    <span>${esc(timeStr)}</span>
+                    ${owner ? `<span>· ${esc(owner.name)}</span>` : ''}
+                  </div>
+                  ${pe.detail && viewerIsOwner ? `<div class="day-detail-item-notes">${esc(pe.detail)}</div>` : ''}
+                  ${viewerIsOwner ? `
+                    <div style="display:flex;gap:6px;margin-top:6px">
+                      <button type="button" class="btn btn-sm" onclick="openEditPersonalEventDialog(${pe.id})" style="font-size:10px;padding:3px 8px">Edit</button>
+                      <button type="button" class="btn btn-sm btn-danger" onclick="confirmDeletePersonalEvent(${pe.id}, '${dateStr}')" style="font-size:10px;padding:3px 8px">Delete</button>
+                    </div>
+                  ` : ''}
+                </div>
+              `;
+            }).join('')}
+          </div>
+        ` : ''}
+
+        <div style="text-align:center;margin-top:14px">
+          <button type="button" class="btn-primary" onclick="openAddPersonalEventDialog('${dateStr}')" style="font-size:11px;padding:6px 12px">+ Add Personal Event</button>
+        </div>
+      </div>
+    </div>
+  `;
+}
+
+function confirmDeletePersonalEvent(id, dateStr) {
+  if (!confirm('Delete this personal event?')) return;
+  deletePersonalEvent(id);
+  if (dateStr) refreshCalendarDayDetail(dateStr);
+  if (document.getElementById('content')) renderCalendar(document.getElementById('content'));
+}
+
+// ── Add / Edit Personal Event Dialog ──
+function openAddPersonalEventDialog(prefilDate) {
+  _personalEventForm = {
+    id: null,
+    memberId: getActiveTeamMemberId(),
+    date: prefilDate || new Date().toISOString().slice(0, 10),
+    type: 'pto',
+    title: '',
+    detail: '',
+    isPrivate: false,
+    allDay: true,
+    startTime: '09:00',
+    endTime: '17:00'
+  };
+  _renderPersonalEventDialog();
+}
+
+function openEditPersonalEventDialog(id) {
+  const evt = (state.personalEvents || []).find(e => e.id === id);
+  if (!evt) return;
+  const viewerId = getActiveTeamMemberId();
+  if (evt.memberId !== viewerId && !currentUserHasPermission('admin.system')) {
+    showToast('Cannot edit another user\'s personal event', 'error');
+    return;
+  }
+  _personalEventForm = {
+    id: evt.id,
+    memberId: evt.memberId,
+    date: evt.date,
+    type: evt.type,
+    title: evt.title || '',
+    detail: evt.detail || '',
+    isPrivate: !!evt.isPrivate,
+    allDay: !evt.startTime,
+    startTime: evt.startTime || '09:00',
+    endTime: evt.endTime || '17:00'
+  };
+  _renderPersonalEventDialog();
+}
+
+let _personalEventForm = null;
+
+function _renderPersonalEventDialog() {
+  document.getElementById('personal-event-dialog')?.remove();
+  const f = _personalEventForm;
+  if (!f) return;
+  const isEdit = f.id !== null;
+  const overlay = document.createElement('div');
+  overlay.id = 'personal-event-dialog';
+  overlay.className = 'modal-overlay';
+  overlay.style.zIndex = '1100';
+  overlay.innerHTML = `
+    <div class="modal-container" style="max-width:440px;max-height:90vh;display:flex;flex-direction:column">
+      <div class="modal-header">
+        <div>
+          <div class="modal-title">${isEdit ? 'Edit' : 'Add'} Personal Event</div>
+        </div>
+        <button class="modal-close" onclick="document.getElementById('personal-event-dialog')?.remove()">&times;</button>
+      </div>
+      <div class="modal-body" style="overflow-y:auto;flex:1">
+        <div class="form-group">
+          <label class="form-label">Event Type</label>
+          <div class="pe-type-grid">
+            ${PERSONAL_EVENT_TYPES.map(t => `
+              <button type="button" class="pe-type-btn ${f.type === t.key ? 'active' : ''}" onclick="_pickPersonalEventType('${t.key}')" style="${f.type === t.key ? `border-color:${t.color};background:${t.color}1F;color:${t.color}` : ''}">
+                <span class="pe-type-dot" style="background:${t.color}"></span>${esc(t.label)}
+              </button>
+            `).join('')}
+          </div>
+        </div>
+
+        ${f.type === 'custom' ? `
+          <div class="form-group">
+            <label class="form-label">Title</label>
+            <input type="text" id="pe-title" class="form-input" value="${esc(f.title)}" placeholder="e.g., Lunch with client" oninput="_personalEventForm.title=this.value">
+          </div>
+          <div class="form-group">
+            <label style="display:flex;align-items:center;gap:8px;font-size:12px;color:#C9D1D9;cursor:pointer">
+              <input type="checkbox" ${f.isPrivate ? 'checked' : ''} onchange="_personalEventForm.isPrivate=this.checked">
+              <span>Private — others see "Busy — Personal" instead of the title</span>
+            </label>
+          </div>
+        ` : ''}
+
+        <div class="form-group">
+          <label class="form-label">Date</label>
+          <input type="date" id="pe-date" class="form-input" value="${esc(f.date)}" oninput="_personalEventForm.date=this.value">
+        </div>
+
+        <div class="form-group">
+          <label style="display:flex;align-items:center;gap:8px;font-size:12px;color:#C9D1D9;cursor:pointer">
+            <input type="checkbox" ${f.allDay ? 'checked' : ''} onchange="_personalEventForm.allDay=this.checked;_renderPersonalEventDialog()">
+            <span>All day</span>
+          </label>
+        </div>
+
+        ${!f.allDay ? `
+          <div style="display:flex;gap:8px">
+            <div class="form-group" style="flex:1">
+              <label class="form-label">Start</label>
+              <input type="time" class="form-input" value="${esc(f.startTime)}" step="900" oninput="_personalEventForm.startTime=this.value">
+            </div>
+            <div class="form-group" style="flex:1">
+              <label class="form-label">End</label>
+              <input type="time" class="form-input" value="${esc(f.endTime)}" step="900" oninput="_personalEventForm.endTime=this.value">
+            </div>
+          </div>
+        ` : ''}
+
+        <div class="form-group">
+          <label class="form-label">Notes <span style="color:#6E7681;font-weight:400">(optional, only you see)</span></label>
+          <textarea class="form-textarea" rows="2" placeholder="Additional detail..." oninput="_personalEventForm.detail=this.value">${esc(f.detail)}</textarea>
+        </div>
+
+        <div style="display:flex;gap:8px;margin-top:16px">
+          <button type="button" class="btn" onclick="document.getElementById('personal-event-dialog')?.remove()" style="flex:1">Cancel</button>
+          <button type="button" class="btn-primary" onclick="_savePersonalEventDialog()" style="flex:2">${isEdit ? 'Save Changes' : 'Add Event'}</button>
+        </div>
+      </div>
+    </div>
+  `;
+  document.body.appendChild(overlay);
+}
+
+function _pickPersonalEventType(typeKey) {
+  if (!_personalEventForm) return;
+  _personalEventForm.type = typeKey;
+  _renderPersonalEventDialog();
+}
+
+function _savePersonalEventDialog() {
+  const f = _personalEventForm;
+  if (!f) return;
+  if (!f.date) { showToast('Date is required', 'error'); return; }
+  if (f.type === 'custom' && !f.title.trim()) {
+    showToast('Title is required for custom events', 'error');
+    return;
+  }
+  const data = {
+    memberId: f.memberId,
+    date: f.date,
+    startTime: f.allDay ? null : f.startTime,
+    endTime: f.allDay ? null : f.endTime,
+    type: f.type,
+    title: f.title,
+    detail: f.detail,
+    isPrivate: f.type === 'custom' ? !!f.isPrivate : false
+  };
+  if (f.id) {
+    editPersonalEvent(f.id, data);
+    showToast('Event updated', 'success');
+  } else {
+    addPersonalEvent(data);
+    showToast('Event added', 'success');
+  }
+  document.getElementById('personal-event-dialog')?.remove();
+  // Refresh calendar if visible
+  if (state.currentPage === 'calendar') {
+    renderCalendar(document.getElementById('content'));
+  } else {
+    renderCurrentPage();
+  }
+  // If we came from a day-detail dialog, refresh it too
+  if (document.getElementById('cal-day-detail-dialog')) {
+    refreshCalendarDayDetail(f.date);
+  }
 }
