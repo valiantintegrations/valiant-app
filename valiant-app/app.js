@@ -587,6 +587,30 @@ function markContractReviewed(projectId) {
   renderCurrentPage();
 }
 
+// "Send to Design & Install" — finalizes mobilization. Triggered from the
+// mobilization dialog's footer button when all 7 checklist items are done.
+// Effects: contract reviewed flag set, project drops out of Sales Dept's
+// mobilization queue, project surfaces on Planning dashboard.
+function sendProjectToInstall(projectId) {
+  const p = state.projects.find(x => x.id === projectId);
+  if (!p) return;
+  // Hard guard — should be enforced by UI but double-check
+  if (!isMobilizationComplete(projectId)) {
+    showToast('Mobilization checklist incomplete', 'error');
+    return;
+  }
+  // Set the reviewed flag (uses existing contractReviewed map for backwards compat)
+  contractReviewed[projectId] = new Date().toISOString();
+  localStorage.setItem('vi_contract_reviewed', JSON.stringify(contractReviewed));
+  // Also set project field for new code paths
+  p.contract_reviewed_at = contractReviewed[projectId];
+  save('vi_projects', state.projects);
+  // Close the dialog
+  document.getElementById('mobilization-dialog')?.remove();
+  showToast(`${p.name} sent to Design & Install`, 'success');
+  renderCurrentPage();
+}
+
 // ── Design & Install Checklist Templates ──
 const TEMPLATES = {
   design: {
@@ -2920,7 +2944,7 @@ function renderDashboard(c) {
     tabs.push({ key: 'design_mgmt', label: 'Design Dept' });
   }
   if (canSeeInstallMgmt) {
-    tabs.push({ key: 'install_mgmt', label: 'Install Dept' });
+    tabs.push({ key: 'install_mgmt', label: 'Planning' });
   }
   if (canSeeAllProjects) tabs.push({ key: 'pipeline', label: 'Full Pipeline' });
 
@@ -3699,9 +3723,9 @@ function renderProjectPage(c) {
           <div class="project-page-review-banner">
             <div style="display:flex;align-items:center;gap:8px;flex:1">
               <div style="width:8px;height:8px;border-radius:50%;background:#DA3633;animation:pulse 1.5s infinite;flex-shrink:0"></div>
-              <span style="font-size:12px;font-weight:600;color:#F85149">REVIEW REQUIRED &mdash; SEND TO DESIGN &amp; INSTALL</span>
+              <span style="font-size:12px;font-weight:600;color:#F85149">MOBILIZATION REQUIRED &mdash; COMPLETE TO SEND TO DESIGN &amp; INSTALL</span>
             </div>
-            <button class="btn-primary" onclick="markContractReviewed(${p.id})" style="background:#238636;padding:6px 12px;font-size:12px;min-height:32px">&#10003; Mark Reviewed</button>
+            <button class="btn-primary" onclick="openMobilizationDialog(${p.id})" style="background:#238636;padding:6px 12px;font-size:12px;min-height:32px">Open Checklist &rarr;</button>
           </div>
         ` : ''}
         ${p._stage_divergence ? `
@@ -11586,18 +11610,39 @@ function renderMobilizationBody(projectId) {
   }).join('');
 
   const allDone = MOBILIZATION_ITEMS.every(it => s[it.key]);
+  const completed = MOBILIZATION_ITEMS.filter(it => s[it.key]).length;
+  const total = MOBILIZATION_ITEMS.length;
+  // Already sent to Install? (contract reviewed flag set)
+  const alreadySent = !!p.contract_reviewed_at;
 
   return `
     <div style="font-size:12px;color:#8B949E;margin-bottom:12px;line-height:1.5">
-      Once all items are complete, this project is mobilized — Design and Planning can fully kick in. Items auto-check as the underlying state is set.
+      Complete all 7 items to send this project to Design &amp; Install. Items auto-check as the underlying state is set.
+    </div>
+    <div style="display:flex;align-items:center;gap:10px;margin-bottom:12px;padding:8px 12px;background:#0D1117;border:1px solid #1C2333;border-radius:6px">
+      <div style="font-size:12px;color:${allDone ? '#3FB950' : '#D29922'};font-weight:600">${completed}/${total} complete</div>
+      <div style="flex:1;height:6px;background:#1C2333;border-radius:3px;overflow:hidden">
+        <div style="height:100%;width:${Math.round((completed/total)*100)}%;background:${allDone ? '#3FB950' : '#D29922'};transition:width 0.3s"></div>
+      </div>
     </div>
     ${rows}
-    ${allDone ? `
-      <div style="margin-top:14px;padding:10px 12px;background:#0D1A0E;border:1px solid #238636;border-radius:6px;display:flex;align-items:center;gap:8px">
-        <svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M2 7.5l3.5 3.5L12 4" stroke="#3FB950" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
-        <span style="font-size:12px;color:#3FB950;font-weight:500">Project mobilized — Design + Planning unlocked</span>
-      </div>
-    ` : ''}
+    <div style="margin-top:18px;padding-top:14px;border-top:1px solid #1C2333">
+      ${alreadySent ? `
+        <div style="padding:10px 12px;background:#0D1A0E;border:1px solid #238636;border-radius:6px;display:flex;align-items:center;gap:8px">
+          <svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M2 7.5l3.5 3.5L12 4" stroke="#3FB950" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          <span style="font-size:12px;color:#3FB950;font-weight:500">Already sent to Design &amp; Install &middot; on Planning dashboard</span>
+        </div>
+      ` : `
+        <button type="button"
+          onclick="${allDone ? `sendProjectToInstall(${projectId})` : ''}"
+          ${allDone ? '' : 'disabled'}
+          class="btn-primary"
+          style="width:100%;padding:12px;font-size:13px;font-weight:600;${allDone ? 'background:#238636;border-color:#2EA043;cursor:pointer' : 'background:#161B22;border-color:#30363D;color:#6E7681;cursor:not-allowed;opacity:0.55'}">
+          ${allDone ? '✓ Send to Design &amp; Install' : `${total - completed} item${total - completed === 1 ? '' : 's'} remaining`}
+        </button>
+        ${allDone ? '<div style="font-size:11px;color:#8B949E;text-align:center;margin-top:6px">Project will move to Planning dashboard</div>' : ''}
+      `}
+    </div>
   `;
 }
 
