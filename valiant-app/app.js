@@ -995,42 +995,19 @@ function showSetBookedDatesDialog(projectId) {
   if (!p) return;
   const existing = getBookedTimeline(projectId);
 
-  let dialog = document.getElementById('booked-dates-dialog');
-  if (dialog) dialog.remove();
-  dialog = document.createElement('div');
-  dialog.id = 'booked-dates-dialog';
-  dialog.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.7);z-index:120;display:flex;align-items:center;justify-content:center;padding:20px';
-
-  dialog.innerHTML = `
-    <div style="background:#161B22;border:1px solid #30363D;border-radius:12px;padding:20px;max-width:380px;width:100%">
-      <div style="font-size:15px;font-weight:600;color:#E6EDF3;margin-bottom:4px">Set Booked Install Dates</div>
-      <div style="font-size:12px;color:#6E7681;margin-bottom:16px">${esc(p.name)}</div>
-
-      ${p.start_date ? `<div style="font-size:11px;color:#6E7681;margin-bottom:12px;padding:8px 10px;background:#0D1117;border-radius:6px">
-        <span style="color:#8B949E">Jetbuilt estimated:</span> ${fmtDate(p.start_date)}${p.end_date ? ' – ' + fmtDate(p.end_date) : ''}
-      </div>` : ''}
-
-      <div class="form-group">
-        <label class="form-label">Booked Start Date</label>
-        <input class="form-input" type="date" id="booked-start" value="${existing?.start || ''}">
-      </div>
-      <div class="form-group">
-        <label class="form-label">Booked End Date <span style="color:#6E7681;font-weight:400">(optional)</span></label>
-        <input class="form-input" type="date" id="booked-end" value="${existing?.end || ''}">
-      </div>
-
-      <div style="display:flex;gap:8px;margin-top:16px">
-        <button class="btn-primary" onclick="saveBookedDatesDialog(${projectId})" style="flex:1;padding:11px">Save</button>
-        ${existing ? `<button class="btn btn-danger" onclick="setBookedDates(${projectId},'','');document.getElementById('booked-dates-dialog')?.remove();renderCurrentPage()">Clear</button>` : ''}
-        <button class="btn" onclick="document.getElementById('booked-dates-dialog')?.remove()">Cancel</button>
-      </div>
-    </div>
-  `;
-
-  document.body.appendChild(dialog);
-  dialog.addEventListener('click', e => { if (e.target === dialog) dialog.remove(); });
+  openInstallWindowPicker({
+    projectId,
+    mode: 'booked',
+    initialStart: existing?.start,
+    initialEnd: existing?.end,
+    onConfirm: (start, end) => {
+      setBookedDates(projectId, start, end);
+      renderCurrentPage();
+    }
+  });
 }
 
+// Legacy save handler retained for any inline callers; new picker calls setBookedDates directly
 function saveBookedDatesDialog(projectId) {
   const start = document.getElementById('booked-start')?.value;
   const end = document.getElementById('booked-end')?.value || '';
@@ -4928,46 +4905,58 @@ function showContractDateDialog(projectId) {
 
 // Returns the effective estimated install date — user override wins over Jetbuilt's value
 function getEstimatedInstall(p) {
+  // Override may be a legacy string OR a {start, end} object.
+  // Returns just the start date as a string (for callers that expect a single date).
+  // For range-aware callers, use getEstimatedInstallRange instead.
   const override = state.estimatedInstallOverride?.[p.id];
+  if (override && typeof override === 'object') return override.start || '';
   return override || p.jb_estimated_install || '';
 }
 
-function setEstimatedInstallOverride(projectId, date) {
+function getEstimatedInstallRange(p) {
+  const override = state.estimatedInstallOverride?.[p.id];
+  if (override && typeof override === 'object' && override.start) {
+    return { start: override.start, end: override.end || override.start };
+  }
+  if (typeof override === 'string' && override) {
+    return { start: override, end: override };
+  }
+  if (p.jb_estimated_install) {
+    return { start: p.jb_estimated_install, end: p.jb_estimated_install };
+  }
+  return null;
+}
+
+function setEstimatedInstallOverride(projectId, dateOrRange) {
   if (!state.estimatedInstallOverride) state.estimatedInstallOverride = {};
-  if (date) state.estimatedInstallOverride[projectId] = date;
-  else delete state.estimatedInstallOverride[projectId];
+  if (!dateOrRange) {
+    delete state.estimatedInstallOverride[projectId];
+  } else if (typeof dateOrRange === 'string') {
+    state.estimatedInstallOverride[projectId] = dateOrRange;
+  } else {
+    // Object with {start, end}
+    state.estimatedInstallOverride[projectId] = {
+      start: dateOrRange.start,
+      end: dateOrRange.end || dateOrRange.start
+    };
+  }
   save('vi_estimated_install', state.estimatedInstallOverride);
 }
 
 function showEstimatedInstallDialog(projectId) {
   const p = state.projects.find(pr => pr.id === projectId);
   if (!p) return;
-  const current = getEstimatedInstall(p);
-  document.getElementById('est-install-dialog')?.remove();
-  const modal = document.createElement('div');
-  modal.id = 'est-install-dialog';
-  modal.className = 'modal-overlay';
-  modal.innerHTML = `
-    <div class="modal-container" style="max-width:420px">
-      <div class="modal-header">
-        <div>
-          <div class="modal-title">Estimated Install Date</div>
-          <div class="modal-sub">Override Jetbuilt&rsquo;s estimate &mdash; will sync back later</div>
-        </div>
-        <button class="modal-close" onclick="document.getElementById('est-install-dialog')?.remove()">&times;</button>
-      </div>
-      <div class="modal-body">
-        <label style="font-size:12px;color:#8B949E;font-weight:500;display:block;margin-bottom:6px">Estimated date</label>
-        <input type="date" id="est-install-input" class="form-input" value="${esc(current)}" style="width:100%">
-        ${p.jb_estimated_install ? `<div style="margin-top:10px;font-size:11px;color:#6E7681">Jetbuilt value: <code style="color:#8B949E">${esc(p.jb_estimated_install)}</code></div>` : ''}
-        <div style="display:flex;gap:8px;margin-top:14px">
-          ${state.estimatedInstallOverride?.[projectId] ? `<button class="btn btn-danger" onclick="setEstimatedInstallOverride(${projectId}, '');document.getElementById('est-install-dialog')?.remove();renderCurrentPage()">Reset to Jetbuilt</button>` : ''}
-          <button class="btn-primary" onclick="const v=document.getElementById('est-install-input').value;setEstimatedInstallOverride(${projectId}, v);document.getElementById('est-install-dialog')?.remove();renderCurrentPage()" style="flex:1">Save</button>
-        </div>
-      </div>
-    </div>
-  `;
-  document.body.appendChild(modal);
+  const existing = getEstimatedInstallRange(p);
+  openInstallWindowPicker({
+    projectId,
+    mode: 'estimated',
+    initialStart: existing?.start,
+    initialEnd: existing?.end,
+    onConfirm: (start, end) => {
+      setEstimatedInstallOverride(projectId, { start, end });
+      renderCurrentPage();
+    }
+  });
 }
 
 function getInstallWindow(p) {
@@ -4980,11 +4969,11 @@ function getInstallWindow(p) {
       source: 'booked'
     };
   }
-  const est = getEstimatedInstall(p);
+  const est = getEstimatedInstallRange(p);
   if (est) {
     return {
-      start: est,
-      end: est,
+      start: est.start,
+      end: est.end,
       source: 'estimated'
     };
   }
@@ -11700,28 +11689,6 @@ function renderMobilizationInlineEditor(projectId, itemKey) {
       </div>
     `;
   }
-  if (itemKey === 'install_window') {
-    const p = state.projects.find(x => x.id === projectId);
-    const win = getInstallWindow(p);
-    const start = win?.start || '';
-    const end = win?.end || '';
-    return `
-      <div class="mob-inline-editor">
-        <div style="display:flex;gap:8px;align-items:end;flex-wrap:wrap">
-          <div>
-            <label class="form-label" style="font-size:10px">Start</label>
-            <input type="date" id="mob-est-start" class="form-input" value="${start}" style="font-size:12px">
-          </div>
-          <div>
-            <label class="form-label" style="font-size:10px">End</label>
-            <input type="date" id="mob-est-end" class="form-input" value="${end}" style="font-size:12px">
-          </div>
-          <button type="button" class="btn-primary" onclick="saveMobilizationInstallWindow(${projectId})" style="font-size:11px;padding:6px 12px">Save</button>
-          <button type="button" class="btn" onclick="closeMobilizationEditor(${projectId})" style="font-size:11px;padding:6px 12px">Cancel</button>
-        </div>
-      </div>
-    `;
-  }
   if (itemKey === 'sales_lead' || itemKey === 'design_lead' || itemKey === 'pm_lead') {
     const role = itemKey.replace('_lead', '');
     const a = getProjectAssignment(projectId);
@@ -11752,9 +11719,20 @@ function openMobilizationTagsEditor(projectId) {
 }
 
 function openMobilizationInstallEditor(projectId) {
-  if (!state.mobilizationEditing) state.mobilizationEditing = {};
-  state.mobilizationEditing[projectId] = 'install_window';
-  refreshMobilizationBody(projectId);
+  const p = state.projects.find(x => x.id === projectId);
+  if (!p) return;
+  const existing = getEstimatedInstallRange(p);
+  openInstallWindowPicker({
+    projectId,
+    mode: 'estimated',
+    initialStart: existing?.start,
+    initialEnd: existing?.end,
+    onConfirm: (start, end) => {
+      setEstimatedInstallOverride(projectId, { start, end });
+      // Refresh just the mobilization dialog body
+      refreshMobilizationBody(projectId);
+    }
+  });
 }
 
 function openMobilizationLeadPicker(projectId, role) {
@@ -11814,4 +11792,280 @@ function toggleMobilizationFlag(projectId, flagKey) {
   state.mobilizationFlags[projectId][flagKey] = !state.mobilizationFlags[projectId][flagKey];
   save('vi_mobilization_flags', state.mobilizationFlags);
   refreshMobilizationBody(projectId);
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// INSTALL WINDOW PICKER — full-page calendar modal for picking a
+// start/end date range. Shows booked + estimated install windows for
+// ALL other projects so the user can spot conflicts.
+//
+// Usage: openInstallWindowPicker({
+//   projectId,                    // project being scheduled (excluded from conflict view)
+//   mode: 'booked' | 'estimated', // which date type we're setting
+//   initialStart, initialEnd,     // pre-fill if there's an existing window
+//   onConfirm: (start, end) => {} // callback when user clicks Confirm
+// })
+// ═══════════════════════════════════════════════════════════════════
+
+const _pickerState = {
+  projectId: null,
+  mode: 'booked',
+  selectStart: null,  // YYYY-MM-DD
+  selectEnd: null,    // YYYY-MM-DD
+  hoveredDate: null,
+  visibleMonth: null, // {year, month}
+  onConfirm: null
+};
+
+function openInstallWindowPicker(opts) {
+  document.getElementById('install-window-picker')?.remove();
+  _pickerState.projectId = opts.projectId;
+  _pickerState.mode = opts.mode || 'booked';
+  _pickerState.selectStart = opts.initialStart || null;
+  _pickerState.selectEnd = opts.initialEnd || null;
+  _pickerState.hoveredDate = null;
+  _pickerState.onConfirm = opts.onConfirm;
+
+  // Default visible month: month of initialStart, or current month
+  const init = opts.initialStart ? new Date(opts.initialStart + 'T00:00:00') : new Date();
+  _pickerState.visibleMonth = { year: init.getFullYear(), month: init.getMonth() };
+
+  const overlay = document.createElement('div');
+  overlay.id = 'install-window-picker';
+  overlay.className = 'iwp-overlay';
+  overlay.innerHTML = renderInstallWindowPickerShell();
+  document.body.appendChild(overlay);
+  // Prevent body scroll while picker is open
+  document.body.style.overflow = 'hidden';
+  // Wire up date click delegation
+  overlay.addEventListener('click', _iwpHandleClick);
+  // Render initial body
+  refreshInstallWindowPicker();
+}
+
+function closeInstallWindowPicker() {
+  const overlay = document.getElementById('install-window-picker');
+  if (overlay) overlay.remove();
+  document.body.style.overflow = '';
+}
+
+function _iwpHandleClick(ev) {
+  const dayCell = ev.target.closest('[data-iwp-day]');
+  if (dayCell) {
+    const date = dayCell.getAttribute('data-iwp-day');
+    _iwpSelectDate(date);
+    return;
+  }
+}
+
+function _iwpSelectDate(date) {
+  const s = _pickerState;
+  if (!s.selectStart || (s.selectStart && s.selectEnd)) {
+    // Starting a new selection
+    s.selectStart = date;
+    s.selectEnd = null;
+  } else {
+    // We have a start, no end — set the end
+    if (date < s.selectStart) {
+      // User clicked earlier than start — swap
+      s.selectEnd = s.selectStart;
+      s.selectStart = date;
+    } else {
+      s.selectEnd = date;
+    }
+  }
+  refreshInstallWindowPicker();
+}
+
+function _iwpChangeMonth(delta) {
+  const s = _pickerState;
+  let m = s.visibleMonth.month + delta;
+  let y = s.visibleMonth.year;
+  while (m > 11) { m -= 12; y += 1; }
+  while (m < 0) { m += 12; y -= 1; }
+  s.visibleMonth = { year: y, month: m };
+  refreshInstallWindowPicker();
+}
+
+function _iwpClearSelection() {
+  _pickerState.selectStart = null;
+  _pickerState.selectEnd = null;
+  refreshInstallWindowPicker();
+}
+
+function _iwpConfirm() {
+  const s = _pickerState;
+  if (!s.selectStart) return;
+  const end = s.selectEnd || s.selectStart;
+  const cb = s.onConfirm;
+  closeInstallWindowPicker();
+  if (typeof cb === 'function') cb(s.selectStart, end);
+}
+
+function renderInstallWindowPickerShell() {
+  const project = state.projects.find(p => p.id === _pickerState.projectId);
+  const projectName = project?.name || 'project';
+  const modeLabel = _pickerState.mode === 'booked' ? 'Booked Install' : 'Estimated Install';
+  const modeColor = _pickerState.mode === 'booked' ? '#3FB950' : '#58A6FF';
+  return `
+    <div class="iwp-panel">
+      <div class="iwp-header">
+        <div>
+          <div class="iwp-title">Pick ${esc(modeLabel)} Window</div>
+          <div class="iwp-sub">for ${esc(projectName)}</div>
+        </div>
+        <button class="iwp-close" onclick="closeInstallWindowPicker()" aria-label="Close">
+          <svg width="18" height="18" viewBox="0 0 18 18" fill="none"><path d="M5 5l8 8M13 5l-8 8" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>
+        </button>
+      </div>
+      <div class="iwp-body" id="iwp-body">
+        <!-- Filled by refreshInstallWindowPicker -->
+      </div>
+      <div class="iwp-footer" id="iwp-footer">
+        <!-- Filled by refreshInstallWindowPicker -->
+      </div>
+    </div>
+  `;
+}
+
+function refreshInstallWindowPicker() {
+  const body = document.getElementById('iwp-body');
+  const footer = document.getElementById('iwp-footer');
+  if (!body || !footer) return;
+  body.innerHTML = renderInstallWindowPickerCalendar();
+  footer.innerHTML = renderInstallWindowPickerFooter();
+}
+
+function renderInstallWindowPickerCalendar() {
+  const s = _pickerState;
+  const { year, month } = s.visibleMonth;
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  const todayStr = today.toISOString().slice(0, 10);
+
+  const firstOfMonth = new Date(year, month, 1);
+  const monthName = firstOfMonth.toLocaleDateString('en-US', { month: 'long', year: 'numeric' });
+  const daysInMonth = new Date(year, month + 1, 0).getDate();
+  const startDow = (firstOfMonth.getDay() + 6) % 7; // Mon=0 ... Sun=6
+
+  // Collect events from all projects (booked + estimated) — filtered to current month
+  const monthStart = new Date(year, month, 1).toISOString().slice(0, 10);
+  const monthEnd = new Date(year, month, daysInMonth).toISOString().slice(0, 10);
+  const eventsByDate = {}; // dateStr → array of {project, type}
+
+  state.projects.forEach(p => {
+    if (p.archived) return;
+    if (p.id === s.projectId) return; // exclude self
+    // Booked
+    const booked = getBookedTimeline(p.id);
+    if (booked && booked.start) {
+      const start = booked.start;
+      const end = booked.end || booked.start;
+      _addEventsForRange(eventsByDate, start, end, p, 'booked', monthStart, monthEnd);
+    }
+    // Estimated
+    const est = getEstimatedInstallRange(p);
+    if (est && (!booked || !booked.start)) {
+      _addEventsForRange(eventsByDate, est.start, est.end, p, 'estimated', monthStart, monthEnd);
+    }
+  });
+
+  // Build day cells
+  const cells = [];
+  for (let i = 0; i < startDow; i++) {
+    cells.push('<div class="iwp-day iwp-day-blank"></div>');
+  }
+  for (let day = 1; day <= daysInMonth; day++) {
+    const d = new Date(year, month, day);
+    const dateStr = d.toISOString().slice(0, 10);
+    const isToday = dateStr === todayStr;
+    const isPast = dateStr < todayStr;
+    const events = eventsByDate[dateStr] || [];
+
+    // Determine selection state
+    let inRange = false, isStart = false, isEnd = false;
+    if (s.selectStart && s.selectEnd) {
+      isStart = dateStr === s.selectStart;
+      isEnd = dateStr === s.selectEnd;
+      inRange = dateStr >= s.selectStart && dateStr <= s.selectEnd;
+    } else if (s.selectStart && !s.selectEnd) {
+      isStart = dateStr === s.selectStart;
+    }
+
+    const classes = ['iwp-day'];
+    if (isToday) classes.push('iwp-day-today');
+    if (isPast) classes.push('iwp-day-past');
+    if (isStart) classes.push('iwp-day-range-start');
+    if (isEnd) classes.push('iwp-day-range-end');
+    if (inRange && !isStart && !isEnd) classes.push('iwp-day-range-mid');
+    if (events.length > 0) classes.push('iwp-day-has-events');
+
+    cells.push(`
+      <div class="${classes.join(' ')}" data-iwp-day="${dateStr}">
+        <div class="iwp-day-num">${day}</div>
+        <div class="iwp-day-events">
+          ${events.slice(0, 3).map(e => `
+            <div class="iwp-event iwp-event-${e.type}" title="${esc(e.project.name)}">
+              <span class="iwp-event-dot" style="background:${e.type === 'booked' ? '#3FB950' : '#58A6FF'}"></span>
+              <span class="iwp-event-label">${esc(e.project.name)}</span>
+            </div>
+          `).join('')}
+          ${events.length > 3 ? `<div class="iwp-event-more">+${events.length - 3}</div>` : ''}
+        </div>
+      </div>
+    `);
+  }
+
+  return `
+    <div class="iwp-month-nav">
+      <button type="button" class="iwp-month-btn" onclick="_iwpChangeMonth(-1)" aria-label="Previous month">
+        <svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M9 2L4 7l5 5" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
+      </button>
+      <div class="iwp-month-name">${esc(monthName)}</div>
+      <button type="button" class="iwp-month-btn" onclick="_iwpChangeMonth(1)" aria-label="Next month">
+        <svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M5 2l5 5-5 5" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
+      </button>
+    </div>
+    <div class="iwp-dow">
+      ${['Mon','Tue','Wed','Thu','Fri','Sat','Sun'].map(d => `<div class="iwp-dow-cell">${d}</div>`).join('')}
+    </div>
+    <div class="iwp-grid">${cells.join('')}</div>
+    <div class="iwp-legend">
+      <span class="iwp-legend-item"><span class="iwp-event-dot" style="background:#3FB950"></span>Booked</span>
+      <span class="iwp-legend-item"><span class="iwp-event-dot" style="background:#58A6FF"></span>Estimated</span>
+    </div>
+  `;
+}
+
+function _addEventsForRange(map, start, end, project, type, clipStart, clipEnd) {
+  // Iterate from start to end (inclusive), adding to each date in the visible month
+  const a = new Date(start + 'T00:00:00');
+  const b = new Date(end + 'T00:00:00');
+  for (let d = new Date(a); d <= b; d.setDate(d.getDate() + 1)) {
+    const ds = d.toISOString().slice(0, 10);
+    if (ds < clipStart || ds > clipEnd) continue;
+    if (!map[ds]) map[ds] = [];
+    map[ds].push({ project, type });
+  }
+}
+
+function renderInstallWindowPickerFooter() {
+  const s = _pickerState;
+  let summary = '';
+  if (s.selectStart && s.selectEnd) {
+    const days = Math.round((new Date(s.selectEnd) - new Date(s.selectStart)) / 86400000) + 1;
+    summary = `<div class="iwp-summary"><strong>${fmtDate(s.selectStart)}</strong> &mdash; <strong>${fmtDate(s.selectEnd)}</strong> &middot; ${days} day${days === 1 ? '' : 's'}</div>`;
+  } else if (s.selectStart) {
+    summary = `<div class="iwp-summary"><strong>${fmtDate(s.selectStart)}</strong> &middot; <span style="color:#8B949E">tap end date</span></div>`;
+  } else {
+    summary = `<div class="iwp-summary" style="color:#8B949E">Tap a date to start</div>`;
+  }
+  return `
+    ${summary}
+    <div class="iwp-actions">
+      <button type="button" class="btn" onclick="_iwpClearSelection()" ${!s.selectStart ? 'disabled' : ''} style="${!s.selectStart ? 'opacity:0.4;cursor:not-allowed' : ''}">Clear</button>
+      <button type="button" class="btn" onclick="closeInstallWindowPicker()">Cancel</button>
+      <button type="button" class="btn-primary" onclick="_iwpConfirm()" ${!s.selectStart ? 'disabled' : ''} style="${!s.selectStart ? 'opacity:0.4;cursor:not-allowed' : 'background:#238636;border-color:#2EA043'}">Confirm</button>
+    </div>
+  `;
 }
