@@ -7218,168 +7218,323 @@ function finalizeProjectCompletion(projectId) {
 
 // ── Install Department Management dashboard ──
 // For Clint and other install leads: all install projects with closeout queue as priority
+// ═══════════════════════════════════════════════════════════════════
+// PLANNING DASHBOARD (Install Department Management)
+// Forward-planning oriented view for the Install Manager / PM.
+// Shows post-mobilization projects grouped by status:
+//   Planning → Ready for Install → Prep → In Install → Closeout
+// ═══════════════════════════════════════════════════════════════════
+
+// Compute the "planning status" of a project. Returns one of:
+//   'mobilizing' | 'planning' | 'ready' | 'prep' | 'in_install' | 'closeout' | 'complete'
+function getPlanningStatus(p) {
+  if (p.stage === 'complete') return 'complete';
+  if (isProjectInCloseout(p)) return 'closeout';
+
+  // Pre-contract → not on Planning at all
+  if (['lead', 'proposal', 'sent'].includes(p.stage)) return null;
+
+  // Contract stage with mobilization incomplete
+  if (p.stage === 'contract' && !isMobilizationComplete(p.id)) return 'mobilizing';
+
+  // In-install — today within booked window
+  const win = getInstallWindow(p);
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  if (win?.source === 'booked' && win.start) {
+    const start = new Date(win.start);
+    const end = win.end ? new Date(win.end) : start;
+    if (today >= start && today <= end) return 'in_install';
+  }
+
+  // Auto-prep: ready for install AND within 7 days of install start
+  // OR manual prep flag
+  const ready = isReadyForInstallStatus(p);
+  const manualPrepFlag = state.mobilizationFlags?.[p.id]?.prep_active;
+  if (ready) {
+    const start = win?.source === 'booked' ? new Date(win.start) : null;
+    const daysOut = start ? Math.round((start - today) / 86400000) : null;
+    if (manualPrepFlag) return 'prep';
+    if (daysOut !== null && daysOut >= 0 && daysOut <= 7) return 'prep';
+    return 'ready';
+  }
+
+  // Default: in planning
+  return 'planning';
+}
+
+// "Ready for Install" gate — all of:
+//   1. Design phase complete (kickoff logged + design milestones done)
+//   2. Equipment ordered (purchasing milestones complete)
+//   3. Equipment received (warehouse milestone)
+//   4. Booked install dates set
+//   5. PM assigned
+//   6. Crew assigned (at least 1 person on install)
+function isReadyForInstallStatus(p) {
+  return getReadyForInstallGates(p).every(g => g.met);
+}
+
+function getReadyForInstallGates(p) {
+  const a = getProjectAssignment(p.id);
+  const designPhase = PHASES.find(ph => ph.key === 'design');
+  const purchasingPhase = PHASES.find(ph => ph.key === 'purchasing');
+  const planningPhase = PHASES.find(ph => ph.key === 'planning');
+  const designDone = designPhase
+    ? designPhase.milestones.every(m => milestoneProgress(p, designPhase, m) >= 1)
+    : true;
+  const purchasingDone = purchasingPhase
+    ? purchasingPhase.milestones.every(m => milestoneProgress(p, purchasingPhase, m) >= 1)
+    : true;
+  // Warehouse received = the "received_at_warehouse" milestone in planning, if it exists
+  const warehouseReceived = (() => {
+    if (!planningPhase) return true;
+    const ms = planningPhase.milestones.find(m =>
+      ['warehouse_received', 'gear_received', 'received', 'check_in'].includes(m.key)
+    );
+    if (!ms) return true; // milestone doesn't exist yet — treat as not-blocking
+    return milestoneProgress(p, planningPhase, ms) >= 1;
+  })();
+  const win = getInstallWindow(p);
+  const datesBooked = win?.source === 'booked';
+  const pmAssigned = (a.pm || []).length > 0;
+  const crewAssigned = (a.install || []).length > 0;
+  return [
+    { key: 'design',    label: 'Design phase complete',        met: designDone },
+    { key: 'purchasing',label: 'All equipment ordered',         met: purchasingDone },
+    { key: 'warehouse', label: 'Equipment received at warehouse',met: warehouseReceived },
+    { key: 'dates',     label: 'Install dates booked',          met: datesBooked },
+    { key: 'pm',        label: 'PM assigned',                   met: pmAssigned },
+    { key: 'crew',      label: 'Crew assigned',                 met: crewAssigned }
+  ];
+}
+
+// Build the planning groups for the dashboard
+function getPlanningGroups(activeProjects) {
+  const groups = {
+    planning: [], ready: [], prep: [], in_install: [], closeout: []
+  };
+  activeProjects.forEach(p => {
+    const status = getPlanningStatus(p);
+    if (!status) return;          // pre-contract — skip
+    if (status === 'mobilizing') return; // in Sales, not Planning
+    if (status === 'complete') return;   // done — skip
+    if (groups[status]) groups[status].push(p);
+  });
+
+  // Sort each group by closest install start date
+  Object.keys(groups).forEach(key => {
+    groups[key].sort((a, b) => {
+      const wa = getInstallWindow(a);
+      const wb = getInstallWindow(b);
+      const da = wa?.start ? new Date(wa.start).getTime() : Infinity;
+      const db = wb?.start ? new Date(wb.start).getTime() : Infinity;
+      return da - db;
+    });
+  });
+
+  return groups;
+}
+
+// Get projects with active days this week (install or prep)
+function getThisWeekActivity(activeProjects) {
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  const dow = today.getDay(); // 0=Sun
+  const monday = new Date(today);
+  monday.setDate(today.getDate() - ((dow + 6) % 7)); // back up to Monday
+  const sunday = new Date(monday);
+  sunday.setDate(monday.getDate() + 6);
+
+  // For each project, derive which days this week it's active
+  const days = []; // [{date, dateStr, dow, items: [{p, kind: 'install'|'prep'}]}]
+  for (let i = 0; i < 7; i++) {
+    const d = new Date(monday);
+    d.setDate(monday.getDate() + i);
+    const dateStr = d.toISOString().slice(0, 10);
+    days.push({ date: d, dateStr, dow: ['Mon','Tue','Wed','Thu','Fri','Sat','Sun'][i], items: [] });
+  }
+
+  activeProjects.forEach(p => {
+    const status = getPlanningStatus(p);
+    if (!['ready','prep','in_install','closeout'].includes(status)) return;
+    const win = getInstallWindow(p);
+    if (!win || !win.start) return;
+    const start = new Date(win.start);
+    const end = win.end ? new Date(win.end) : new Date(win.start);
+    days.forEach(d => {
+      if (d.date >= start && d.date <= end) {
+        d.items.push({ p, kind: 'install' });
+      }
+    });
+    // Prep days = up to 3 days before install (heuristic — refine later if needed)
+    if (status === 'prep' || status === 'ready') {
+      const prepStart = new Date(start);
+      prepStart.setDate(prepStart.getDate() - 3);
+      const prepEnd = new Date(start);
+      prepEnd.setDate(prepEnd.getDate() - 1);
+      days.forEach(d => {
+        if (d.date >= prepStart && d.date <= prepEnd && d.date >= today) {
+          d.items.push({ p, kind: 'prep' });
+        }
+      });
+    }
+  });
+
+  return { monday, sunday, days };
+}
+
 function renderInstallMgmtDashboard(activeProjects) {
-  const closeoutProjects = getProjectsNeedingCloseout();
-  const inInstall = activeProjects.filter(p => p.stage === 'install' && !isProjectInCloseout(p));
-  // Upcoming: booked install in next 14 days
-  const upcoming = activeProjects
-    .map(p => ({ p, win: getInstallWindow(p) }))
-    .filter(x => x.win && !isProjectInCloseout(x.p))
-    .map(x => ({ ...x, days: daysUntil(x.win.start) }))
-    .filter(x => x.days !== null && x.days >= -3 && x.days <= 14)
-    .sort((a, b) => a.days - b.days);
-  // Stuck: in install phase with no activity 14+ days (approximate via recentActivity)
-  const stuck = activeProjects.filter(p => {
-    if (p.stage !== 'install') return false;
-    if (isProjectInCloseout(p)) return false;
-    const la = state.recentActivity?.[p.id];
-    if (!la) return false;
-    const days = (Date.now() - new Date(la).getTime()) / 86400000;
-    return days > 14;
-  }).slice(0, 8);
-  // Shop work queue summary
-  const openShop = (state.shopwork || []).filter(t => t.status !== 'done');
-  const unassignedShop = openShop.filter(t => !t.assignee_id);
+  const groups = getPlanningGroups(activeProjects);
+  const week = getThisWeekActivity(activeProjects);
+
+  const planningCount = groups.planning.length;
+  const readyCount = groups.ready.length;
+  const prepCount = groups.prep.length;
+  const inInstallCount = groups.in_install.length;
+  const closeoutCount = groups.closeout.length;
+  const total = planningCount + readyCount + prepCount + inInstallCount + closeoutCount;
 
   return `
-    ${renderDeptDashboardHeader('Installation Department Management', 'Install phase oversight across all active projects', '#F0883E')}
+    ${renderDeptDashboardHeader('Installation Department Management', 'Forward planning + active job oversight', '#F0883E')}
 
     <!-- Hero metrics -->
-    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:10px;margin-bottom:18px">
-      <div class="metric-card" style="${closeoutProjects.length > 0 ? 'border-color:#DA3633' : ''}">
-        <div class="metric-label">Closeout Queue</div>
-        <div class="metric-value" style="${closeoutProjects.length > 0 ? 'color:#F85149' : ''}">${closeoutProjects.length}</div>
-        <div class="metric-sub">${closeoutProjects.length > 0 ? 'past booked end date' : 'all installs current'}</div>
-      </div>
+    <div data-context-section="metrics" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:10px;margin-bottom:14px">
       <div class="metric-card">
+        <div class="metric-label">Active</div>
+        <div class="metric-value">${total}</div>
+        <div class="metric-sub">post-mobilization</div>
+      </div>
+      <div class="metric-card" style="${readyCount > 0 ? 'border-color:#3FB950' : ''}">
+        <div class="metric-label">Ready for Install</div>
+        <div class="metric-value" style="${readyCount > 0 ? 'color:#3FB950' : ''}">${readyCount}</div>
+      </div>
+      <div class="metric-card" style="${inInstallCount > 0 ? 'border-color:#F0883E' : ''}">
         <div class="metric-label">In Install</div>
-        <div class="metric-value">${inInstall.length}</div>
-        <div class="metric-sub">active installs</div>
+        <div class="metric-value" style="${inInstallCount > 0 ? 'color:#F0883E' : ''}">${inInstallCount}</div>
       </div>
-      <div class="metric-card">
-        <div class="metric-label">Upcoming 14d</div>
-        <div class="metric-value">${upcoming.filter(u => u.days >= 0).length}</div>
-        <div class="metric-sub">scheduled</div>
-      </div>
-      <div class="metric-card" style="${unassignedShop.length > 0 ? 'border-color:#9E6A03' : ''}">
-        <div class="metric-label">Shop Work</div>
-        <div class="metric-value" style="${unassignedShop.length > 0 ? 'color:#D29922' : ''}">${openShop.length}</div>
-        <div class="metric-sub">${unassignedShop.length > 0 ? unassignedShop.length + ' unassigned' : 'all assigned'}</div>
+      <div class="metric-card" style="${closeoutCount > 0 ? 'border-color:#DA3633' : ''}">
+        <div class="metric-label">Closeout</div>
+        <div class="metric-value" style="${closeoutCount > 0 ? 'color:#F85149' : ''}">${closeoutCount}</div>
       </div>
     </div>
 
-    <!-- Closeout Queue (most important if not empty) -->
-    ${closeoutProjects.length > 0 ? `
-      <div class="dashboard-card" style="margin-bottom:18px;border-left:3px solid #DA3633">
-        <div class="dashboard-card-title">
-          <span style="color:#F85149">Closeout Queue &middot; ${closeoutProjects.length}</span>
-          <span style="font-size:11px;color:#8B949E;font-weight:400">Projects past booked install end date</span>
-        </div>
-        <div style="display:flex;flex-direction:column;gap:6px">
-          ${closeoutProjects.map(p => {
-            const win = getInstallWindow(p);
-            const daysOver = win?.end ? Math.abs(daysUntil(win.end)) : 0;
-            const assignment = getProjectAssignment(p.id);
-            const pmLead = (assignment.pm || []).find(x => x.lead);
-            const pmName = pmLead ? getTeamMember(pmLead.id)?.name : 'No PM assigned';
-            const checklist = getCloseoutChecklist(p.id);
-            const doneCount = CLOSEOUT_ITEMS.filter(ci => checklist[ci.key]?.checked).length;
-            return `
-              <div style="display:flex;align-items:center;gap:12px;padding:10px 12px;background:#0D1117;border:1px solid #1C2333;border-radius:5px;border-left:2px solid #DA3633">
-                <div style="flex:1;min-width:0">
-                  <div style="font-size:13px;font-weight:500;color:#E6EDF3;cursor:pointer" onclick="openProject(${p.id})">${esc(p.name)}</div>
-                  <div style="font-size:11px;color:#8B949E;margin-top:2px">
-                    ${esc(p.client_name || '')} &middot; ${daysOver} day${daysOver === 1 ? '' : 's'} past end date &middot; PM: ${esc(pmName)}
-                  </div>
-                  ${doneCount > 0 ? `<div style="font-size:10px;color:#3FB950;margin-top:2px">${doneCount}/4 closeout items confirmed</div>` : ''}
-                </div>
-                <button class="btn-primary" onclick="openCloseoutDialog(${p.id})" style="padding:6px 12px;font-size:12px;background:#238636">
-                  Close Out &rarr;
-                </button>
-              </div>
-            `;
-          }).join('')}
-        </div>
+    <!-- This Week card (compact, no crew detail — tap to drill in) -->
+    <div data-context-section="this-week" class="dashboard-card" style="margin-bottom:14px">
+      <div class="dashboard-card-title" style="display:flex;align-items:center;justify-content:space-between">
+        <span>This Week</span>
+        <span style="font-size:11px;color:#8B949E;font-weight:400">${week.monday.toLocaleDateString('en-US',{month:'short',day:'numeric'})} – ${week.sunday.toLocaleDateString('en-US',{month:'short',day:'numeric'})}</span>
       </div>
-    ` : ''}
-
-    <!-- Two-column layout: In Install + Upcoming -->
-    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(340px,1fr));gap:14px;margin-bottom:18px">
-      <div class="dashboard-card">
-        <div class="dashboard-card-title">In Install &middot; ${inInstall.length}</div>
-        ${inInstall.length === 0 ? '<div style="font-size:12px;color:#6E7681;font-style:italic;padding:10px 0">No active installs</div>' : inInstall.slice(0, 8).map(p => {
-          const installPhase = PHASES.find(ph => ph.key === 'install');
-          const pct = Math.round(phaseProgress(p, installPhase) * 100);
-          const win = getInstallWindow(p);
-          return `
-            <div onclick="openProject(${p.id})" style="display:flex;align-items:center;gap:10px;padding:8px 10px;background:#0D1117;border:1px solid #1C2333;border-radius:5px;margin-bottom:5px;cursor:pointer;-webkit-tap-highlight-color:transparent">
-              <div style="flex:1;min-width:0">
-                <div style="font-size:12px;color:#E6EDF3;font-weight:500;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${esc(p.name)}</div>
-                <div style="font-size:10px;color:#6E7681;margin-top:1px">${esc(p.client_name || '')}${win?.end ? ' · ends ' + fmtDate(win.end) : ''}</div>
-              </div>
-              <div style="font-size:10px;color:${pct === 100 ? '#3FB950' : '#D29922'};font-weight:600;flex-shrink:0">${pct}%</div>
-            </div>
-          `;
-        }).join('')}
-      </div>
-
-      <div class="dashboard-card">
-        <div class="dashboard-card-title">Upcoming &middot; ${upcoming.length}</div>
-        ${upcoming.length === 0 ? '<div style="font-size:12px;color:#6E7681;font-style:italic;padding:10px 0">Nothing scheduled in the next 14 days</div>' : upcoming.slice(0, 8).map(({ p, win, days }) => {
-          const cdClass = countdownClass(win.start);
-          return `
-            <div onclick="openProject(${p.id})" style="display:flex;align-items:center;gap:10px;padding:8px 10px;background:#0D1117;border:1px solid #1C2333;border-radius:5px;margin-bottom:5px;cursor:pointer;-webkit-tap-highlight-color:transparent">
-              <div style="flex:1;min-width:0">
-                <div style="font-size:12px;color:#E6EDF3;font-weight:500;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${esc(p.name)}</div>
-                <div style="font-size:10px;color:#6E7681;margin-top:1px">${esc(p.client_name || '')}</div>
-              </div>
-              <span class="countdown-pill ${cdClass}" style="flex-shrink:0">${fmtCountdown(win.start)}</span>
-            </div>
-          `;
-        }).join('')}
-      </div>
+      ${renderPlanningWeekStrip(week)}
     </div>
 
-    <!-- Shop work and stuck installs -->
-    ${(openShop.length > 0 || stuck.length > 0) ? `
-      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(340px,1fr));gap:14px">
-        ${openShop.length > 0 ? `
-          <div class="dashboard-card">
-            <div class="dashboard-card-title" style="display:flex;align-items:center;justify-content:space-between">
-              <span>Shop Work Queue &middot; ${openShop.length}</span>
-              <button class="btn btn-sm" onclick="navigate('shopwork')" style="font-size:10px;padding:3px 8px">View all</button>
-            </div>
-            ${openShop.slice(0, 5).map(t => {
-              const assignee = t.assignee_id ? getTeamMember(t.assignee_id) : null;
-              const proj = t.project_id ? state.projects.find(p => p.id === t.project_id) : null;
-              const priorityColors = { high: '#F85149', med: '#D29922', low: '#6E7681' };
-              const pColor = priorityColors[t.priority] || '#6E7681';
-              return `
-                <div style="display:flex;align-items:center;gap:8px;padding:7px 10px;background:#0D1117;border:1px solid #1C2333;border-radius:4px;margin-bottom:4px">
-                  <div style="width:6px;height:6px;border-radius:50%;background:${pColor};flex-shrink:0"></div>
-                  <div style="flex:1;min-width:0">
-                    <div style="font-size:12px;color:#E6EDF3">${esc(t.text)}</div>
-                    <div style="font-size:10px;color:#6E7681;margin-top:1px">${assignee ? esc(assignee.name) : '<span style="color:#D29922">Unassigned</span>'}${proj ? ' &middot; ' + esc(proj.name) : ''}</div>
-                  </div>
-                </div>
-              `;
-            }).join('')}
-          </div>
-        ` : ''}
+    <!-- Planning groups -->
+    ${renderPlanningGroup('Planning', 'planning', groups.planning, '#58A6FF', 'Mobilized — gathering everything to be Ready for Install')}
+    ${renderPlanningGroup('Ready for Install', 'ready', groups.ready, '#3FB950', 'All gates met — waiting for prep to begin')}
+    ${renderPlanningGroup('Prep', 'prep', groups.prep, '#D29922', 'Within 7 days of install start')}
+    ${renderPlanningGroup('In Install', 'in_install', groups.in_install, '#F0883E', 'Install window currently active')}
+    ${renderPlanningGroup('Closeout', 'closeout', groups.closeout, '#DA3633', 'Install complete — closeout checklist incomplete')}
+  `;
+}
 
-        ${stuck.length > 0 ? `
-          <div class="dashboard-card" style="border-left:2px solid #D29922">
-            <div class="dashboard-card-title"><span style="color:#D29922">Stuck Installs &middot; ${stuck.length}</span></div>
-            ${stuck.map(p => `
-              <div onclick="openProject(${p.id})" style="display:flex;align-items:center;gap:10px;padding:7px 10px;background:#0D1117;border:1px solid #1C2333;border-radius:4px;margin-bottom:4px;cursor:pointer;-webkit-tap-highlight-color:transparent">
-                <div style="font-size:12px;color:#E6EDF3;flex:1;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${esc(p.name)}</div>
-                <div style="font-size:10px;color:#6E7681">no activity 14d+</div>
-              </div>
-            `).join('')}
+function renderPlanningWeekStrip(week) {
+  if (week.days.every(d => d.items.length === 0)) {
+    return `<div style="font-size:12px;color:#6E7681;font-style:italic;padding:10px 0">Nothing scheduled this week</div>`;
+  }
+  return `
+    <div class="planning-week-strip">
+      ${week.days.map(d => {
+        const today = new Date();
+        today.setHours(0, 0, 0, 0);
+        const isToday = d.date.getTime() === today.getTime();
+        const isPast = d.date < today;
+        return `
+          <div class="planning-week-day${isToday ? ' is-today' : ''}${isPast ? ' is-past' : ''}">
+            <div class="planning-week-dow">${d.dow}</div>
+            <div class="planning-week-date">${d.date.getDate()}</div>
+            <div class="planning-week-items">
+              ${d.items.length === 0 ? '<div class="planning-week-empty">—</div>' :
+                d.items.map(item => `
+                  <div class="planning-week-item planning-week-${item.kind}" onclick="openProject(${item.p.id},'install')" title="${esc(item.p.name)} (${item.kind})">
+                    <span class="planning-week-item-kind">${item.kind === 'install' ? 'I' : 'P'}</span>
+                    <span class="planning-week-item-name">${esc(item.p.name)}</span>
+                  </div>
+                `).join('')
+              }
+            </div>
           </div>
-        ` : ''}
+        `;
+      }).join('')}
+    </div>
+  `;
+}
+
+function renderPlanningGroup(label, contextKey, projects, color, hint) {
+  if (projects.length === 0) return '';
+  return `
+    <div data-context-section="${contextKey}" class="dashboard-card" style="margin-bottom:12px;border-left:3px solid ${color}">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px">
+        <div style="display:flex;align-items:baseline;gap:8px">
+          <span style="font-size:13px;font-weight:600;color:${color};text-transform:uppercase;letter-spacing:0.06em">${esc(label)}</span>
+          <span style="font-size:11px;color:#6E7681">${projects.length}</span>
+        </div>
       </div>
-    ` : ''}
+      <div style="font-size:11px;color:#6E7681;margin-bottom:10px">${esc(hint)}</div>
+      <div style="display:flex;flex-direction:column;gap:6px">
+        ${projects.map(p => renderPlanningRow(p, contextKey)).join('')}
+      </div>
+    </div>
+  `;
+}
+
+function renderPlanningRow(p, statusKey) {
+  const a = getProjectAssignment(p.id);
+  const win = getInstallWindow(p);
+  const installPhase = PHASES.find(ph => ph.key === 'install');
+  const installMilestones = installPhase?.milestones || [];
+  const installDone = installMilestones.filter(m => milestoneProgress(p, installPhase, m) >= 1).length;
+  const installTotal = installMilestones.length;
+
+  // Date string
+  const dateStr = win?.start
+    ? `${fmtDate(win.start)}${win.end && win.end !== win.start ? ' — ' + fmtDate(win.end) : ''}`
+    : 'No dates';
+  const dateColor = win?.source === 'booked' ? '#3FB950' : (win?.source === 'estimated' ? '#58A6FF' : '#6E7681');
+  const dateLabel = win?.source === 'booked' ? 'Booked' : (win?.source === 'estimated' ? 'Est.' : null);
+
+  // Crew + PM short labels
+  const pm = (a.pm || []).find(x => x.lead) || (a.pm || [])[0];
+  const pmName = pm ? getTeamMember(pm.id)?.name?.split(' ')[0] : null;
+  const crewCount = (a.install || []).length;
+
+  // Why-not-ready details for Planning rows
+  let gateInfo = '';
+  if (statusKey === 'planning') {
+    const gates = getReadyForInstallGates(p);
+    const missing = gates.filter(g => !g.met);
+    if (missing.length > 0) {
+      gateInfo = `
+        <div class="planning-row-gates">
+          <span class="planning-row-gates-label">Waiting on:</span>
+          ${missing.map(g => `<span class="planning-row-gate-chip">${esc(g.label)}</span>`).join('')}
+        </div>
+      `;
+    }
+  }
+
+  return `
+    <div class="planning-row" onclick="openProject(${p.id},'install')">
+      <div class="planning-row-main">
+        <div class="planning-row-name">${esc(p.name)}${p.client_name ? `<span class="planning-row-client"> · ${esc(p.client_name)}</span>` : ''}</div>
+        <div class="planning-row-meta">
+          ${dateLabel ? `<span style="color:${dateColor}">${esc(dateLabel)}: ${esc(dateStr)}</span>` : `<span style="color:#6E7681">${esc(dateStr)}</span>`}
+          ${pmName ? `<span>PM: ${esc(pmName)}</span>` : '<span style="color:#D29922">No PM</span>'}
+          ${crewCount > 0 ? `<span>${crewCount} crew</span>` : '<span style="color:#D29922">No crew</span>'}
+          ${installTotal > 0 ? `<span>Tasks: ${installDone}/${installTotal}</span>` : ''}
+        </div>
+        ${gateInfo}
+      </div>
+      <svg width="14" height="14" viewBox="0 0 14 14" fill="none" style="flex-shrink:0;color:#6E7681"><path d="M5 2l5 5-5 5" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>
+    </div>
   `;
 }
 
@@ -8971,11 +9126,12 @@ function getDashboardContextChips() {
   if (mode === 'install_mgmt') {
     return [
       { key: 'metrics',     label: 'Top',         action: 'scrollSection', arg: 'metrics' },
-      { key: 'closeout',    label: 'Closeout',    action: 'scrollSection', arg: 'closeout' },
-      { key: 'in-install',  label: 'In Install',  action: 'scrollSection', arg: 'in-install' },
-      { key: 'upcoming',    label: 'Upcoming',    action: 'scrollSection', arg: 'upcoming' },
-      { key: 'shop',        label: 'Shop Work',   action: 'scrollSection', arg: 'shop' },
-      { key: 'stuck',       label: 'Stuck',       action: 'scrollSection', arg: 'stuck' }
+      { key: 'this-week',   label: 'This Week',   action: 'scrollSection', arg: 'this-week' },
+      { key: 'planning',    label: 'Planning',    action: 'scrollSection', arg: 'planning' },
+      { key: 'ready',       label: 'Ready',       action: 'scrollSection', arg: 'ready' },
+      { key: 'prep',        label: 'Prep',        action: 'scrollSection', arg: 'prep' },
+      { key: 'in_install',  label: 'In Install',  action: 'scrollSection', arg: 'in_install' },
+      { key: 'closeout',    label: 'Closeout',    action: 'scrollSection', arg: 'closeout' }
     ];
   }
   if (mode === 'executive') {
