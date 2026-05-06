@@ -3318,3 +3318,251 @@ td.today .cal-day-num {
   background: #1565C0 !important;
   border-color: #1F6FEB !important;
 }
+
+/* ── Calendar — view filter + member chips + personal events ── */
+.cal-view-toggle {
+  display: inline-flex;
+  background: #0D1117;
+  border: 1px solid #1C2333;
+  border-radius: 6px;
+  padding: 2px;
+}
+.cal-view-btn {
+  background: transparent;
+  border: none;
+  color: #8B949E;
+  font-size: 11px;
+  font-weight: 500;
+  padding: 5px 12px;
+  cursor: pointer;
+  border-radius: 4px;
+  -webkit-tap-highlight-color: transparent;
+  font-family: inherit;
+}
+.cal-view-btn:hover { color: #C9D1D9; }
+.cal-view-btn.active {
+  background: #1565C0;
+  color: #fff;
+  font-weight: 600;
+}
+.cal-member-filter {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 10px 12px;
+  background: #0D1117;
+  border: 1px solid #1C2333;
+  border-radius: 6px;
+  margin-bottom: 10px;
+}
+.cal-member-filter-label {
+  font-size: 11px;
+  font-weight: 600;
+  color: #8B949E;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  margin-right: 4px;
+}
+.cal-member-chip {
+  font-size: 11px;
+  font-weight: 500;
+  padding: 4px 10px;
+  background: #161B22;
+  border: 1px solid #30363D;
+  color: #C9D1D9;
+  border-radius: 4px;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+  font-family: inherit;
+}
+.cal-member-chip:hover { border-color: #58A6FF; }
+.cal-member-chip.active {
+  background: #1565C0;
+  border-color: #1976D2;
+  color: #fff;
+  font-weight: 600;
+}
+.cal-event-personal {
+  font-size: 10px;
+  padding: 2px 6px;
+  margin-top: 2px;
+  border: 1px solid;
+  border-radius: 3px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+.cal-event-overflow {
+  font-size: 9px;
+  color: #6E7681;
+  font-style: italic;
+  padding: 2px 4px;
+}
+
+/* Day detail dialog */
+.day-detail-section {
+  margin-bottom: 16px;
+}
+.day-detail-section-title {
+  font-size: 11px;
+  font-weight: 700;
+  color: #8B949E;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  margin-bottom: 8px;
+}
+.day-detail-item {
+  background: #0D1117;
+  border: 1px solid #1C2333;
+  border-left-width: 3px;
+  border-radius: 6px;
+  padding: 10px 12px;
+  margin-bottom: 6px;
+}
+.day-detail-item-title {
+  font-size: 13px;
+  font-weight: 500;
+  color: #E6EDF3;
+}
+.day-detail-item-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  font-size: 11px;
+  color: #8B949E;
+  margin-top: 4px;
+}
+.day-detail-item-notes {
+  font-size: 11px;
+  color: #C9D1D9;
+  margin-top: 6px;
+  padding: 6px 8px;
+  background: #161B22;
+  border-radius: 4px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+}
+.day-detail-item-attendees {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-top: 6px;
+}
+.day-detail-attendee {
+  font-size: 10px;
+  padding: 2px 6px;
+  background: #161B22;
+  border: 1px solid #30363D;
+  border-radius: 3px;
+  color: #C9D1D9;
+}
+
+/* Personal event dialog — type picker grid */
+.pe-type-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 6px;
+}
+.pe-type-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 10px 8px;
+  background: #0D1117;
+  border: 1px solid #30363D;
+  color: #C9D1D9;
+  font-size: 12px;
+  font-weight: 500;
+  border-radius: 6px;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+  font-family: inherit;
+}
+.pe-type-btn:hover { border-color: #58A6FF; }
+.pe-type-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+/* My Work — My Calendar card */
+.my-cal-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.my-cal-day {
+  background: #0D1117;
+  border: 1px solid #1C2333;
+  border-radius: 6px;
+  padding: 8px 10px;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+  transition: border-color 0.12s;
+}
+.my-cal-day:hover { border-color: #30363D; }
+.my-cal-day.is-today {
+  border-color: #1565C0;
+  background: #0D1626;
+}
+.my-cal-day-header {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  margin-bottom: 4px;
+}
+.my-cal-day-label {
+  font-size: 12px;
+  font-weight: 600;
+  color: #C9D1D9;
+}
+.my-cal-day.is-today .my-cal-day-label { color: #58A6FF; }
+.my-cal-day-count {
+  font-size: 10px;
+  color: #6E7681;
+}
+.my-cal-day-items {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+.my-cal-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  padding: 3px 6px;
+  border-left: 2px solid;
+  background: #161B22;
+  border-radius: 3px;
+}
+.my-cal-item-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+.my-cal-item-title {
+  flex: 1;
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  color: #C9D1D9;
+}
+.my-cal-item-time {
+  font-size: 10px;
+  color: #6E7681;
+  flex-shrink: 0;
+}
+.my-cal-item-more {
+  font-size: 10px;
+  color: #6E7681;
+  font-style: italic;
+  padding: 2px 6px;
+}
