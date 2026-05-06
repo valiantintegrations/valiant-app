@@ -365,6 +365,7 @@ const state = {
   estimatedInstallOverride: JSON.parse(localStorage.getItem('vi_estimated_install') || '{}'),
   meetingLogs: JSON.parse(localStorage.getItem('vi_meeting_logs') || '{}'),
   meetings: JSON.parse(localStorage.getItem('vi_meetings') || '[]'),
+  meetingApprovals: JSON.parse(localStorage.getItem('vi_meeting_approvals') || '{}'),
   personalEvents: JSON.parse(localStorage.getItem('vi_personal_events') || '[]'),
   calendarSelectedMembers: JSON.parse(localStorage.getItem('vi_calendar_selected_members') || '[]'),
   calendarShowBooked: JSON.parse(localStorage.getItem('vi_calendar_show_booked') || 'false'),
@@ -3234,6 +3235,7 @@ function renderMyWorkDashboard(memberId, activeProjects, myAssignments, activeMe
     ${closeoutBanner}
     ${summaryRow}
     ${myActionsHTML}
+    ${renderPendingApprovalsCard()}
     ${renderMyCalendarCard(memberId)}
     ${sections}
   `;
@@ -11802,6 +11804,12 @@ function getMobilizationState(projectId) {
   const briefingSkipped = state.mobilizationFlags?.[projectId]?.site_briefing_skipped;
   const designKickoffLog = state.meetingLogs?.[projectId]?.design_kickoff;
   const designKickoffScheduled = state.mobilizationFlags?.[projectId]?.design_kickoff_scheduled;
+  // Also check the new meetings model — any design_kickoff meeting on this project that's
+  // confirmed or pending counts as "scheduled" for mobilization purposes
+  const designKickoffMeeting = (state.meetings || []).some(m =>
+    m.projectId === projectId && m.type === 'design_kickoff' &&
+    (m.status === 'confirmed' || m.status === 'pending_approval')
+  );
 
   return {
     sales_lead:     !!salesLead,
@@ -11810,7 +11818,7 @@ function getMobilizationState(projectId) {
     install_window: !!win,
     scope_tags:     tags.length > 0,
     site_briefing:  pinsCount > 0 || !!briefingSkipped,
-    design_kickoff: !!designKickoffLog || !!designKickoffScheduled
+    design_kickoff: !!designKickoffLog || !!designKickoffScheduled || !!designKickoffMeeting
   };
 }
 
@@ -11897,8 +11905,24 @@ function renderMobilizationBody(projectId) {
       const pinsCount = (state.projectPins?.[projectId] || []).length;
       detail = pinsCount > 0 ? `${pinsCount} pin${pinsCount === 1 ? '' : 's'}` : (flags.site_briefing_skipped ? '<span style="color:#8B949E">Skipped</span>' : '<span style="color:#D29922">No pins yet</span>');
     } else if (it.key === 'design_kickoff') {
-      detail = (state.meetingLogs?.[projectId]?.design_kickoff) ? '<span style="color:#3FB950">Logged</span>' :
-               (flags.design_kickoff_scheduled ? '<span style="color:#3FB950">Scheduled</span>' : '<span style="color:#D29922">Not scheduled</span>');
+      // Prefer the new meetings model when available
+      const dkMeeting = (state.meetings || [])
+        .filter(m => m.projectId === projectId && m.type === 'design_kickoff' &&
+                     (m.status === 'confirmed' || m.status === 'pending_approval'))
+        .sort((a, b) => (b.createdAt || '').localeCompare(a.createdAt || ''))[0];
+      if (dkMeeting) {
+        const dStr = new Date(dkMeeting.date + 'T00:00:00').toLocaleDateString('en-US', { weekday:'short', month:'short', day:'numeric' });
+        const timeStr = dkMeeting.startTime ? `${dkMeeting.startTime}–${dkMeeting.endTime}` : 'all day';
+        const statusColor = dkMeeting.status === 'pending_approval' ? '#D29922' : '#3FB950';
+        const statusLabel = dkMeeting.status === 'pending_approval' ? ' · pending approval' : '';
+        detail = `<span style="color:${statusColor}">${esc(dStr)} · ${esc(timeStr)}${statusLabel}</span>`;
+      } else if (state.meetingLogs?.[projectId]?.design_kickoff) {
+        detail = '<span style="color:#3FB950">Logged</span>';
+      } else if (flags.design_kickoff_scheduled) {
+        detail = '<span style="color:#3FB950">Scheduled</span>';
+      } else {
+        detail = '<span style="color:#D29922">Not scheduled</span>';
+      }
     }
 
     return `
@@ -11979,9 +12003,40 @@ function renderMobilizationItemAction(projectId, itemKey, done) {
   }
   if (itemKey === 'design_kickoff') {
     const flags = state.mobilizationFlags?.[projectId] || {};
-    return `<button type="button" class="btn btn-sm" onclick="toggleMobilizationFlag(${projectId},'design_kickoff_scheduled')" style="font-size:11px;padding:4px 10px">${flags.design_kickoff_scheduled ? 'Unschedule' : 'Mark Scheduled'}</button>`;
+    const meetingLogged = !!(state.meetingLogs?.[projectId]?.design_kickoff);
+    // If a meeting already exists, allow Schedule Another / Mark Manually toggle
+    return `
+      <button type="button" class="btn-primary" onclick="openMobilizationDesignKickoffPicker(${projectId})" style="font-size:11px;padding:4px 10px">${meetingLogged || flags.design_kickoff_scheduled ? 'Reschedule' : 'Schedule Meeting'}</button>
+      <button type="button" class="btn btn-sm" onclick="toggleMobilizationFlag(${projectId},'design_kickoff_scheduled')" style="font-size:11px;padding:4px 10px" title="Manually mark as scheduled (e.g. set up outside the app)">${flags.design_kickoff_scheduled ? 'Unmark' : 'Mark Manually'}</button>
+    `;
   }
   return '';
+}
+
+// Opens the meeting picker pre-configured for the project's design kickoff.
+// Defaults: title = "Design Kickoff · {project}", attendees = [Design Lead, PM Lead], 60 min.
+function openMobilizationDesignKickoffPicker(projectId) {
+  const p = state.projects.find(x => x.id === projectId);
+  if (!p) return;
+  const a = getProjectAssignment(projectId);
+  const designLead = (a.design || []).find(x => x.lead);
+  const pmLead = (a.pm || []).find(x => x.lead);
+  const defaultAttendees = [];
+  if (designLead) defaultAttendees.push(designLead.id);
+  if (pmLead) defaultAttendees.push(pmLead.id);
+
+  openMeetingPicker({
+    projectId,
+    defaultTitle: `Design Kickoff · ${p.name}`,
+    defaultType: 'design_kickoff',
+    defaultAttendees,
+    defaultDuration: 60,
+    onConfirm: (meeting) => {
+      // Refresh the mobilization dialog body so the design_kickoff item updates
+      // (getMobilizationState now sees the meeting via state.meetings → derives true)
+      refreshMobilizationBody(projectId);
+    }
+  });
 }
 
 function renderMobilizationInlineEditor(projectId, itemKey) {
@@ -13213,4 +13268,602 @@ function _savePersonalEventDialog() {
   if (document.getElementById('cal-day-detail-dialog')) {
     refreshCalendarDayDetail(f.date);
   }
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// MEETING PICKER (v1.43 — Round 2)
+// Generic meeting-scheduling modal. Two-step UX: month view → tap day
+// for hour grid. Shows attendee busy blocks live. Supports conflict
+// override with pending_approval status.
+//
+// Usage: openMeetingPicker({
+//   defaultTitle: 'Design Kickoff',
+//   defaultType: 'design_kickoff',
+//   defaultAttendees: [memberId1, memberId2],
+//   defaultDuration: 60,            // minutes
+//   projectId: 123,                 // optional
+//   onConfirm: (meeting) => {...}   // fires after save
+// })
+// ═══════════════════════════════════════════════════════════════════
+
+const _meetingPickerState = {
+  // Configuration (set on open)
+  projectId: null,
+  type: 'misc',
+  title: '',
+  attendees: [],          // array of memberIds
+  duration: 30,           // minutes
+  notes: '',
+  onConfirm: null,
+  // View state
+  step: 'month',          // 'month' | 'day'
+  visibleMonth: null,     // {year, month}
+  selectedDate: null,     // 'YYYY-MM-DD' once user has picked
+  selectedStart: null,    // 'HH:MM' once user has picked start time
+  selectedEnd: null,      // 'HH:MM' once user has picked end time
+  expandedSlot: null,     // 'HH:MM' — slot being inspected (shows who's busy)
+  pendingOverride: false  // true if user has chosen to request override despite conflict
+};
+
+function openMeetingPicker(opts = {}) {
+  document.getElementById('meeting-picker')?.remove();
+  const s = _meetingPickerState;
+  const today = new Date();
+  s.projectId = opts.projectId || null;
+  s.type = opts.defaultType || 'misc';
+  s.title = opts.defaultTitle || _meetingTypeLabel(s.type);
+  s.attendees = Array.isArray(opts.defaultAttendees) ? opts.defaultAttendees.filter(x => x != null) : [];
+  s.duration = opts.defaultDuration || 30;
+  s.notes = '';
+  s.onConfirm = opts.onConfirm;
+  s.step = 'month';
+  s.visibleMonth = { year: today.getFullYear(), month: today.getMonth() };
+  s.selectedDate = null;
+  s.selectedStart = null;
+  s.selectedEnd = null;
+  s.expandedSlot = null;
+  s.pendingOverride = false;
+
+  const overlay = document.createElement('div');
+  overlay.id = 'meeting-picker';
+  overlay.className = 'mp-overlay';
+  overlay.innerHTML = renderMeetingPickerShell();
+  document.body.appendChild(overlay);
+  document.body.style.overflow = 'hidden';
+  refreshMeetingPicker();
+}
+
+function closeMeetingPicker() {
+  const overlay = document.getElementById('meeting-picker');
+  if (overlay) overlay.remove();
+  document.body.style.overflow = '';
+}
+
+function renderMeetingPickerShell() {
+  return `
+    <div class="mp-panel">
+      <div class="mp-header">
+        <div style="flex:1;min-width:0">
+          <div class="mp-title">Schedule Meeting</div>
+          <div class="mp-sub" id="mp-sub"></div>
+        </div>
+        <button class="mp-close" onclick="closeMeetingPicker()" aria-label="Close">
+          <svg width="18" height="18" viewBox="0 0 18 18" fill="none"><path d="M5 5l8 8M13 5l-8 8" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>
+        </button>
+      </div>
+      <div class="mp-meta-bar" id="mp-meta-bar"></div>
+      <div class="mp-body" id="mp-body"></div>
+      <div class="mp-footer" id="mp-footer"></div>
+    </div>
+  `;
+}
+
+function refreshMeetingPicker() {
+  const sub = document.getElementById('mp-sub');
+  const meta = document.getElementById('mp-meta-bar');
+  const body = document.getElementById('mp-body');
+  const footer = document.getElementById('mp-footer');
+  if (!body || !footer) return;
+
+  const s = _meetingPickerState;
+  const proj = s.projectId ? state.projects.find(p => p.id === s.projectId) : null;
+  if (sub) sub.textContent = proj ? `${s.title} · for ${proj.name}` : s.title;
+
+  if (meta) meta.innerHTML = renderMeetingPickerMeta();
+  body.innerHTML = s.step === 'month' ? renderMeetingPickerMonth() : renderMeetingPickerDay();
+  footer.innerHTML = renderMeetingPickerFooter();
+}
+
+function renderMeetingPickerMeta() {
+  const s = _meetingPickerState;
+  const team = state.team.filter(m => !m.archived);
+  const attendeeChips = team.map(m => {
+    const isOn = s.attendees.includes(m.id);
+    const initials = getInitials(m.name);
+    return `<button class="mp-att-chip ${isOn ? 'active' : ''}" onclick="_mpToggleAttendee(${m.id})" style="${isOn ? `background:${m.color || '#1565C0'}33;border-color:${m.color || '#1565C0'};color:${m.color || '#58A6FF'}` : ''}" title="${esc(m.name)}">
+      <span class="mp-att-init">${esc(initials)}</span>${esc(m.name.split(' ')[0])}
+    </button>`;
+  }).join('');
+
+  return `
+    <div class="mp-meta-row">
+      <label class="mp-meta-label">Title</label>
+      <input type="text" class="mp-meta-input" value="${esc(s.title)}" oninput="_meetingPickerState.title=this.value;_mpRefreshSub()">
+    </div>
+    <div class="mp-meta-row">
+      <label class="mp-meta-label">Duration</label>
+      <select class="mp-meta-input" onchange="_mpSetDuration(this.value)">
+        ${[15, 30, 45, 60, 90, 120].map(min => `<option value="${min}" ${s.duration === min ? 'selected' : ''}>${min} min</option>`).join('')}
+      </select>
+    </div>
+    <div class="mp-meta-row mp-meta-row-attendees">
+      <label class="mp-meta-label">Attendees</label>
+      <div class="mp-att-chips">${attendeeChips}</div>
+    </div>
+  `;
+}
+
+function _mpRefreshSub() {
+  const s = _meetingPickerState;
+  const proj = s.projectId ? state.projects.find(p => p.id === s.projectId) : null;
+  const sub = document.getElementById('mp-sub');
+  if (sub) sub.textContent = proj ? `${s.title} · for ${proj.name}` : s.title;
+}
+
+function _mpToggleAttendee(memberId) {
+  const s = _meetingPickerState;
+  const idx = s.attendees.indexOf(memberId);
+  if (idx >= 0) s.attendees.splice(idx, 1);
+  else s.attendees.push(memberId);
+  refreshMeetingPicker();
+}
+
+function _mpSetDuration(min) {
+  const s = _meetingPickerState;
+  s.duration = parseInt(min, 10) || 30;
+  // If we have a start time, recompute end time based on new duration
+  if (s.selectedStart) {
+    s.selectedEnd = _addMinutes(s.selectedStart, s.duration);
+  }
+  refreshMeetingPicker();
+}
+
+function _addMinutes(timeStr, min) {
+  const [h, m] = timeStr.split(':').map(Number);
+  const total = h * 60 + m + min;
+  const nh = Math.floor(total / 60) % 24;
+  const nm = total % 60;
+  return `${String(nh).padStart(2, '0')}:${String(nm).padStart(2, '0')}`;
+}
+
+function _timeToMinutes(timeStr) {
+  if (!timeStr) return 0;
+  const [h, m] = timeStr.split(':').map(Number);
+  return h * 60 + m;
+}
+
+// ── Month view ──
+function renderMeetingPickerMonth() {
+  const s = _meetingPickerState;
+  const { year, month } = s.visibleMonth;
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  const todayStr = today.toISOString().slice(0, 10);
+
+  const firstOfMonth = new Date(year, month, 1);
+  const monthName = firstOfMonth.toLocaleDateString('en-US', { month: 'long', year: 'numeric' });
+  const daysInMonth = new Date(year, month + 1, 0).getDate();
+  const startDow = firstOfMonth.getDay();
+
+  // Aggregate busy info per day for selected attendees
+  const monthStart = new Date(year, month, 1).toISOString().slice(0, 10);
+  const monthEnd = new Date(year, month, daysInMonth).toISOString().slice(0, 10);
+  const busyByDate = {}; // dateStr → { count, hasFullDay, attendeeIds: Set }
+  s.attendees.forEach(memberId => {
+    getMemberBusyBlocks(memberId, monthStart, monthEnd).forEach(b => {
+      if (!busyByDate[b.date]) busyByDate[b.date] = { count: 0, hasFullDay: false, attendeeIds: new Set() };
+      busyByDate[b.date].count += 1;
+      if (!b.startTime) busyByDate[b.date].hasFullDay = true;
+      busyByDate[b.date].attendeeIds.add(memberId);
+    });
+  });
+
+  const cells = [];
+  for (let i = 0; i < startDow; i++) {
+    cells.push('<div class="mp-day mp-day-blank"></div>');
+  }
+  for (let day = 1; day <= daysInMonth; day++) {
+    const d = new Date(year, month, day);
+    const dateStr = d.toISOString().slice(0, 10);
+    const isToday = dateStr === todayStr;
+    const isPast = dateStr < todayStr;
+    const dow = d.getDay();
+    const isWeekend = dow === 0 || dow === 6;
+    const busy = busyByDate[dateStr];
+    const everyoneBlocked = busy && busy.attendeeIds.size === s.attendees.length && busy.hasFullDay;
+
+    const classes = ['mp-day'];
+    if (isToday) classes.push('mp-day-today');
+    if (isPast) classes.push('mp-day-past');
+    if (isWeekend) classes.push('mp-day-weekend');
+    if (busy) classes.push('mp-day-has-busy');
+    if (everyoneBlocked) classes.push('mp-day-fully-blocked');
+
+    cells.push(`
+      <div class="${classes.join(' ')}" ${isPast ? '' : `onclick="_mpPickDate('${dateStr}')"`}>
+        <div class="mp-day-num">${day}</div>
+        ${busy ? `
+          <div class="mp-day-busy-row">
+            <div class="mp-day-busy-dot${everyoneBlocked ? ' mp-day-busy-dot-full' : ''}"></div>
+            <span class="mp-day-busy-count">${busy.count}</span>
+          </div>
+        ` : ''}
+      </div>
+    `);
+  }
+
+  return `
+    <div class="mp-month-nav">
+      <button type="button" class="mp-nav-btn" onclick="_mpChangeMonth(-1)" aria-label="Previous month">
+        <svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M9 2L4 7l5 5" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
+      </button>
+      <div class="mp-month-name">${esc(monthName)}</div>
+      <button type="button" class="mp-nav-btn" onclick="_mpChangeMonth(1)" aria-label="Next month">
+        <svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M5 2l5 5-5 5" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
+      </button>
+    </div>
+    <div class="mp-dow">
+      ${['Sun','Mon','Tue','Wed','Thu','Fri','Sat'].map((d, i) => `<div class="mp-dow-cell${(i === 0 || i === 6) ? ' mp-dow-weekend' : ''}">${d}</div>`).join('')}
+    </div>
+    <div class="mp-grid">${cells.join('')}</div>
+    <div class="mp-month-hint">Tap a day to see hour-by-hour availability</div>
+  `;
+}
+
+function _mpChangeMonth(delta) {
+  const s = _meetingPickerState;
+  let m = s.visibleMonth.month + delta;
+  let y = s.visibleMonth.year;
+  while (m > 11) { m -= 12; y += 1; }
+  while (m < 0) { m += 12; y -= 1; }
+  s.visibleMonth = { year: y, month: m };
+  refreshMeetingPicker();
+}
+
+function _mpPickDate(dateStr) {
+  const s = _meetingPickerState;
+  s.selectedDate = dateStr;
+  s.step = 'day';
+  s.selectedStart = null;
+  s.selectedEnd = null;
+  s.expandedSlot = null;
+  refreshMeetingPicker();
+}
+
+function _mpBackToMonth() {
+  const s = _meetingPickerState;
+  s.step = 'month';
+  s.expandedSlot = null;
+  refreshMeetingPicker();
+}
+
+// ── Day view (hour grid) ──
+function renderMeetingPickerDay() {
+  const s = _meetingPickerState;
+  const date = s.selectedDate;
+  const d = new Date(date + 'T00:00:00');
+  const longDate = d.toLocaleDateString('en-US', { weekday:'long', month:'long', day:'numeric' });
+
+  // Build 15-min slots from 8am to 8pm
+  const slots = [];
+  for (let h = 8; h < 20; h++) {
+    for (let m = 0; m < 60; m += 15) {
+      slots.push(`${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`);
+    }
+  }
+
+  // For each slot, determine which attendees are busy
+  const busyBySlot = {}; // slotTime → array of {memberId, block}
+  s.attendees.forEach(memberId => {
+    getMemberBusyBlocks(memberId, date, date).forEach(block => {
+      if (block.date !== date) return;
+      const blockStart = block.startTime ? _timeToMinutes(block.startTime) : 0;
+      const blockEnd = block.endTime ? _timeToMinutes(block.endTime) : 24 * 60;
+      slots.forEach(slot => {
+        const slotMin = _timeToMinutes(slot);
+        if (slotMin >= blockStart && slotMin < blockEnd) {
+          if (!busyBySlot[slot]) busyBySlot[slot] = [];
+          busyBySlot[slot].push({ memberId, block });
+        }
+      });
+    });
+  });
+
+  // Determine selection range in minutes
+  const selStartMin = s.selectedStart ? _timeToMinutes(s.selectedStart) : null;
+  const selEndMin = s.selectedEnd ? _timeToMinutes(s.selectedEnd) : null;
+
+  const slotsHTML = slots.map(slot => {
+    const slotMin = _timeToMinutes(slot);
+    const inSelection = selStartMin !== null && selEndMin !== null &&
+                        slotMin >= selStartMin && slotMin < selEndMin;
+    const isStart = slot === s.selectedStart;
+    const busy = busyBySlot[slot] || [];
+    const isExpanded = s.expandedSlot === slot;
+    const conflictInSelection = inSelection && busy.length > 0;
+
+    const classes = ['mp-slot'];
+    if (busy.length > 0) classes.push('mp-slot-busy');
+    if (inSelection) classes.push('mp-slot-selected');
+    if (isStart) classes.push('mp-slot-start');
+    if (conflictInSelection) classes.push('mp-slot-conflict');
+    if (isExpanded) classes.push('mp-slot-expanded');
+
+    // Show time label only on top of each hour
+    const showLabel = slot.endsWith(':00');
+
+    return `
+      <div class="${classes.join(' ')}" data-slot="${slot}" onclick="_mpSlotClick('${slot}')">
+        ${showLabel ? `<div class="mp-slot-label">${slot}</div>` : ''}
+        ${busy.length > 0 ? `
+          <div class="mp-slot-busy-marker">
+            ${busy.length} busy
+            <button type="button" class="mp-slot-expand-btn" onclick="event.stopPropagation();_mpToggleSlotExpand('${slot}')">
+              ${isExpanded ? '▾' : '▸'}
+            </button>
+          </div>
+        ` : ''}
+        ${isExpanded && busy.length > 0 ? `
+          <div class="mp-slot-busy-detail">
+            ${busy.map(b => {
+              const m = getTeamMember(b.memberId);
+              return `<div class="mp-slot-busy-row" style="border-left-color:${b.block.color}">
+                <span style="color:${b.block.color};font-weight:600">${esc(m?.name.split(' ')[0] || '?')}</span>
+                <span style="color:#8B949E"> &middot; ${esc(b.block.title)}</span>
+              </div>`;
+            }).join('')}
+          </div>
+        ` : ''}
+      </div>
+    `;
+  }).join('');
+
+  return `
+    <div class="mp-day-header">
+      <button type="button" class="mp-back-btn" onclick="_mpBackToMonth()">
+        <svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M9 2L4 7l5 5" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        <span>Back</span>
+      </button>
+      <div class="mp-day-name">${esc(longDate)}</div>
+    </div>
+    <div class="mp-day-hint">Tap a free slot to set the start time. Duration: ${s.duration} min.</div>
+    <div class="mp-slots">${slotsHTML}</div>
+  `;
+}
+
+function _mpSlotClick(slot) {
+  const s = _meetingPickerState;
+  // Tapping any slot sets it as the new start time. End time auto-derives from duration.
+  s.selectedStart = slot;
+  s.selectedEnd = _addMinutes(slot, s.duration);
+  // Reset override flag — user has to opt in again if conflict
+  s.pendingOverride = false;
+  refreshMeetingPicker();
+}
+
+function _mpToggleSlotExpand(slot) {
+  const s = _meetingPickerState;
+  s.expandedSlot = (s.expandedSlot === slot) ? null : slot;
+  refreshMeetingPicker();
+}
+
+// Returns array of conflicting attendees for the current selection
+function _mpGetSelectionConflicts() {
+  const s = _meetingPickerState;
+  if (!s.selectedDate || !s.selectedStart || !s.selectedEnd) return [];
+  const selStart = _timeToMinutes(s.selectedStart);
+  const selEnd = _timeToMinutes(s.selectedEnd);
+  const conflicts = [];
+  s.attendees.forEach(memberId => {
+    const blocks = getMemberBusyBlocks(memberId, s.selectedDate, s.selectedDate)
+      .filter(b => b.date === s.selectedDate);
+    for (const b of blocks) {
+      const bStart = b.startTime ? _timeToMinutes(b.startTime) : 0;
+      const bEnd = b.endTime ? _timeToMinutes(b.endTime) : 24 * 60;
+      if (selStart < bEnd && selEnd > bStart) {
+        conflicts.push({ memberId, block: b });
+        break; // one conflict per member is enough for the warning
+      }
+    }
+  });
+  return conflicts;
+}
+
+// ── Footer ──
+function renderMeetingPickerFooter() {
+  const s = _meetingPickerState;
+  const canConfirm = s.selectedDate && s.selectedStart && s.selectedEnd && s.attendees.length > 0;
+
+  let summary = '';
+  if (s.selectedDate && s.selectedStart) {
+    const d = new Date(s.selectedDate + 'T00:00:00');
+    const dateStr = d.toLocaleDateString('en-US', { month:'short', day:'numeric' });
+    summary = `<div class="mp-summary"><strong>${esc(dateStr)}</strong> · ${esc(s.selectedStart)}–${esc(s.selectedEnd)} · ${s.attendees.length} attendee${s.attendees.length === 1 ? '' : 's'}</div>`;
+  } else if (s.attendees.length === 0) {
+    summary = `<div class="mp-summary" style="color:#D29922">Add at least one attendee</div>`;
+  } else if (!s.selectedDate) {
+    summary = `<div class="mp-summary" style="color:#8B949E">Pick a date</div>`;
+  } else {
+    summary = `<div class="mp-summary" style="color:#8B949E">Pick a time slot</div>`;
+  }
+
+  // Conflict warning
+  let conflictBox = '';
+  const conflicts = canConfirm ? _mpGetSelectionConflicts() : [];
+  if (conflicts.length > 0) {
+    const names = conflicts.map(c => getTeamMember(c.memberId)?.name?.split(' ')[0] || '?').join(', ');
+    conflictBox = `
+      <div class="mp-conflict-box">
+        <div class="mp-conflict-title">⚠ Conflict — ${conflicts.length} attendee${conflicts.length === 1 ? ' has' : 's have'} something at this time</div>
+        <div class="mp-conflict-list">${esc(names)}</div>
+        <label class="mp-override-toggle">
+          <input type="checkbox" ${s.pendingOverride ? 'checked' : ''} onchange="_meetingPickerState.pendingOverride=this.checked;refreshMeetingPicker()">
+          <span>Request override anyway — sends approval request</span>
+        </label>
+      </div>
+    `;
+  }
+
+  // Confirm button color/label depends on conflict + override
+  let confirmLabel = 'Schedule Meeting';
+  let confirmDisabled = !canConfirm;
+  let confirmStyle = 'background:#238636;border-color:#2EA043';
+  if (conflicts.length > 0) {
+    if (s.pendingOverride) {
+      confirmLabel = 'Send Approval Request';
+      confirmStyle = 'background:#D29922;border-color:#9E6A03';
+    } else {
+      confirmLabel = 'Resolve Conflict';
+      confirmDisabled = true;
+    }
+  }
+  if (!canConfirm) {
+    confirmStyle = 'background:#161B22;border-color:#30363D;color:#6E7681;cursor:not-allowed;opacity:0.55';
+  }
+
+  return `
+    <textarea class="mp-notes" placeholder="Notes (optional) — agenda, location, dial-in details" oninput="_meetingPickerState.notes=this.value">${esc(s.notes)}</textarea>
+    ${summary}
+    ${conflictBox}
+    <div class="mp-actions">
+      <button type="button" class="btn" onclick="closeMeetingPicker()">Cancel</button>
+      <button type="button" class="btn-primary" onclick="_mpConfirm()" ${confirmDisabled ? 'disabled' : ''} style="${confirmStyle}">${esc(confirmLabel)}</button>
+    </div>
+  `;
+}
+
+function _mpConfirm() {
+  const s = _meetingPickerState;
+  if (!s.selectedDate || !s.selectedStart || !s.selectedEnd || s.attendees.length === 0) return;
+  const conflicts = _mpGetSelectionConflicts();
+  if (conflicts.length > 0 && !s.pendingOverride) return;
+
+  const status = (conflicts.length > 0 && s.pendingOverride) ? 'pending_approval' : 'confirmed';
+  const meeting = addMeeting({
+    projectId: s.projectId,
+    type: s.type,
+    title: s.title,
+    date: s.selectedDate,
+    startTime: s.selectedStart,
+    endTime: s.selectedEnd,
+    attendees: [...s.attendees],
+    status,
+    source: 'meeting_picker',
+    notes: s.notes
+  });
+  // Track override request — store who needs to approve (the conflicted attendees)
+  if (status === 'pending_approval') {
+    if (!state.meetingApprovals) state.meetingApprovals = {};
+    state.meetingApprovals[meeting.id] = {
+      meetingId: meeting.id,
+      requesterId: getActiveTeamMemberId(),
+      conflictedMemberIds: conflicts.map(c => c.memberId),
+      approvedBy: [],
+      deniedBy: [],
+      requestedAt: new Date().toISOString()
+    };
+    save('vi_meeting_approvals', state.meetingApprovals);
+  }
+
+  const cb = s.onConfirm;
+  closeMeetingPicker();
+  showToast(status === 'pending_approval' ? 'Override request sent' : 'Meeting scheduled', 'success');
+  if (typeof cb === 'function') cb(meeting);
+  renderCurrentPage();
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// MEETING APPROVAL SYSTEM
+// Lightweight approve/deny for pending_approval meetings.
+// Surfaced via "Pending Approvals" card on My Work.
+// ═══════════════════════════════════════════════════════════════════
+
+function getMeetingsAwaitingMyApproval() {
+  const myId = getActiveTeamMemberId();
+  if (!state.meetingApprovals) return [];
+  return Object.values(state.meetingApprovals)
+    .filter(req => req.conflictedMemberIds.includes(myId))
+    .filter(req => !req.approvedBy.includes(myId) && !req.deniedBy.includes(myId))
+    .map(req => ({
+      ...req,
+      meeting: (state.meetings || []).find(m => m.id === req.meetingId)
+    }))
+    .filter(x => x.meeting && x.meeting.status === 'pending_approval');
+}
+
+function approveMeeting(meetingId) {
+  const myId = getActiveTeamMemberId();
+  const req = state.meetingApprovals?.[meetingId];
+  if (!req) return;
+  if (!req.approvedBy.includes(myId)) req.approvedBy.push(myId);
+  // Once ALL conflicted members have approved, flip status to confirmed
+  const allApproved = req.conflictedMemberIds.every(mid => req.approvedBy.includes(mid));
+  if (allApproved) {
+    const meeting = (state.meetings || []).find(m => m.id === meetingId);
+    if (meeting) {
+      meeting.status = 'confirmed';
+      save('vi_meetings', state.meetings);
+    }
+  }
+  save('vi_meeting_approvals', state.meetingApprovals);
+  showToast(allApproved ? 'Meeting confirmed' : 'Approval recorded', 'success');
+  renderCurrentPage();
+}
+
+function denyMeeting(meetingId) {
+  const myId = getActiveTeamMemberId();
+  const req = state.meetingApprovals?.[meetingId];
+  if (!req) return;
+  if (!req.deniedBy.includes(myId)) req.deniedBy.push(myId);
+  // Any single denial denies the whole meeting
+  const meeting = (state.meetings || []).find(m => m.id === meetingId);
+  if (meeting) {
+    meeting.status = 'denied';
+    save('vi_meetings', state.meetings);
+  }
+  save('vi_meeting_approvals', state.meetingApprovals);
+  showToast('Meeting denied', 'info');
+  renderCurrentPage();
+}
+
+function renderPendingApprovalsCard() {
+  const reqs = getMeetingsAwaitingMyApproval();
+  if (reqs.length === 0) return '';
+  return `
+    <div class="dashboard-card" style="margin-bottom:14px;border-left:3px solid #D29922">
+      <div class="dashboard-card-title" style="color:#D29922">⚠ Pending Approvals · ${reqs.length}</div>
+      <div style="font-size:12px;color:#8B949E;margin-bottom:10px">Meetings requested during your existing busy time</div>
+      ${reqs.map(req => {
+        const m = req.meeting;
+        const requester = getTeamMember(req.requesterId);
+        const proj = m.projectId ? state.projects.find(p => p.id === m.projectId) : null;
+        const dStr = new Date(m.date + 'T00:00:00').toLocaleDateString('en-US', { weekday:'short', month:'short', day:'numeric' });
+        return `
+          <div style="background:#0D1117;border:1px solid #1C2333;border-radius:6px;padding:10px 12px;margin-bottom:6px">
+            <div style="font-size:13px;color:#E6EDF3;font-weight:500">${esc(m.title)}</div>
+            <div style="font-size:11px;color:#8B949E;margin-top:3px">
+              ${esc(dStr)} · ${esc(m.startTime)}–${esc(m.endTime)}
+              ${proj ? ` · ${esc(proj.name)}` : ''}
+              ${requester ? ` · requested by ${esc(requester.name.split(' ')[0])}` : ''}
+            </div>
+            ${m.notes ? `<div style="font-size:11px;color:#C9D1D9;margin-top:6px;font-style:italic">${esc(m.notes)}</div>` : ''}
+            <div style="display:flex;gap:6px;margin-top:8px">
+              <button type="button" class="btn btn-sm" onclick="denyMeeting(${m.id})" style="font-size:11px;padding:4px 10px">Deny</button>
+              <button type="button" class="btn-primary" onclick="approveMeeting(${m.id})" style="font-size:11px;padding:4px 10px;background:#238636;border-color:#2EA043">Approve</button>
+            </div>
+          </div>
+        `;
+      }).join('')}
+    </div>
+  `;
 }
