@@ -3272,3 +3272,49 @@ td.today .cal-day-num {
 .cal-event-has-notes {
   font-weight: 600;
 }
+
+/* ── Picker mode-scoped range colors ── */
+/* Booked mode (default green) — already styled; explicit for clarity */
+.iwp-mode-booked .iwp-day-range-start,
+.iwp-mode-booked .iwp-day-range-end {
+  background: #0F4C2E;
+  border-color: #2EA043;
+}
+.iwp-mode-booked .iwp-day-range-mid {
+  background: #0A2E1B;
+  border-color: #1F6E2E;
+}
+.iwp-mode-booked .iwp-day-range-start .iwp-day-num,
+.iwp-mode-booked .iwp-day-range-end .iwp-day-num,
+.iwp-mode-booked .iwp-day-range-mid .iwp-day-num {
+  color: #3FB950;
+}
+
+/* Estimated mode (blue) — overrides default green range styling */
+.iwp-mode-estimated .iwp-day-range-start,
+.iwp-mode-estimated .iwp-day-range-end {
+  background: #0D2D52;
+  border-color: #1F6FEB;
+}
+.iwp-mode-estimated .iwp-day-range-mid {
+  background: #0A1B33;
+  border-color: #1565C0;
+}
+.iwp-mode-estimated .iwp-day-range-start .iwp-day-num,
+.iwp-mode-estimated .iwp-day-range-end .iwp-day-num,
+.iwp-mode-estimated .iwp-day-range-mid .iwp-day-num {
+  color: #58A6FF;
+}
+/* Weekend opted-in inside an estimated range — also blue */
+.iwp-mode-estimated .iwp-day-weekend-opted-in {
+  background: #0A1B33;
+  border-color: #1565C0;
+}
+.iwp-mode-estimated .iwp-day-weekend-opted-in .iwp-day-num {
+  color: #58A6FF !important;
+}
+/* Confirm button color follows mode */
+.iwp-mode-estimated .iwp-actions .btn-primary:not(:disabled) {
+  background: #1565C0 !important;
+  border-color: #1F6FEB !important;
+}
