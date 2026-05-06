@@ -998,21 +998,22 @@ function getInstallDateDisplay(project) {
 function showSetBookedDatesDialog(projectId) {
   const p = state.projects.find(x => x.id === projectId);
   if (!p) return;
-  const existing = getBookedTimeline(projectId);
-  const stored = state.bookedDates?.[projectId] || {};
+  // Determine current state — what window does this project have?
+  const win = getInstallWindow(p);
+  const stored = win?.source === 'booked'
+    ? (state.bookedDates?.[projectId] || {})
+    : (state.estimatedInstallOverride?.[projectId] || {});
+  const storedObj = (stored && typeof stored === 'object') ? stored : {};
 
   openInstallWindowPicker({
     projectId,
-    mode: 'booked',
-    initialStart: existing?.start,
-    initialEnd: existing?.end,
-    initialExcludeWeekends: stored.excludeWeekends !== false, // default true if not stored
-    initialWeekendIncludes: stored.weekendIncludes || [],
-    onConfirm: (start, end, result) => {
-      setBookedDates(projectId, start, end, {
-        excludeWeekends: result.excludeWeekends,
-        weekendIncludes: result.weekendIncludes
-      });
+    mode: win?.source || 'booked',
+    initialStart: win?.start,
+    initialEnd: win?.end,
+    initialExcludeWeekends: storedObj.excludeWeekends !== false,
+    initialWeekendIncludes: storedObj.weekendIncludes || [],
+    onConfirm: () => {
+      // Picker saved the data. Just re-render.
       renderCurrentPage();
     }
   });
@@ -4434,13 +4435,16 @@ function renderProjectProgressHTML(p) {
 function renderChecklistTab(container, project, phase) {
   // Sub-tasks section (Pass 4A) — top of every Design/Install tab
   const subtasksHTML = renderSubtasksSection(project, phase);
+  // Scheduling notes — only on Install tab. Provides quick visibility into
+  // logistical detail like "out of building by 4pm Wed" set during install window pick.
+  const schedNotesHTML = (phase === 'install') ? renderSchedulingNotesCard(project) : '';
 
   const systems = project.systems.filter(s => TEMPLATES[phase]?.[s]);
   if (systems.length === 0) {
-    container.innerHTML = subtasksHTML + `<div class="empty-state"><span class="empty-icon">${phase === 'design' ? '📐' : '🔧'}</span>No ${phase} checklists — scope tags haven't been detected for this project.<br><br><span style="font-size:11px;color:#6E7681">Checklists auto-generate from scope tags: LED Wall, PA/Audio, Lighting, Control, Streaming, Camera</span></div>`;
+    container.innerHTML = schedNotesHTML + subtasksHTML + `<div class="empty-state"><span class="empty-icon">${phase === 'design' ? '📐' : '🔧'}</span>No ${phase} checklists — scope tags haven't been detected for this project.<br><br><span style="font-size:11px;color:#6E7681">Checklists auto-generate from scope tags: LED Wall, PA/Audio, Lighting, Control, Streaming, Camera</span></div>`;
     return;
   }
-  container.innerHTML = subtasksHTML + systems.map(sys => {
+  container.innerHTML = schedNotesHTML + subtasksHTML + systems.map(sys => {
     const template = TEMPLATES[phase][sys];
     const items = getTemplateItems(phase, sys);
     const checkKey = `${project.id}_${phase}_${sys}`;
@@ -4960,22 +4964,19 @@ function setEstimatedInstallOverride(projectId, dateOrRange) {
 function showEstimatedInstallDialog(projectId) {
   const p = state.projects.find(pr => pr.id === projectId);
   if (!p) return;
-  const existing = getEstimatedInstallRange(p);
-  const stored = state.estimatedInstallOverride?.[projectId];
+  const win = getInstallWindow(p);
+  const stored = win?.source === 'booked'
+    ? (state.bookedDates?.[projectId] || {})
+    : (state.estimatedInstallOverride?.[projectId] || {});
   const storedObj = (stored && typeof stored === 'object') ? stored : {};
   openInstallWindowPicker({
     projectId,
-    mode: 'estimated',
-    initialStart: existing?.start,
-    initialEnd: existing?.end,
+    mode: win?.source || 'estimated',
+    initialStart: win?.start,
+    initialEnd: win?.end,
     initialExcludeWeekends: storedObj.excludeWeekends !== false,
     initialWeekendIncludes: storedObj.weekendIncludes || [],
-    onConfirm: (start, end, result) => {
-      setEstimatedInstallOverride(projectId, {
-        start, end,
-        excludeWeekends: result.excludeWeekends,
-        weekendIncludes: result.weekendIncludes
-      });
+    onConfirm: () => {
       renderCurrentPage();
     }
   });
@@ -6206,7 +6207,13 @@ function renderCalendar(c) {
         const events = getEventsForDate(dateStr);
         cells += `<td class="${isToday ? 'today' : ''}">
           <span class="cal-day-num">${dayCount}</span>
-          ${events.map(e => `<div class="cal-event cal-event-${e.color}" onclick="openProject(${e.id})" title="${esc(e.name)}${e.booked ? ' (Booked)' : ' (Estimated)'}">${esc(e.name)}</div>`).join('')}
+          ${events.map(e => {
+            const proj = state.projects.find(pp => pp.id === e.id);
+            const notesPart = proj?.scheduling_notes ? `\n\nNotes: ${proj.scheduling_notes}` : '';
+            const tooltip = `${e.name}${e.booked ? ' (Booked)' : ' (Estimated)'}${notesPart}`;
+            const hasNotes = !!proj?.scheduling_notes;
+            return `<div class="cal-event cal-event-${e.color}${hasNotes ? ' cal-event-has-notes' : ''}" onclick="openProject(${e.id},'install')" title="${esc(tooltip)}">${hasNotes ? '📝 ' : ''}${esc(e.name)}</div>`;
+          }).join('')}
         </td>`;
         dayCount++;
       }
@@ -7374,19 +7381,19 @@ function getPlanningGroups(activeProjects) {
 function getThisWeekActivity(activeProjects) {
   const today = new Date();
   today.setHours(0, 0, 0, 0);
-  const dow = today.getDay(); // 0=Sun
-  const monday = new Date(today);
-  monday.setDate(today.getDate() - ((dow + 6) % 7)); // back up to Monday
-  const sunday = new Date(monday);
-  sunday.setDate(monday.getDate() + 6);
+  const dow = today.getDay(); // 0=Sun ... 6=Sat
+  const sunday = new Date(today);
+  sunday.setDate(today.getDate() - dow); // back up to Sunday
+  const saturday = new Date(sunday);
+  saturday.setDate(sunday.getDate() + 6);
 
   // For each project, derive which days this week it's active
   const days = []; // [{date, dateStr, dow, items: [{p, kind: 'install'|'prep'}]}]
   for (let i = 0; i < 7; i++) {
-    const d = new Date(monday);
-    d.setDate(monday.getDate() + i);
+    const d = new Date(sunday);
+    d.setDate(sunday.getDate() + i);
     const dateStr = d.toISOString().slice(0, 10);
-    days.push({ date: d, dateStr, dow: ['Mon','Tue','Wed','Thu','Fri','Sat','Sun'][i], items: [] });
+    days.push({ date: d, dateStr, dow: ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'][i], items: [] });
   }
 
   activeProjects.forEach(p => {
@@ -7415,7 +7422,7 @@ function getThisWeekActivity(activeProjects) {
     }
   });
 
-  return { monday, sunday, days };
+  return { weekStart: sunday, weekEnd: saturday, days };
 }
 
 function renderInstallMgmtDashboard(activeProjects) {
@@ -7457,7 +7464,7 @@ function renderInstallMgmtDashboard(activeProjects) {
     <div data-context-section="this-week" class="dashboard-card" style="margin-bottom:14px">
       <div class="dashboard-card-title" style="display:flex;align-items:center;justify-content:space-between">
         <span>This Week</span>
-        <span style="font-size:11px;color:#8B949E;font-weight:400">${week.monday.toLocaleDateString('en-US',{month:'short',day:'numeric'})} – ${week.sunday.toLocaleDateString('en-US',{month:'short',day:'numeric'})}</span>
+        <span style="font-size:11px;color:#8B949E;font-weight:400">${week.weekStart.toLocaleDateString('en-US',{month:'short',day:'numeric'})} – ${week.weekEnd.toLocaleDateString('en-US',{month:'short',day:'numeric'})}</span>
       </div>
       ${renderPlanningWeekStrip(week)}
     </div>
@@ -11743,22 +11750,19 @@ function openMobilizationTagsEditor(projectId) {
 function openMobilizationInstallEditor(projectId) {
   const p = state.projects.find(x => x.id === projectId);
   if (!p) return;
-  const existing = getEstimatedInstallRange(p);
-  const stored = state.estimatedInstallOverride?.[projectId];
+  const win = getInstallWindow(p);
+  const stored = win?.source === 'booked'
+    ? (state.bookedDates?.[projectId] || {})
+    : (state.estimatedInstallOverride?.[projectId] || {});
   const storedObj = (stored && typeof stored === 'object') ? stored : {};
   openInstallWindowPicker({
     projectId,
-    mode: 'estimated',
-    initialStart: existing?.start,
-    initialEnd: existing?.end,
+    mode: win?.source || 'estimated',
+    initialStart: win?.start,
+    initialEnd: win?.end,
     initialExcludeWeekends: storedObj.excludeWeekends !== false,
     initialWeekendIncludes: storedObj.weekendIncludes || [],
-    onConfirm: (start, end, result) => {
-      setEstimatedInstallOverride(projectId, {
-        start, end,
-        excludeWeekends: result.excludeWeekends,
-        weekendIncludes: result.weekendIncludes
-      });
+    onConfirm: () => {
       refreshMobilizationBody(projectId);
     }
   });
@@ -11855,11 +11859,13 @@ function openInstallWindowPicker(opts) {
   _pickerState.selectStart = opts.initialStart || null;
   _pickerState.selectEnd = opts.initialEnd || null;
   _pickerState.hoveredDate = null;
-  // Default: exclude weekends. If editing existing window, preserve their setting.
   _pickerState.excludeWeekends = (opts.initialExcludeWeekends !== undefined)
     ? !!opts.initialExcludeWeekends : true;
   _pickerState.weekendIncludes = Array.isArray(opts.initialWeekendIncludes)
     ? [...opts.initialWeekendIncludes] : [];
+  // Notes — pulled from project (project-scoped, persists across mode changes)
+  const proj = state.projects.find(p => p.id === opts.projectId);
+  _pickerState.notes = proj?.scheduling_notes || '';
   _pickerState.onConfirm = opts.onConfirm;
 
   // Default visible month: month of initialStart, or current month
@@ -11874,6 +11880,18 @@ function openInstallWindowPicker(opts) {
   document.body.style.overflow = 'hidden';
   overlay.addEventListener('click', _iwpHandleClick);
   refreshInstallWindowPicker();
+}
+
+function _iwpToggleMode(newMode) {
+  if (newMode !== 'booked' && newMode !== 'estimated') return;
+  _pickerState.mode = newMode;
+  // Re-render only the header label + footer indicator (full refresh is fine)
+  refreshInstallWindowPicker();
+}
+
+function _iwpUpdateNotes(value) {
+  _pickerState.notes = value;
+  // No re-render needed — value is captured in state, will be read at confirm
 }
 
 function closeInstallWindowPicker() {
@@ -11973,31 +11991,73 @@ function _iwpConfirm() {
   const result = {
     start: s.selectStart,
     end,
+    mode: s.mode,                     // 'booked' or 'estimated' from the segmented toggle
     excludeWeekends: s.excludeWeekends,
-    weekendIncludes: [...s.weekendIncludes]
+    weekendIncludes: [...s.weekendIncludes],
+    notes: s.notes || ''
   };
+
+  // Save notes to the project (project-scoped, persists regardless of mode)
+  const proj = state.projects.find(p => p.id === s.projectId);
+  if (proj) {
+    proj.scheduling_notes = s.notes || '';
+    save('vi_projects', state.projects);
+  }
+
+  // Enforce "only one window per project" rule.
+  // Save to the chosen field, clear the other.
+  if (s.mode === 'booked') {
+    setBookedDates(s.projectId, result.start, result.end, {
+      excludeWeekends: result.excludeWeekends,
+      weekendIncludes: result.weekendIncludes
+    });
+    // Clear estimated
+    if (state.estimatedInstallOverride?.[s.projectId]) {
+      delete state.estimatedInstallOverride[s.projectId];
+      save('vi_estimated_install', state.estimatedInstallOverride);
+    }
+  } else {
+    setEstimatedInstallOverride(s.projectId, {
+      start: result.start,
+      end: result.end,
+      excludeWeekends: result.excludeWeekends,
+      weekendIncludes: result.weekendIncludes
+    });
+    // Clear booked
+    if (state.bookedDates?.[s.projectId]) {
+      delete state.bookedDates[s.projectId];
+      save('vi_booked_dates', state.bookedDates);
+    }
+  }
+
   closeInstallWindowPicker();
+  // Callback informs the caller (mobilization dialog, project page) that something was saved
+  // so they can refresh themselves. The picker has already done the actual saving.
   if (typeof cb === 'function') cb(result.start, result.end, result);
 }
 
 function renderInstallWindowPickerShell() {
   const project = state.projects.find(p => p.id === _pickerState.projectId);
   const projectName = project?.name || 'project';
-  const modeLabel = _pickerState.mode === 'booked' ? 'Booked Install' : 'Estimated Install';
-  const modeColor = _pickerState.mode === 'booked' ? '#3FB950' : '#58A6FF';
   return `
     <div class="iwp-panel">
       <div class="iwp-header">
-        <div>
-          <div class="iwp-title">Pick ${esc(modeLabel)} Window</div>
+        <div style="flex:1;min-width:0">
+          <div class="iwp-title">Pick Install Window</div>
           <div class="iwp-sub">for ${esc(projectName)}</div>
         </div>
         <button class="iwp-close" onclick="closeInstallWindowPicker()" aria-label="Close">
           <svg width="18" height="18" viewBox="0 0 18 18" fill="none"><path d="M5 5l8 8M13 5l-8 8" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>
         </button>
       </div>
+      <div class="iwp-mode-bar" id="iwp-mode-bar">
+        <!-- segmented toggle filled by refreshInstallWindowPicker -->
+      </div>
       <div class="iwp-body" id="iwp-body">
         <!-- Filled by refreshInstallWindowPicker -->
+      </div>
+      <div class="iwp-notes" id="iwp-notes-container">
+        <!-- Notes textarea -->
       </div>
       <div class="iwp-footer" id="iwp-footer">
         <!-- Filled by refreshInstallWindowPicker -->
@@ -12009,9 +12069,48 @@ function renderInstallWindowPickerShell() {
 function refreshInstallWindowPicker() {
   const body = document.getElementById('iwp-body');
   const footer = document.getElementById('iwp-footer');
+  const modeBar = document.getElementById('iwp-mode-bar');
+  const notesContainer = document.getElementById('iwp-notes-container');
   if (!body || !footer) return;
+  if (modeBar) modeBar.innerHTML = renderInstallWindowPickerModeBar();
   body.innerHTML = renderInstallWindowPickerCalendar();
+  // Only render notes textarea once (don't lose typed content on each refresh)
+  if (notesContainer && !notesContainer.dataset.rendered) {
+    notesContainer.innerHTML = renderInstallWindowPickerNotes();
+    notesContainer.dataset.rendered = '1';
+  }
   footer.innerHTML = renderInstallWindowPickerFooter();
+}
+
+function renderInstallWindowPickerModeBar() {
+  const m = _pickerState.mode;
+  return `
+    <div class="iwp-segmented">
+      <button type="button" class="iwp-seg-btn iwp-seg-est${m === 'estimated' ? ' active' : ''}" onclick="_iwpToggleMode('estimated')">
+        <span class="iwp-seg-dot" style="background:#58A6FF"></span>
+        Estimated
+        <span class="iwp-seg-hint">placeholder</span>
+      </button>
+      <button type="button" class="iwp-seg-btn iwp-seg-bk${m === 'booked' ? ' active' : ''}" onclick="_iwpToggleMode('booked')">
+        <span class="iwp-seg-dot" style="background:#3FB950"></span>
+        Booked
+        <span class="iwp-seg-hint">confirmed</span>
+      </button>
+    </div>
+  `;
+}
+
+function renderInstallWindowPickerNotes() {
+  const notes = _pickerState.notes || '';
+  return `
+    <label class="iwp-notes-label">Scheduling notes</label>
+    <textarea
+      id="iwp-notes-textarea"
+      class="iwp-notes-textarea"
+      placeholder="e.g. Out of building by 4pm Wed · No work during Sunday service · Loading dock locked after 5pm"
+      oninput="_iwpUpdateNotes(this.value)"
+      rows="2">${esc(notes)}</textarea>
+  `;
 }
 
 function renderInstallWindowPickerCalendar() {
@@ -12024,7 +12123,7 @@ function renderInstallWindowPickerCalendar() {
   const firstOfMonth = new Date(year, month, 1);
   const monthName = firstOfMonth.toLocaleDateString('en-US', { month: 'long', year: 'numeric' });
   const daysInMonth = new Date(year, month + 1, 0).getDate();
-  const startDow = (firstOfMonth.getDay() + 6) % 7; // Mon=0 ... Sun=6
+  const startDow = firstOfMonth.getDay(); // Sun=0 ... Sat=6
 
   // Collect events from all projects (booked + estimated) — filtered to current month
   const monthStart = new Date(year, month, 1).toISOString().slice(0, 10);
@@ -12122,7 +12221,7 @@ function renderInstallWindowPickerCalendar() {
       </button>
     </div>
     <div class="iwp-dow">
-      ${['Mon','Tue','Wed','Thu','Fri','Sat','Sun'].map((d, i) => `<div class="iwp-dow-cell${i >= 5 ? ' iwp-dow-weekend' : ''}">${d}</div>`).join('')}
+      ${['Sun','Mon','Tue','Wed','Thu','Fri','Sat'].map((d, i) => `<div class="iwp-dow-cell${(i === 0 || i === 6) ? ' iwp-dow-weekend' : ''}">${d}</div>`).join('')}
     </div>
     <div class="iwp-grid">${cells.join('')}</div>
     <div class="iwp-legend">
@@ -12206,6 +12305,37 @@ function renderInstallWindowPickerFooter() {
       <button type="button" class="btn" onclick="_iwpClearSelection()" ${!s.selectStart ? 'disabled' : ''} style="${!s.selectStart ? 'opacity:0.4;cursor:not-allowed' : ''}">Clear</button>
       <button type="button" class="btn" onclick="closeInstallWindowPicker()">Cancel</button>
       <button type="button" class="btn-primary" onclick="_iwpConfirm()" ${!s.selectStart ? 'disabled' : ''} style="${!s.selectStart ? 'opacity:0.4;cursor:not-allowed' : 'background:#238636;border-color:#2EA043'}">Confirm</button>
+    </div>
+  `;
+}
+
+// Renders a card showing the install window + scheduling notes for the project.
+// Surfaced on the project's Install tab and (eventually) other planning surfaces.
+function renderSchedulingNotesCard(project) {
+  const win = getInstallWindow(project);
+  const notes = project.scheduling_notes || '';
+  if (!win && !notes) return '';
+  const sourceLabel = win?.source === 'booked' ? 'BOOKED' : (win?.source === 'estimated' ? 'ESTIMATED' : '');
+  const sourceColor = win?.source === 'booked' ? '#3FB950' : '#58A6FF';
+  const dateRange = win
+    ? (win.end && win.end !== win.start ? `${fmtDate(win.start)} — ${fmtDate(win.end)}` : fmtDate(win.start))
+    : 'No window set';
+  return `
+    <div class="dashboard-card" style="margin-bottom:14px;border-left:3px solid ${win ? sourceColor : '#30363D'}">
+      <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px;margin-bottom:8px">
+        <div>
+          <div style="font-size:11px;font-weight:700;color:${sourceColor};text-transform:uppercase;letter-spacing:0.06em">${esc(sourceLabel || 'Install Window')}</div>
+          <div style="font-size:14px;color:#E6EDF3;font-weight:500;margin-top:2px">${esc(dateRange)}</div>
+        </div>
+        <button type="button" class="btn btn-sm" onclick="showSetBookedDatesDialog(${project.id})" style="font-size:11px;padding:4px 10px">${win ? 'Edit Window' : 'Set Window'}</button>
+      </div>
+      <div style="margin-top:10px;padding-top:10px;border-top:1px solid #1C2333">
+        <div style="font-size:11px;font-weight:600;color:#8B949E;text-transform:uppercase;letter-spacing:0.05em;margin-bottom:6px">Scheduling Notes</div>
+        ${notes
+          ? `<div style="font-size:12px;color:#C9D1D9;line-height:1.5;white-space:pre-wrap">${esc(notes)}</div>`
+          : `<div style="font-size:12px;color:#6E7681;font-style:italic">No notes yet — set them when picking the install window</div>`
+        }
+      </div>
     </div>
   `;
 }
