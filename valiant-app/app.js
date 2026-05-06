@@ -11885,8 +11885,16 @@ function openInstallWindowPicker(opts) {
 function _iwpToggleMode(newMode) {
   if (newMode !== 'booked' && newMode !== 'estimated') return;
   _pickerState.mode = newMode;
-  // Re-render only the header label + footer indicator (full refresh is fine)
-  refreshInstallWindowPicker();
+  // Update panel class for color scoping (avoid full refresh — that would flicker
+  // the calendar and re-render the notes textarea, losing typed content).
+  const panel = document.querySelector('#install-window-picker .iwp-panel');
+  if (panel) {
+    panel.classList.remove('iwp-mode-booked', 'iwp-mode-estimated');
+    panel.classList.add('iwp-mode-' + newMode);
+  }
+  // Update the segmented toggle's active state
+  const modeBar = document.getElementById('iwp-mode-bar');
+  if (modeBar) modeBar.innerHTML = renderInstallWindowPickerModeBar();
 }
 
 function _iwpUpdateNotes(value) {
@@ -12040,7 +12048,7 @@ function renderInstallWindowPickerShell() {
   const project = state.projects.find(p => p.id === _pickerState.projectId);
   const projectName = project?.name || 'project';
   return `
-    <div class="iwp-panel">
+    <div class="iwp-panel iwp-mode-${_pickerState.mode}">
       <div class="iwp-header">
         <div style="flex:1;min-width:0">
           <div class="iwp-title">Pick Install Window</div>
