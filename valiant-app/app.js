@@ -3256,7 +3256,7 @@ function renderMyCalendarCard(memberId) {
       <div data-context-section="my-calendar" class="dashboard-card" style="margin-bottom:14px">
         <div class="dashboard-card-title" style="display:flex;align-items:center;justify-content:space-between">
           <span>My Calendar &middot; Next 7 Days</span>
-          <button type="button" class="btn btn-sm" onclick="event.stopPropagation();openMyCalendarAddMenu(event)" style="font-size:10px;padding:3px 8px">+ Add</button>
+          <button type="button" class="btn btn-sm" onclick="event.stopPropagation();openMyCalendarAddMenu(event)" style="font-size:10px;padding:3px 8px">+ Add Calendar Event</button>
         </div>
         <div style="font-size:12px;color:#6E7681;font-style:italic;padding:8px 0">Nothing scheduled this week</div>
       </div>
@@ -3290,7 +3290,7 @@ function renderMyCalendarCard(memberId) {
     <div data-context-section="my-calendar" class="dashboard-card" style="margin-bottom:14px">
       <div class="dashboard-card-title" style="display:flex;align-items:center;justify-content:space-between">
         <span>My Calendar &middot; Next 7 Days</span>
-        <button type="button" class="btn btn-sm" onclick="event.stopPropagation();openMyCalendarAddMenu(event)" style="font-size:10px;padding:3px 8px">+ Add</button>
+        <button type="button" class="btn btn-sm" onclick="event.stopPropagation();openMyCalendarAddMenu(event)" style="font-size:10px;padding:3px 8px">+ Add Calendar Event</button>
       </div>
       <div class="my-cal-list">
         ${dayList.map(d => `
@@ -4222,7 +4222,7 @@ function renderProjectOverviewHTML(p) {
         <div class="dashboard-card" style="margin-bottom:14px">
           <div class="dashboard-card-title" style="display:flex;align-items:center;justify-content:space-between">
             <span>Shop Work${tasks.length > 0 ? ` · ${doneTasks.length}/${tasks.length}` : ''}</span>
-            <button class="btn btn-sm" onclick="showShopWorkDialog();setTimeout(()=>{const sel=document.getElementById('sw-project');if(sel)sel.value='${p.id}'},50)" style="font-size:11px;padding:4px 10px">+ Add</button>
+            <button class="btn btn-sm" onclick="showShopWorkDialog();setTimeout(()=>{const sel=document.getElementById('sw-project');if(sel)sel.value='${p.id}'},50)" style="font-size:11px;padding:4px 10px">+ Add Calendar Event</button>
           </div>
           ${tasks.length === 0 ? `
             <div style="font-size:13px;color:#6E7681;font-style:italic">No shop tasks linked to this project yet</div>
@@ -4542,18 +4542,27 @@ function renderProjectProgressHTML(p) {
                       ` : ''}
                     ` : ''}
                   </div>
-                  ${action && mUnlocked ? `
-                    <button class="milestone-action" onclick="triggerMilestoneAction(${p.id}, '${phase.key}', '${milestone.key}')" title="${esc(action.label)}">
+                  ${action && mUnlocked ? (() => {
+                    // For meeting actions, swap the label when one is already booked
+                    let actionLabel = action.label;
+                    if ((action.type === 'meeting' || action.type === 'meeting_then_email') && action.meetingType) {
+                      if (getExistingProjectMeeting(p.id, action.meetingType)) {
+                        actionLabel = 'Booked — Reschedule';
+                      }
+                    }
+                    return `
+                    <button class="milestone-action" onclick="triggerMilestoneAction(${p.id}, '${phase.key}', '${milestone.key}')" title="${esc(actionLabel)}">
                       ${action.type === 'email'
                         ? '<svg width="12" height="12" viewBox="0 0 14 14" fill="none"><rect x="1.5" y="3" width="11" height="8" rx="1" stroke="currentColor" stroke-width="1.3"/><path d="M2 4l5 4 5-4" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/></svg>'
                         : action.type === 'tab'
                           ? '<svg width="12" height="12" viewBox="0 0 14 14" fill="none"><path d="M5 3l4 4-4 4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>'
-                          : action.type === 'meeting'
+                          : (action.type === 'meeting' || action.type === 'meeting_then_email')
                             ? '<svg width="12" height="12" viewBox="0 0 14 14" fill="none"><rect x="2" y="3" width="10" height="9" rx="1" stroke="currentColor" stroke-width="1.3"/><path d="M2 6h10M5 1.5v3M9 1.5v3" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/></svg>'
                             : '<svg width="12" height="12" viewBox="0 0 14 14" fill="none"><path d="M7 3v8M3 7h8" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>'}
-                      <span>${esc(action.label)}</span>
+                      <span>${esc(actionLabel)}</span>
                     </button>
-                  ` : ''}
+                  `;
+                  })() : ''}
                 </div>
               `;
             }).join('')}
@@ -5246,8 +5255,9 @@ const PHASES = [
 // Types: 'email' (opens email modal), 'tab' (jumps to another tab), 'dialog' (opens a custom modal)
 const MILESTONE_ACTIONS = {
   'lead.walkthrough_sched': {
-    type: 'email',
+    type: 'meeting_then_email',
     label: 'Schedule Walkthrough',
+    meetingType: 'walkthrough',
     template: 'walkthrough_schedule'
   },
   'proposal.walkthrough_done': {
@@ -5347,6 +5357,12 @@ function triggerMilestoneAction(projectId, phaseKey, milestoneKey) {
   } else if (action.type === 'meeting') {
     // Opens meeting picker with project preset for the given meeting type
     openProjectMeetingPicker(projectId, action.meetingType);
+  } else if (action.type === 'meeting_then_email') {
+    // Opens meeting picker first; on save, opens email composer with the
+    // confirmed meeting's date/time merged into the body.
+    openProjectMeetingPicker(projectId, action.meetingType, (meeting) => {
+      showMilestoneEmailDialog(projectId, phaseKey, milestoneKey, action.template, meeting);
+    });
   } else if (action.type === 'dialog') {
     // Call the named handler with project id (and arg if present)
     const fn = window[action.handler];
@@ -5359,22 +5375,35 @@ function triggerMilestoneAction(projectId, phaseKey, milestoneKey) {
 // ── Email template system (Stage C Pass 2A) ──
 // Each template returns { subject, body } given the project
 const EMAIL_TEMPLATES = {
-  walkthrough_schedule: (p) => ({
-    subject: `Site walkthrough for ${p.name}`,
-    body: `Hi ${(p.primary_contact_name || p.client_name || '').split(' ')[0] || 'there'},
+  walkthrough_schedule: (p, meeting) => {
+    let dateLine = 'Proposed date/time: [DATE] at [TIME]';
+    let confirmLine = 'Please let me know if this works, or suggest an alternative that fits your schedule.';
+    if (meeting && meeting.date) {
+      const d = new Date(meeting.date + 'T00:00:00');
+      const dateStr = d.toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric' });
+      const timeStr = meeting.startTime ? _fmt12hRange(meeting.startTime, meeting.endTime) : '';
+      dateLine = timeStr
+        ? `When: ${dateStr} at ${timeStr}`
+        : `When: ${dateStr}`;
+      confirmLine = "Please confirm this time works for you, or let me know if you'd like to adjust.";
+    }
+    return {
+      subject: `Site walkthrough for ${p.name}`,
+      body: `Hi ${(p.primary_contact_name || p.client_name || '').split(' ')[0] || 'there'},
 
 I'd like to schedule a site walkthrough for ${p.name} so we can finalize the scope and take any necessary measurements.
 
-Proposed date/time: [DATE] at [TIME]
+${dateLine}
 Location: ${[p.address, p.city, p.state_abbr].filter(Boolean).join(', ') || '[to confirm]'}
 Expected duration: 30-60 minutes
 
-Please let me know if this works, or suggest an alternative that fits your schedule.
+${confirmLine}
 
 Thanks,
 [Your name]
 Valiant Integrations`
-  }),
+    };
+  },
   proposal_send: (p) => ({
     subject: `Proposal: ${p.name}`,
     body: `Hi ${(p.primary_contact_name || p.client_name || '').split(' ')[0] || 'there'},
@@ -5457,12 +5486,13 @@ Valiant Integrations`
   }
 };
 
-function showMilestoneEmailDialog(projectId, phaseKey, milestoneKey, templateKey) {
+function showMilestoneEmailDialog(projectId, phaseKey, milestoneKey, templateKey, meeting) {
   const p = state.projects.find(pr => pr.id === projectId);
   if (!p) return;
   const tpl = EMAIL_TEMPLATES[templateKey];
   if (!tpl) return;
-  const rendered = tpl(p);
+  // Pass meeting to template if it accepts a second arg (for date/time merging)
+  const rendered = tpl(p, meeting || null);
   const to = p.primary_contact_email || '';
 
   document.getElementById('mail-dialog')?.remove();
@@ -6309,7 +6339,7 @@ function renderProjectFilesHTML(p) {
               <span>${cat.label}</span>
               ${items.length > 0 ? `<span style="margin-left:6px;font-size:10px;color:#6E7681;font-weight:400">${items.length}</span>` : ''}
             </div>
-            <button class="btn btn-sm" ${canEdit ? `onclick="promptAddFile(${p.id}, '${cat.key}')"` : 'disabled style="opacity:0.4;cursor:not-allowed"'} style="font-size:11px;padding:5px 10px">+ Add</button>
+            <button class="btn btn-sm" ${canEdit ? `onclick="promptAddFile(${p.id}, '${cat.key}')"` : 'disabled style="opacity:0.4;cursor:not-allowed"'} style="font-size:11px;padding:5px 10px">+ Add Calendar Event</button>
           </div>
           <div style="font-size:11px;color:#6E7681;margin-bottom:8px">${cat.desc}</div>
           ${items.length === 0 ? `
@@ -6429,8 +6459,8 @@ function renderCalendar(c) {
         </div>
         <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
           <button class="cal-btn" onclick="calToday()" style="width:auto;padding:0 10px;font-size:11px">Today</button>
-          <button class="btn" onclick="openAddPersonalEventDialog()" style="font-size:11px;padding:6px 12px">+ Personal Event</button>
-          <button class="btn-primary" onclick="openGenericMeetingPicker()" style="font-size:11px;padding:6px 12px">+ Schedule Meeting</button>
+          <button type="button" class="cal-action-btn" onclick="openAddPersonalEventDialog()">+ Personal Event</button>
+          <button type="button" class="cal-action-btn cal-action-btn-primary" onclick="openGenericMeetingPicker()">+ Schedule Meeting</button>
         </div>
       </div>
       ${renderCalendarFilters()}
@@ -12079,10 +12109,11 @@ function renderMobilizationItemAction(projectId, itemKey, done) {
   }
   if (itemKey === 'design_kickoff') {
     const flags = state.mobilizationFlags?.[projectId] || {};
-    const meetingLogged = !!(state.meetingLogs?.[projectId]?.design_kickoff);
-    // If a meeting already exists, allow Schedule Another / Mark Manually toggle
+    const existingMeeting = getExistingProjectMeeting(projectId, 'design_kickoff');
+    const isBooked = !!existingMeeting;
+    const label = isBooked ? 'Booked — Reschedule' : 'Schedule Meeting';
     return `
-      <button type="button" class="btn-primary" onclick="openMobilizationDesignKickoffPicker(${projectId})" style="font-size:11px;padding:4px 10px">${meetingLogged || flags.design_kickoff_scheduled ? 'Reschedule' : 'Schedule Meeting'}</button>
+      <button type="button" class="btn-primary" onclick="openMobilizationDesignKickoffPicker(${projectId})" style="font-size:11px;padding:4px 10px">${label}</button>
       <button type="button" class="btn btn-sm" onclick="toggleMobilizationFlag(${projectId},'design_kickoff_scheduled')" style="font-size:11px;padding:4px 10px" title="Manually mark as scheduled (e.g. set up outside the app)">${flags.design_kickoff_scheduled ? 'Unmark' : 'Mark Manually'}</button>
     `;
   }
@@ -12142,19 +12173,35 @@ function getProjectMeetingPreset(projectId, meetingType) {
   };
 }
 
+// Returns the existing project meeting of the given type if one is on the books
+// (confirmed or pending). Returns null otherwise. Used to drive "Booked — Reschedule"
+// button states and to auto-set the replace flag in the picker.
+function getExistingProjectMeeting(projectId, meetingType) {
+  return (state.meetings || []).find(m =>
+    m.projectId === projectId && m.type === meetingType &&
+    (m.status === 'confirmed' || m.status === 'pending_approval')
+  ) || null;
+}
+
 // Generic opener — used by every project meeting entry point.
 //   onConfirmExtra: optional callback to run after picker confirm (in addition
 //   to the default renderCurrentPage). Useful for refreshing dialogs that own
 //   the entry point (e.g., mobilization dialog).
+// Auto-detects an existing meeting of the same type+project — if found, the
+// picker will REPLACE it on save (reschedule semantics).
 function openProjectMeetingPicker(projectId, meetingType, onConfirmExtra) {
   const preset = getProjectMeetingPreset(projectId, meetingType);
   if (!preset) return;
+  const existing = getExistingProjectMeeting(projectId, meetingType);
   openMeetingPicker({
     projectId,
     defaultTitle: preset.title,
     defaultType: meetingType,
-    defaultAttendees: preset.attendees,
-    defaultDuration: preset.duration,
+    defaultAttendees: existing ? (existing.attendees || []) : preset.attendees,
+    defaultDuration: existing && existing.startTime && existing.endTime
+      ? Math.max(15, _timeToMinutes(existing.endTime) - _timeToMinutes(existing.startTime))
+      : preset.duration,
+    replacingMeetingId: existing ? existing.id : null,
     onConfirm: (meeting) => {
       if (typeof onConfirmExtra === 'function') onConfirmExtra(meeting);
     }
@@ -12188,12 +12235,12 @@ function openMyCalendarAddMenu(event) {
   menu.className = 'mycal-add-menu';
   menu.innerHTML = `
     <button type="button" class="mycal-add-menu-item" onclick="document.getElementById('my-cal-add-menu')?.remove();openAddPersonalEventDialog()">
-      <span class="mycal-add-menu-icon">📌</span>
+      <span class="mycal-add-menu-icon"><svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="8" cy="6" r="2.5"/><path d="M3 13.5c0-2.5 2-4 5-4s5 1.5 5 4"/></svg></span>
       <span class="mycal-add-menu-label">Personal Event</span>
       <span class="mycal-add-menu-desc">PTO, sick, doctor, etc.</span>
     </button>
     <button type="button" class="mycal-add-menu-item" onclick="document.getElementById('my-cal-add-menu')?.remove();openGenericMeetingPicker()">
-      <span class="mycal-add-menu-icon">🗓️</span>
+      <span class="mycal-add-menu-icon"><svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="3" width="12" height="11" rx="1"/><path d="M2 6.5h12M5.5 1.5v3M10.5 1.5v3"/></svg></span>
       <span class="mycal-add-menu-label">Schedule Meeting</span>
       <span class="mycal-add-menu-desc">With teammates</span>
     </button>
@@ -13506,6 +13553,7 @@ const _meetingPickerState = {
   duration: 30,           // minutes
   notes: '',
   onConfirm: null,
+  replacingMeetingId: null, // when set, save deletes that meeting before creating new one (reschedule)
   // View state
   step: 'month',          // 'month' | 'day'
   visibleMonth: null,     // {year, month}
@@ -13527,6 +13575,7 @@ function openMeetingPicker(opts = {}) {
   s.duration = opts.defaultDuration || 30;
   s.notes = '';
   s.onConfirm = opts.onConfirm;
+  s.replacingMeetingId = opts.replacingMeetingId || null;
   s.step = 'month';
   s.visibleMonth = { year: today.getFullYear(), month: today.getMonth() };
   s.selectedDate = null;
@@ -14365,6 +14414,17 @@ function _mpConfirm() {
   const conflicts = _mpGetSelectionConflicts();
   if (conflicts.length > 0 && !s.pendingOverride) return;
 
+  // If this is a reschedule, delete the original meeting before creating the new one
+  if (s.replacingMeetingId != null) {
+    state.meetings = (state.meetings || []).filter(m => m.id !== s.replacingMeetingId);
+    save('vi_meetings', state.meetings);
+    // Also clean up any stale approval record for the replaced meeting
+    if (state.meetingApprovals && state.meetingApprovals[s.replacingMeetingId]) {
+      delete state.meetingApprovals[s.replacingMeetingId];
+      save('vi_meeting_approvals', state.meetingApprovals);
+    }
+  }
+
   const status = (conflicts.length > 0 && s.pendingOverride) ? 'pending_approval' : 'confirmed';
   const meeting = addMeeting({
     projectId: s.projectId,
@@ -14393,8 +14453,14 @@ function _mpConfirm() {
   }
 
   const cb = s.onConfirm;
+  const wasReschedule = !!s.replacingMeetingId;
   closeMeetingPicker();
-  showToast(status === 'pending_approval' ? 'Override request sent' : 'Meeting scheduled', 'success');
+  showToast(
+    status === 'pending_approval'
+      ? 'Override request sent'
+      : (wasReschedule ? 'Meeting rescheduled' : 'Meeting scheduled'),
+    'success'
+  );
   if (typeof cb === 'function') cb(meeting);
   renderCurrentPage();
 }
