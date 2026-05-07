@@ -12884,24 +12884,32 @@ function getMemberBusyBlocks(memberId, startDate, endDate) {
       startTime: e.startTime,
       endTime: e.endTime,
       title: displayTitle,
+      shortTitle: displayTitle,
+      contextLabel: '',
       type: 'personal',
       personalType: e.type,
       isPrivate: e.isPrivate,
       color: getPersonalEventColor(e),
+      attendeeIds: [memberId],
       sourceRef: { kind: 'personal_event', id: e.id }
     });
   });
 
   // 2. Meetings where this member is an attendee
   getMeetingsForMember(memberId, startDate, endDate).forEach(m => {
+    const proj = m.projectId ? state.projects.find(pp => pp.id === m.projectId) : null;
     blocks.push({
       date: m.date,
       startTime: m.startTime,
       endTime: m.endTime,
       title: m.title,
+      shortTitle: _meetingTypeLabel(m.type),
+      contextLabel: proj?.name || '',
       type: 'meeting',
+      meetingStatus: m.status,
       isPrivate: false,
       color: m.status === 'pending_approval' ? '#D29922' : '#58A6FF',
+      attendeeIds: Array.isArray(m.attendees) ? m.attendees : [],
       sourceRef: { kind: 'meeting', id: m.id, projectId: m.projectId }
     });
   });
@@ -12933,14 +12941,22 @@ function getMemberBusyBlocks(memberId, startDate, endDate) {
       const skipWeekend = isWeekend && storedObj.excludeWeekends !== false &&
                           !(storedObj.weekendIncludes || []).includes(ds);
       if (!skipWeekend) {
+        // Full crew on this install — install crew + PM lead (if any)
+        const crewSet = new Set();
+        (a.install || []).forEach(x => { if (x.id != null) crewSet.add(x.id); });
+        const pmLead = (a.pm || []).find(x => x.lead);
+        if (pmLead && pmLead.id != null) crewSet.add(pmLead.id);
         blocks.push({
           date: ds,
           startTime: null,
           endTime: null,
           title: `${p.name} — Install`,
+          shortTitle: 'Install',
+          contextLabel: p.name,
           type: 'install',
           isPrivate: false,
           color: win.source === 'booked' ? '#3FB950' : '#58A6FF',
+          attendeeIds: Array.from(crewSet),
           sourceRef: { kind: 'project_install', projectId: p.id }
         });
       }
@@ -13376,9 +13392,14 @@ function refreshMeetingPicker() {
 
 function renderMeetingPickerMeta() {
   const s = _meetingPickerState;
-  const team = state.team.filter(m => !m.archived);
+  // Filter team to members with valid numeric IDs (defensive against stale data)
+  const team = state.team
+    .filter(m => !m.archived && Number.isFinite(Number(m.id)))
+    .map(m => ({ ...m, id: Number(m.id) }));
+  // Also normalize attendees to numbers for consistent comparison
+  const attendeeIdsNum = (s.attendees || []).map(x => Number(x)).filter(Number.isFinite);
   const attendeeChips = team.map(m => {
-    const isOn = s.attendees.includes(m.id);
+    const isOn = attendeeIdsNum.includes(m.id);
     const initials = getInitials(m.name);
     return `<button class="mp-att-chip ${isOn ? 'active' : ''}" onclick="_mpToggleAttendee(${m.id})" style="${isOn ? `background:${m.color || '#1565C0'}33;border-color:${m.color || '#1565C0'};color:${m.color || '#58A6FF'}` : ''}" title="${esc(m.name)}">
       <span class="mp-att-init">${esc(initials)}</span>${esc(m.name.split(' ')[0])}
@@ -13412,9 +13433,15 @@ function _mpRefreshSub() {
 
 function _mpToggleAttendee(memberId) {
   const s = _meetingPickerState;
-  const idx = s.attendees.indexOf(memberId);
+  // Normalize to number (HTML inline onclick passes numeric literals,
+  // but JSON.parse on stored attendees may have strings)
+  const id = Number(memberId);
+  if (!Number.isFinite(id)) return;
+  // Normalize the entire array to numbers (one-time cleanup)
+  s.attendees = (s.attendees || []).map(x => Number(x)).filter(Number.isFinite);
+  const idx = s.attendees.indexOf(id);
   if (idx >= 0) s.attendees.splice(idx, 1);
-  else s.attendees.push(memberId);
+  else s.attendees.push(id);
   refreshMeetingPicker();
 }
 
@@ -13489,15 +13516,21 @@ function renderMeetingPickerMonth() {
     if (busy) classes.push('mp-day-has-busy');
     if (everyoneBlocked) classes.push('mp-day-fully-blocked');
 
+    // Per-attendee dots (one per busy attendee, in their member color)
+    let attendeeDotsHTML = '';
+    if (busy && busy.attendeeIds.size > 0) {
+      const dots = Array.from(busy.attendeeIds).slice(0, 4).map(mid => {
+        const m = state.team.find(x => x.id === mid);
+        const c = m?.color || '#D29922';
+        return `<span class="mp-day-att-dot" style="background:${c}" title="${esc(m?.name || '')}"></span>`;
+      }).join('');
+      const more = busy.attendeeIds.size > 4 ? `<span class="mp-day-att-more">+${busy.attendeeIds.size - 4}</span>` : '';
+      attendeeDotsHTML = `<div class="mp-day-att-dots">${dots}${more}</div>`;
+    }
     cells.push(`
       <div class="${classes.join(' ')}" ${isPast ? '' : `onclick="_mpPickDate('${dateStr}')"`}>
         <div class="mp-day-num">${day}</div>
-        ${busy ? `
-          <div class="mp-day-busy-row">
-            <div class="mp-day-busy-dot${everyoneBlocked ? ' mp-day-busy-dot-full' : ''}"></div>
-            <span class="mp-day-busy-count">${busy.count}</span>
-          </div>
-        ` : ''}
+        ${attendeeDotsHTML}
       </div>
     `);
   }
@@ -13554,79 +13587,129 @@ function renderMeetingPickerDay() {
   const d = new Date(date + 'T00:00:00');
   const longDate = d.toLocaleDateString('en-US', { weekday:'long', month:'long', day:'numeric' });
 
-  // Build 15-min slots from 8am to 8pm
-  const slots = [];
-  for (let h = 8; h < 20; h++) {
-    for (let m = 0; m < 60; m += 15) {
-      slots.push(`${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`);
-    }
-  }
-
-  // For each slot, determine which attendees are busy
-  const busyBySlot = {}; // slotTime → array of {memberId, block}
-  s.attendees.forEach(memberId => {
+  // Collect distinct busy events for the day across all selected attendees.
+  // Dedupe by sourceRef so the same install showing for multiple crew members
+  // only renders once (with all crew members listed).
+  const eventMap = new Map(); // dedupeKey → { block, attendees: Set<memberId> }
+  const attendeeIdsNum = (s.attendees || []).map(x => Number(x)).filter(Number.isFinite);
+  attendeeIdsNum.forEach(memberId => {
     getMemberBusyBlocks(memberId, date, date).forEach(block => {
       if (block.date !== date) return;
-      const blockStart = block.startTime ? _timeToMinutes(block.startTime) : 0;
-      const blockEnd = block.endTime ? _timeToMinutes(block.endTime) : 24 * 60;
-      slots.forEach(slot => {
-        const slotMin = _timeToMinutes(slot);
-        if (slotMin >= blockStart && slotMin < blockEnd) {
-          if (!busyBySlot[slot]) busyBySlot[slot] = [];
-          busyBySlot[slot].push({ memberId, block });
-        }
-      });
+      // Build dedupe key from sourceRef
+      const ref = block.sourceRef || {};
+      const key = `${ref.kind || 'x'}:${ref.id || ''}:${ref.projectId || ''}:${block.startTime || ''}:${block.endTime || ''}`;
+      if (!eventMap.has(key)) {
+        eventMap.set(key, { block, viewerAttendees: new Set() });
+      }
+      eventMap.get(key).viewerAttendees.add(memberId);
     });
   });
 
-  // Determine selection range in minutes
-  const selStartMin = s.selectedStart ? _timeToMinutes(s.selectedStart) : null;
-  const selEndMin = s.selectedEnd ? _timeToMinutes(s.selectedEnd) : null;
+  // Convert to array sorted by start time (all-day events first)
+  const events = Array.from(eventMap.values()).map(({ block, viewerAttendees }) => {
+    const startMin = block.startTime ? _timeToMinutes(block.startTime) : 0;
+    const endMin = block.endTime ? _timeToMinutes(block.endTime) : 24 * 60;
+    return { block, viewerAttendees, startMin, endMin };
+  }).sort((a, b) => {
+    // All-day first
+    const aFull = !a.block.startTime;
+    const bFull = !b.block.startTime;
+    if (aFull && !bFull) return -1;
+    if (!aFull && bFull) return 1;
+    return a.startMin - b.startMin;
+  });
 
-  const slotsHTML = slots.map(slot => {
-    const slotMin = _timeToMinutes(slot);
-    const inSelection = selStartMin !== null && selEndMin !== null &&
-                        slotMin >= selStartMin && slotMin < selEndMin;
-    const isStart = slot === s.selectedStart;
-    const busy = busyBySlot[slot] || [];
-    const isExpanded = s.expandedSlot === slot;
-    const conflictInSelection = inSelection && busy.length > 0;
+  // Build hour rows from 8am to 8pm — these form the time backdrop.
+  // Each event renders as an absolutely-positioned bar over the hour grid.
+  const HOUR_START = 8;
+  const HOUR_END = 20;
+  const HOURS = HOUR_END - HOUR_START;
+  const HOUR_HEIGHT = 44; // px — defined to match CSS
 
-    const classes = ['mp-slot'];
-    if (busy.length > 0) classes.push('mp-slot-busy');
-    if (inSelection) classes.push('mp-slot-selected');
-    if (isStart) classes.push('mp-slot-start');
-    if (conflictInSelection) classes.push('mp-slot-conflict');
-    if (isExpanded) classes.push('mp-slot-expanded');
+  const hourRowsHTML = [];
+  for (let h = HOUR_START; h < HOUR_END; h++) {
+    const time = `${String(h).padStart(2, '0')}:00`;
+    const display12 = h === 12 ? '12 PM' : (h > 12 ? `${h - 12} PM` : `${h} AM`);
+    hourRowsHTML.push(`
+      <div class="mp2-hour-row" style="height:${HOUR_HEIGHT}px">
+        <div class="mp2-hour-label">${display12}</div>
+        <div class="mp2-hour-quarters">
+          ${[0, 15, 30, 45].map((m, idx) => {
+            const slot = `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`;
+            return `<div class="mp2-quarter" data-slot="${slot}" onclick="_mpSlotClick('${slot}')"></div>`;
+          }).join('')}
+        </div>
+      </div>
+    `);
+  }
 
-    // Show time label only on top of each hour
-    const showLabel = slot.endsWith(':00');
-
+  // Position events as absolute bars
+  const eventBarsHTML = events.map(e => {
+    if (!e.block.startTime) {
+      // All-day event — render at top
+      const names = Array.from(e.viewerAttendees).map(mid => {
+        const tm = getTeamMember(mid);
+        return tm?.name?.split(' ')[0] || '?';
+      }).join(', ');
+      return `
+        <div class="mp2-allday-bar" style="background:${e.block.color}26;border-left-color:${e.block.color}">
+          <span class="mp2-event-label" style="color:${e.block.color}">${esc(e.block.shortTitle || e.block.title)}</span>
+          ${e.block.contextLabel ? `<span class="mp2-event-context">${esc(e.block.contextLabel)}</span>` : ''}
+          <span class="mp2-event-people">· ${esc(names)}</span>
+        </div>
+      `;
+    }
+    return '';
+  }).join('') + events.filter(e => e.block.startTime).map(e => {
+    const topPx = ((e.startMin - HOUR_START * 60) / 60) * HOUR_HEIGHT;
+    const heightPx = Math.max(((e.endMin - e.startMin) / 60) * HOUR_HEIGHT, 16);
+    if (e.endMin <= HOUR_START * 60 || e.startMin >= HOUR_END * 60) return '';
+    const names = Array.from(e.viewerAttendees).map(mid => {
+      const tm = getTeamMember(mid);
+      return tm?.name?.split(' ')[0] || '?';
+    }).join(', ');
     return `
-      <div class="${classes.join(' ')}" data-slot="${slot}" onclick="_mpSlotClick('${slot}')">
-        ${showLabel ? `<div class="mp-slot-label">${slot}</div>` : ''}
-        ${busy.length > 0 ? `
-          <div class="mp-slot-busy-marker">
-            ${busy.length} busy
-            <button type="button" class="mp-slot-expand-btn" onclick="event.stopPropagation();_mpToggleSlotExpand('${slot}')">
-              ${isExpanded ? '▾' : '▸'}
-            </button>
-          </div>
-        ` : ''}
-        ${isExpanded && busy.length > 0 ? `
-          <div class="mp-slot-busy-detail">
-            ${busy.map(b => {
-              const m = getTeamMember(b.memberId);
-              return `<div class="mp-slot-busy-row" style="border-left-color:${b.block.color}">
-                <span style="color:${b.block.color};font-weight:600">${esc(m?.name.split(' ')[0] || '?')}</span>
-                <span style="color:#8B949E"> &middot; ${esc(b.block.title)}</span>
-              </div>`;
-            }).join('')}
-          </div>
-        ` : ''}
+      <div class="mp2-event-bar" style="top:${topPx}px;height:${heightPx}px;background:${e.block.color}26;border-left-color:${e.block.color}" onclick="event.stopPropagation();_mpShowEventDetail('${esc(e.block.shortTitle || e.block.title)}','${esc(e.block.contextLabel || '')}','${esc(names)}','${esc(e.block.startTime)}','${esc(e.block.endTime || '')}','${e.block.color}')">
+        <div class="mp2-event-bar-content">
+          <span class="mp2-event-label" style="color:${e.block.color}">${esc(e.block.shortTitle || e.block.title)}</span>
+          ${e.block.contextLabel ? `<span class="mp2-event-context">${esc(e.block.contextLabel)}</span>` : ''}
+          <span class="mp2-event-people">· ${esc(names)}</span>
+        </div>
       </div>
     `;
   }).join('');
+
+  // Selection overlay (start + duration)
+  let selectionOverlayHTML = '';
+  if (s.selectedStart && s.selectedEnd) {
+    const ss = _timeToMinutes(s.selectedStart);
+    const se = _timeToMinutes(s.selectedEnd);
+    if (se > HOUR_START * 60 && ss < HOUR_END * 60) {
+      const clipStart = Math.max(ss, HOUR_START * 60);
+      const clipEnd = Math.min(se, HOUR_END * 60);
+      const topPx = ((clipStart - HOUR_START * 60) / 60) * HOUR_HEIGHT;
+      const heightPx = ((clipEnd - clipStart) / 60) * HOUR_HEIGHT;
+      const conflicts = _mpGetSelectionConflicts();
+      const isConflict = conflicts.length > 0;
+      selectionOverlayHTML = `
+        <div class="mp2-selection ${isConflict ? 'mp2-selection-conflict' : ''}" style="top:${topPx}px;height:${heightPx}px">
+          <div class="mp2-selection-label">${esc(s.selectedStart)} – ${esc(s.selectedEnd)}${isConflict ? ' · ⚠ conflict' : ''}</div>
+        </div>
+      `;
+    }
+  }
+
+  // Legend — what each color represents
+  const legendHTML = events.length === 0 ? '' : `
+    <div class="mp2-legend">
+      ${events.slice(0, 6).map(e => `
+        <span class="mp2-legend-item">
+          <span class="mp2-legend-bar" style="background:${e.block.color}"></span>
+          ${esc(e.block.shortTitle || e.block.title)}
+        </span>
+      `).join('')}
+    </div>
+  `;
 
   return `
     <div class="mp-day-header">
@@ -13636,9 +13719,37 @@ function renderMeetingPickerDay() {
       </button>
       <div class="mp-day-name">${esc(longDate)}</div>
     </div>
-    <div class="mp-day-hint">Tap a free slot to set the start time. Duration: ${s.duration} min.</div>
-    <div class="mp-slots">${slotsHTML}</div>
+    <div class="mp-day-hint">Tap a time to set the start. Duration: ${s.duration} min.</div>
+    ${legendHTML}
+    <div class="mp2-day-grid">
+      <div class="mp2-day-grid-inner" style="height:${HOURS * HOUR_HEIGHT}px">
+        ${hourRowsHTML.join('')}
+        <div class="mp2-events-layer">
+          ${eventBarsHTML}
+          ${selectionOverlayHTML}
+        </div>
+      </div>
+    </div>
   `;
+}
+
+// Show a small inline detail when user taps an event bar
+function _mpShowEventDetail(title, context, people, startTime, endTime, color) {
+  document.getElementById('mp-event-detail-popup')?.remove();
+  const overlay = document.createElement('div');
+  overlay.id = 'mp-event-detail-popup';
+  overlay.className = 'mp2-detail-overlay';
+  overlay.innerHTML = `
+    <div class="mp2-detail-card" style="border-left:3px solid ${color}">
+      <div class="mp2-detail-title" style="color:${color}">${esc(title)}</div>
+      ${context ? `<div class="mp2-detail-context">${esc(context)}</div>` : ''}
+      <div class="mp2-detail-time">${esc(startTime)}${endTime ? ' – ' + esc(endTime) : ''}</div>
+      <div class="mp2-detail-people">With: ${esc(people)}</div>
+      <button type="button" class="btn btn-sm" onclick="document.getElementById('mp-event-detail-popup')?.remove()" style="margin-top:8px;font-size:11px">Close</button>
+    </div>
+  `;
+  document.body.appendChild(overlay);
+  overlay.addEventListener('click', e => { if (e.target === overlay) overlay.remove(); });
 }
 
 function _mpSlotClick(slot) {
