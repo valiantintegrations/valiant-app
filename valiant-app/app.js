@@ -13554,14 +13554,18 @@ function renderMeetingPickerMonth() {
     const dow = d.getDay();
     const isWeekend = dow === 0 || dow === 6;
     const busy = busyByDate[dateStr];
-    const everyoneBlocked = busy && busy.attendeeIds.size === s.attendees.length && busy.hasFullDay;
+    // Red "fully blocked" treatment fires when ANY selected attendee has a full-day
+    // blocker (PTO, sick, install, etc.). Was previously gated on "ALL attendees full-day
+    // blocked" which dropped the red as soon as you added an attendee who happened to be
+    // free that day — confusing because the day STILL had a hard conflict.
+    const anyFullDayBlocker = busy && busy.hasFullDay;
 
     const classes = ['mp-day'];
     if (isToday) classes.push('mp-day-today');
     if (isPast) classes.push('mp-day-past');
     if (isWeekend) classes.push('mp-day-weekend');
     if (busy) classes.push('mp-day-has-busy');
-    if (everyoneBlocked) classes.push('mp-day-fully-blocked');
+    if (anyFullDayBlocker) classes.push('mp-day-fully-blocked');
 
     // Build event labels (one per distinct event) — show up to 2, with overflow indicator
     let eventsHTML = '';
