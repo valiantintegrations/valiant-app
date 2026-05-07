@@ -4198,11 +4198,36 @@ td.today .cal-day-num {
   background: rgba(88, 166, 255, 0.18);
   border: 2px solid #58A6FF;
   border-radius: 4px;
-  pointer-events: none;
+  pointer-events: auto;
+  cursor: grab;
   z-index: 5;
   display: flex;
   align-items: flex-start;
+  justify-content: space-between;
   padding: 4px 8px;
+  user-select: none;
+  -webkit-user-select: none;
+  touch-action: none;
+}
+.mp2-selection:hover {
+  background: rgba(88, 166, 255, 0.26);
+}
+.mp2-selection-dragging {
+  cursor: grabbing !important;
+  background: rgba(88, 166, 255, 0.34) !important;
+  box-shadow: 0 4px 16px rgba(88, 166, 255, 0.4);
+}
+.mp2-selection-grip {
+  font-size: 9px;
+  color: #58A6FF;
+  letter-spacing: -2px;
+  opacity: 0.6;
+  font-weight: 700;
+  margin-left: auto;
+  align-self: center;
+}
+.mp2-selection-conflict .mp2-selection-grip {
+  color: #F85149;
 }
 .mp2-selection-conflict {
   background: rgba(218, 54, 51, 0.18);
@@ -4331,4 +4356,65 @@ td.today .cal-day-num {
   .mp-day { height: 64px; padding: 4px; }
   .mp-day-event-init { display: none; }
   .mp-day-event-label { font-size: 8px; }
+}
+
+/* ── Meeting Picker — month day hover preview ── */
+.mp-hover-preview {
+  position: fixed;
+  z-index: 250;
+  background: #161B22;
+  border: 1px solid #30363D;
+  border-radius: 8px;
+  padding: 10px 12px;
+  min-width: 220px;
+  max-width: 320px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.6);
+  pointer-events: none;
+  animation: mpHoverFadeIn 0.12s ease-out;
+}
+@keyframes mpHoverFadeIn {
+  from { opacity: 0; transform: translateY(-2px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+.mp-hover-title {
+  font-size: 12px;
+  font-weight: 700;
+  color: #E6EDF3;
+  margin-bottom: 8px;
+  padding-bottom: 6px;
+  border-bottom: 1px solid #1C2333;
+}
+.mp-hover-events {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.mp-hover-event {
+  border-left: 2px solid;
+  padding-left: 8px;
+}
+.mp-hover-event-row {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+}
+.mp-hover-event-label {
+  font-size: 12px;
+  font-weight: 600;
+}
+.mp-hover-event-time {
+  font-size: 10px;
+  color: #8B949E;
+  flex-shrink: 0;
+}
+.mp-hover-event-context {
+  font-size: 11px;
+  color: #C9D1D9;
+  margin-top: 1px;
+}
+.mp-hover-event-people {
+  font-size: 10px;
+  color: #6E7681;
+  margin-top: 2px;
 }
