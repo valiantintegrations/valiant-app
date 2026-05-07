@@ -3884,7 +3884,7 @@ td.today .cal-day-num {
   gap: 4px;
 }
 .mp-day {
-  aspect-ratio: 1 / 1;
+  height: 88px;
   background: #0D1117;
   border: 1px solid #1C2333;
   border-radius: 6px;
@@ -3892,9 +3892,10 @@ td.today .cal-day-num {
   cursor: pointer;
   display: flex;
   flex-direction: column;
-  justify-content: space-between;
+  align-items: stretch;
   -webkit-tap-highlight-color: transparent;
   transition: border-color 0.1s, background 0.1s;
+  overflow: hidden;
 }
 .mp-day:hover { background: #161B22; border-color: #30363D; }
 .mp-day-blank {
@@ -4286,18 +4287,13 @@ td.today .cal-day-num {
 }
 
 /* ── Meeting Picker — month cell event labels ── */
-.mp-day {
-  /* Bigger min-height so events fit */
-  min-height: 80px;
-  align-items: stretch;
-}
 .mp-day-events {
   display: flex;
   flex-direction: column;
   gap: 2px;
   margin-top: 4px;
-  flex: 1;
   overflow: hidden;
+  min-height: 0;
 }
 .mp-day-event {
   display: flex;
@@ -4332,7 +4328,7 @@ td.today .cal-day-num {
 
 /* On smaller screens, hide initials part to save space */
 @media (max-width: 700px) {
-  .mp-day { min-height: 60px; }
+  .mp-day { height: 64px; padding: 4px; }
   .mp-day-event-init { display: none; }
   .mp-day-event-label { font-size: 8px; }
 }
