@@ -3008,7 +3008,7 @@ function renderDashboard(c) {
     tabs.push({ key: 'design_mgmt', label: 'Design Dept' });
   }
   if (canSeeInstallMgmt) {
-    tabs.push({ key: 'install_mgmt', label: 'Planning' });
+    tabs.push({ key: 'install_mgmt', label: 'Operations' });
   }
   if (canSeeAllProjects) tabs.push({ key: 'pipeline', label: 'Full Pipeline' });
 
@@ -3304,7 +3304,7 @@ function renderMyCalendarCard(memberId) {
                 <div class="my-cal-item" style="border-left-color:${item.color}">
                   <span class="my-cal-item-dot" style="background:${item.color}"></span>
                   <span class="my-cal-item-title">${esc(item.title)}</span>
-                  ${item.startTime ? `<span class="my-cal-item-time">${esc(item.startTime)}${item.endTime ? '–' + item.endTime : ''}</span>` : ''}
+                  ${item.startTime ? `<span class="my-cal-item-time">${esc(_fmt12hRange(item.startTime, item.endTime))}</span>` : ''}
                 </div>
               `).join('')}
               ${d.items.length > 3 ? `<div class="my-cal-item-more">+${d.items.length - 3} more</div>` : ''}
@@ -6632,6 +6632,7 @@ async function renderLocationTab(container, project) {
 
   if (!address) {
     container.innerHTML = `
+      ${renderMobilizationResumeBanner(project.id)}
       <div class="dashboard-card">
         <div class="dashboard-card-title">Location</div>
         <div style="padding:20px;text-align:center;color:#8B949E;font-size:13px">
@@ -6646,6 +6647,7 @@ async function renderLocationTab(container, project) {
 
   // Show scaffold immediately
   container.innerHTML = `
+    ${renderMobilizationResumeBanner(project.id)}
     <div id="location-tab-root">
       <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;flex-wrap:wrap;gap:10px">
         <div>
@@ -11874,6 +11876,53 @@ function closeMobilizationDialog() {
   renderCurrentPage();
 }
 
+// "Resume mobilization" mechanic — when a checklist item needs the user to leave
+// the dialog and visit a project page, we record which project's checklist they
+// were in, close the dialog, and navigate. The destination page renders a
+// floating "Resume Mobilization →" button that brings them back exactly where
+// they left off.
+let _mobilizationResumeProjectId = null;
+
+function openSiteBriefingFromMobilization(projectId) {
+  _mobilizationResumeProjectId = projectId;
+  document.getElementById('mobilization-dialog')?.remove();
+  openProject(projectId, 'location');
+}
+
+function resumeMobilizationChecklist() {
+  const pid = _mobilizationResumeProjectId;
+  if (pid == null) return;
+  _mobilizationResumeProjectId = null;
+  openMobilizationDialog(pid);
+}
+
+function dismissMobilizationResume() {
+  _mobilizationResumeProjectId = null;
+  // Re-render the current page so the floating button disappears
+  renderCurrentPage();
+}
+
+// Returns the floating "Resume Mobilization" banner HTML when the user came
+// here from the mobilization dialog. Pages that participate (Location for site
+// briefing) include this in their render.
+function renderMobilizationResumeBanner(projectId) {
+  if (_mobilizationResumeProjectId !== projectId) return '';
+  const p = state.projects.find(x => x.id === projectId);
+  if (!p) return '';
+  return `
+    <div class="mob-resume-banner">
+      <div class="mob-resume-banner-text">
+        <strong>Mobilization in progress</strong>
+        <span>Add pins for the site briefing, then return to finish the checklist.</span>
+      </div>
+      <div class="mob-resume-banner-actions">
+        <button type="button" class="btn btn-sm" onclick="dismissMobilizationResume()">Dismiss</button>
+        <button type="button" class="btn-primary" onclick="resumeMobilizationChecklist()" style="font-size:12px;padding:6px 14px">Resume Mobilization →</button>
+      </div>
+    </div>
+  `;
+}
+
 function renderMobilizationBody(projectId) {
   const p = state.projects.find(x => x.id === projectId);
   if (!p) return '';
@@ -11912,7 +11961,7 @@ function renderMobilizationBody(projectId) {
         .sort((a, b) => (b.createdAt || '').localeCompare(a.createdAt || ''))[0];
       if (dkMeeting) {
         const dStr = new Date(dkMeeting.date + 'T00:00:00').toLocaleDateString('en-US', { weekday:'short', month:'short', day:'numeric' });
-        const timeStr = dkMeeting.startTime ? `${dkMeeting.startTime}–${dkMeeting.endTime}` : 'all day';
+        const timeStr = dkMeeting.startTime ? _fmt12hRange(dkMeeting.startTime, dkMeeting.endTime) : 'all day';
         const statusColor = dkMeeting.status === 'pending_approval' ? '#D29922' : '#3FB950';
         const statusLabel = dkMeeting.status === 'pending_approval' ? ' · pending approval' : '';
         detail = `<span style="color:${statusColor}">${esc(dStr)} · ${esc(timeStr)}${statusLabel}</span>`;
@@ -11994,10 +12043,10 @@ function renderMobilizationItemAction(projectId, itemKey, done) {
     const flags = state.mobilizationFlags?.[projectId] || {};
     const pinsCount = (state.projectPins?.[projectId] || []).length;
     if (pinsCount > 0) {
-      return `<button type="button" class="btn btn-sm" onclick="openProject(${projectId},'location')" style="font-size:11px;padding:4px 10px">Open</button>`;
+      return `<button type="button" class="btn btn-sm" onclick="openSiteBriefingFromMobilization(${projectId})" style="font-size:11px;padding:4px 10px">Open</button>`;
     }
     return `
-      <button type="button" class="btn btn-sm" onclick="openProject(${projectId},'location')" style="font-size:11px;padding:4px 10px">Open</button>
+      <button type="button" class="btn btn-sm" onclick="openSiteBriefingFromMobilization(${projectId})" style="font-size:11px;padding:4px 10px">Open</button>
       <button type="button" class="btn btn-sm" onclick="toggleMobilizationFlag(${projectId},'site_briefing_skipped')" style="font-size:11px;padding:4px 10px">${flags.site_briefing_skipped ? 'Un-skip' : 'Skip'}</button>
     `;
   }
@@ -13060,7 +13109,7 @@ function renderCalendarDayDetail(dateStr) {
             <div class="day-detail-section-title">Meetings</div>
             ${allMeetings.map(m => {
               const proj = m.projectId ? state.projects.find(pp => pp.id === m.projectId) : null;
-              const timeStr = m.startTime && m.endTime ? `${m.startTime} – ${m.endTime}` : (m.startTime || 'All day');
+              const timeStr = m.startTime && m.endTime ? _fmt12hRange(m.startTime, m.endTime) : (m.startTime ? _fmt12h(m.startTime) : 'All day');
               return `
                 <div class="day-detail-item" style="border-left-color:#58A6FF">
                   <div class="day-detail-item-title">${esc(m.title)}</div>
@@ -13091,7 +13140,7 @@ function renderCalendarDayDetail(dateStr) {
               const viewerIsOwner = pe.memberId === viewerId;
               const label = getPersonalEventDisplayLabel(pe, viewerIsOwner);
               const color = getPersonalEventColor(pe);
-              const timeStr = pe.startTime && pe.endTime ? `${pe.startTime} – ${pe.endTime}` : 'All day';
+              const timeStr = pe.startTime && pe.endTime ? _fmt12hRange(pe.startTime, pe.endTime) : 'All day';
               return `
                 <div class="day-detail-item" style="border-left-color:${color}">
                   <div class="day-detail-item-title" style="color:${color}">${esc(label)}</div>
@@ -13506,6 +13555,41 @@ function _timeToMinutes(timeStr) {
   return h * 60 + m;
 }
 
+// Convert "HH:MM" (24h) → "h:MM AM/PM". Edge cases:
+//   "00:00" → "12:00 AM" (midnight)
+//   "00:15" → "12:15 AM"
+//   "12:00" → "12:00 PM" (noon)
+//   "13:30" → "1:30 PM"
+// Internal storage stays 24h; this is display-only.
+function _fmt12h(timeStr) {
+  if (!timeStr) return '';
+  const parts = timeStr.split(':');
+  if (parts.length < 2) return timeStr;
+  let h = parseInt(parts[0], 10);
+  const m = parts[1];
+  if (!Number.isFinite(h)) return timeStr;
+  const suffix = h >= 12 ? 'PM' : 'AM';
+  let h12 = h % 12;
+  if (h12 === 0) h12 = 12;
+  return `${h12}:${m} ${suffix}`;
+}
+
+// Format a time range. "HH:MM" + "HH:MM" → "h:MM AM – h:MM PM" with the AM/PM
+// dropped on the start when both halves of the range are in the same period.
+function _fmt12hRange(start, end) {
+  if (!start) return '';
+  if (!end) return _fmt12h(start);
+  const startFmt = _fmt12h(start);
+  const endFmt = _fmt12h(end);
+  // If start and end share AM/PM, drop the suffix from the start
+  const startSuffix = startFmt.slice(-2);
+  const endSuffix = endFmt.slice(-2);
+  if (startSuffix === endSuffix) {
+    return `${startFmt.slice(0, -3)} – ${endFmt}`;
+  }
+  return `${startFmt} – ${endFmt}`;
+}
+
 // ── Month view ──
 function renderMeetingPickerMonth() {
   const s = _meetingPickerState;
@@ -13760,7 +13844,7 @@ function renderMeetingPickerDay() {
       const isConflict = conflicts.length > 0;
       selectionOverlayHTML = `
         <div class="mp2-selection ${isConflict ? 'mp2-selection-conflict' : ''}" id="mp2-selection-block" style="top:${topPx}px;height:${heightPx}px" onmousedown="_mpStartSelectionDrag(event)" ontouchstart="_mpStartSelectionDrag(event)">
-          <div class="mp2-selection-label">${esc(s.selectedStart)} – ${esc(s.selectedEnd)}${isConflict ? ' · ⚠ conflict' : ''}</div>
+          <div class="mp2-selection-label">${esc(_fmt12hRange(s.selectedStart, s.selectedEnd))}${isConflict ? ' · ⚠ conflict' : ''}</div>
           <div class="mp2-selection-grip" aria-hidden="true">⋮⋮</div>
         </div>
       `;
@@ -13980,7 +14064,7 @@ function _mpRenderHoverPreview(cell, dateStr) {
           return tm?.name?.split(' ')[0] || '?';
         }).join(', ');
         const timeStr = block.startTime
-          ? `${block.startTime}${block.endTime ? '–' + block.endTime : ''}`
+          ? _fmt12hRange(block.startTime, block.endTime)
           : 'all day';
         const label = block.contextLabel || block.shortTitle || block.title || 'Event';
         return `
@@ -14028,7 +14112,7 @@ function _mpShowEventDetail(title, context, people, startTime, endTime, color) {
     <div class="mp2-detail-card" style="border-left:3px solid ${color}">
       <div class="mp2-detail-title" style="color:${color}">${esc(title)}</div>
       ${context ? `<div class="mp2-detail-context">${esc(context)}</div>` : ''}
-      <div class="mp2-detail-time">${esc(startTime)}${endTime ? ' – ' + esc(endTime) : ''}</div>
+      <div class="mp2-detail-time">${esc(_fmt12hRange(startTime, endTime))}</div>
       <div class="mp2-detail-people">With: ${esc(people)}</div>
       <button type="button" class="btn btn-sm" onclick="document.getElementById('mp-event-detail-popup')?.remove()" style="margin-top:8px;font-size:11px">Close</button>
     </div>
@@ -14084,7 +14168,7 @@ function renderMeetingPickerFooter() {
   if (s.selectedDate && s.selectedStart) {
     const d = new Date(s.selectedDate + 'T00:00:00');
     const dateStr = d.toLocaleDateString('en-US', { month:'short', day:'numeric' });
-    summary = `<div class="mp-summary"><strong>${esc(dateStr)}</strong> · ${esc(s.selectedStart)}–${esc(s.selectedEnd)} · ${s.attendees.length} attendee${s.attendees.length === 1 ? '' : 's'}</div>`;
+    summary = `<div class="mp-summary"><strong>${esc(dateStr)}</strong> · ${esc(_fmt12hRange(s.selectedStart, s.selectedEnd))} · ${s.attendees.length} attendee${s.attendees.length === 1 ? '' : 's'}</div>`;
   } else if (s.attendees.length === 0) {
     summary = `<div class="mp-summary" style="color:#D29922">Add at least one attendee</div>`;
   } else if (!s.selectedDate) {
@@ -14248,7 +14332,7 @@ function renderPendingApprovalsCard() {
           <div style="background:#0D1117;border:1px solid #1C2333;border-radius:6px;padding:10px 12px;margin-bottom:6px">
             <div style="font-size:13px;color:#E6EDF3;font-weight:500">${esc(m.title)}</div>
             <div style="font-size:11px;color:#8B949E;margin-top:3px">
-              ${esc(dStr)} · ${esc(m.startTime)}–${esc(m.endTime)}
+              ${esc(dStr)} · ${esc(_fmt12hRange(m.startTime, m.endTime))}
               ${proj ? ` · ${esc(proj.name)}` : ''}
               ${requester ? ` · requested by ${esc(requester.name.split(' ')[0])}` : ''}
             </div>
