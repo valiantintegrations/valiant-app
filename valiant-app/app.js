@@ -3256,7 +3256,7 @@ function renderMyCalendarCard(memberId) {
       <div data-context-section="my-calendar" class="dashboard-card" style="margin-bottom:14px">
         <div class="dashboard-card-title" style="display:flex;align-items:center;justify-content:space-between">
           <span>My Calendar &middot; Next 7 Days</span>
-          <button type="button" class="btn btn-sm" onclick="openAddPersonalEventDialog()" style="font-size:10px;padding:3px 8px">+ Add</button>
+          <button type="button" class="btn btn-sm" onclick="event.stopPropagation();openMyCalendarAddMenu(event)" style="font-size:10px;padding:3px 8px">+ Add</button>
         </div>
         <div style="font-size:12px;color:#6E7681;font-style:italic;padding:8px 0">Nothing scheduled this week</div>
       </div>
@@ -3290,7 +3290,7 @@ function renderMyCalendarCard(memberId) {
     <div data-context-section="my-calendar" class="dashboard-card" style="margin-bottom:14px">
       <div class="dashboard-card-title" style="display:flex;align-items:center;justify-content:space-between">
         <span>My Calendar &middot; Next 7 Days</span>
-        <button type="button" class="btn btn-sm" onclick="openAddPersonalEventDialog()" style="font-size:10px;padding:3px 8px">+ Add</button>
+        <button type="button" class="btn btn-sm" onclick="event.stopPropagation();openMyCalendarAddMenu(event)" style="font-size:10px;padding:3px 8px">+ Add</button>
       </div>
       <div class="my-cal-list">
         ${dayList.map(d => `
@@ -4548,7 +4548,9 @@ function renderProjectProgressHTML(p) {
                         ? '<svg width="12" height="12" viewBox="0 0 14 14" fill="none"><rect x="1.5" y="3" width="11" height="8" rx="1" stroke="currentColor" stroke-width="1.3"/><path d="M2 4l5 4 5-4" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/></svg>'
                         : action.type === 'tab'
                           ? '<svg width="12" height="12" viewBox="0 0 14 14" fill="none"><path d="M5 3l4 4-4 4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>'
-                          : '<svg width="12" height="12" viewBox="0 0 14 14" fill="none"><path d="M7 3v8M3 7h8" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>'}
+                          : action.type === 'meeting'
+                            ? '<svg width="12" height="12" viewBox="0 0 14 14" fill="none"><rect x="2" y="3" width="10" height="9" rx="1" stroke="currentColor" stroke-width="1.3"/><path d="M2 6h10M5 1.5v3M9 1.5v3" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/></svg>'
+                            : '<svg width="12" height="12" viewBox="0 0 14 14" fill="none"><path d="M7 3v8M3 7h8" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>'}
                       <span>${esc(action.label)}</span>
                     </button>
                   ` : ''}
@@ -5290,10 +5292,9 @@ const MILESTONE_ACTIONS = {
     handler: 'showEstimatedInstallDialog'
   },
   'design.design_kickoff': {
-    type: 'dialog',
-    label: 'Log Kickoff Meeting',
-    handler: 'showLogMeetingDialog',
-    arg: 'kickoff'
+    type: 'meeting',
+    label: 'Schedule Kickoff Meeting',
+    meetingType: 'design_kickoff'
   },
   'design.design_completed': {
     type: 'tab',
@@ -5301,10 +5302,9 @@ const MILESTONE_ACTIONS = {
     tab: 'design'
   },
   'design.design_handoff': {
-    type: 'dialog',
-    label: 'Log Handoff Meeting',
-    handler: 'showLogMeetingDialog',
-    arg: 'handoff'
+    type: 'meeting',
+    label: 'Schedule Ops Handoff',
+    meetingType: 'handoff'
   },
   'planning.client_expect_sent': {
     type: 'email',
@@ -5344,6 +5344,9 @@ function triggerMilestoneAction(projectId, phaseKey, milestoneKey) {
     switchProjectTab(action.tab);
   } else if (action.type === 'email') {
     showMilestoneEmailDialog(projectId, phaseKey, milestoneKey, action.template);
+  } else if (action.type === 'meeting') {
+    // Opens meeting picker with project preset for the given meeting type
+    openProjectMeetingPicker(projectId, action.meetingType);
   } else if (action.type === 'dialog') {
     // Call the named handler with project id (and arg if present)
     const fn = window[action.handler];
@@ -5785,6 +5788,21 @@ function showToolsAssignDialog(projectId) {
 }
 
 function getMilestone(projectId, phaseKey, milestoneKey) {
+  // Auto-derived from meetings: if a confirmed-or-pending meeting of the
+  // relevant type exists for this project, the milestone is implicitly done.
+  // The user can still mark it done manually; this just adds another path.
+  const meetingTypeForMilestone = {
+    'design.design_kickoff': 'design_kickoff',
+    'design.design_handoff': 'handoff'
+  };
+  const expectedType = meetingTypeForMilestone[`${phaseKey}.${milestoneKey}`];
+  if (expectedType) {
+    const has = (state.meetings || []).some(m =>
+      m.projectId === projectId && m.type === expectedType &&
+      (m.status === 'confirmed' || m.status === 'pending_approval')
+    );
+    if (has) return true;
+  }
   return state.milestones?.[projectId]?.[phaseKey]?.[milestoneKey] || false;
 }
 
@@ -6411,7 +6429,8 @@ function renderCalendar(c) {
         </div>
         <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
           <button class="cal-btn" onclick="calToday()" style="width:auto;padding:0 10px;font-size:11px">Today</button>
-          <button class="btn-primary" onclick="openAddPersonalEventDialog()" style="font-size:11px;padding:6px 12px">+ Personal Event</button>
+          <button class="btn" onclick="openAddPersonalEventDialog()" style="font-size:11px;padding:6px 12px">+ Personal Event</button>
+          <button class="btn-primary" onclick="openGenericMeetingPicker()" style="font-size:11px;padding:6px 12px">+ Schedule Meeting</button>
         </div>
       </div>
       ${renderCalendarFilters()}
@@ -11273,6 +11292,14 @@ init();
 
 const QUICK_ACTIONS = [
   {
+    key: 'schedule_meeting',
+    label: 'Schedule a meeting',
+    desc: 'Pick a date, time, and attendees',
+    icon: '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="18" rx="2"/><path d="M3 10h18M8 2v4M16 2v4"/></svg>',
+    handler: () => openGenericMeetingPicker(),
+    available: true
+  },
+  {
     key: 'meeting',
     label: 'Log a meeting',
     desc: 'Record meeting notes against a project',
@@ -12064,28 +12091,138 @@ function renderMobilizationItemAction(projectId, itemKey, done) {
 
 // Opens the meeting picker pre-configured for the project's design kickoff.
 // Defaults: title = "Design Kickoff · {project}", attendees = [Design Lead, PM Lead], 60 min.
-function openMobilizationDesignKickoffPicker(projectId) {
+// ── Project meeting presets ──
+// Generic system that provides default attendees + duration for each meeting
+// type given a project. Used by every entry point that schedules a project
+// meeting (mobilization checklist, progress milestones, etc.).
+function getProjectMeetingPreset(projectId, meetingType) {
   const p = state.projects.find(x => x.id === projectId);
-  if (!p) return;
+  if (!p) return null;
   const a = getProjectAssignment(projectId);
-  const designLead = (a.design || []).find(x => x.lead);
-  const pmLead = (a.pm || []).find(x => x.lead);
-  const defaultAttendees = [];
-  if (designLead) defaultAttendees.push(designLead.id);
-  if (pmLead) defaultAttendees.push(pmLead.id);
+  const salesLead    = (a.sales || []).find(x => x.lead);
+  const designLead   = (a.design || []).find(x => x.lead);
+  const pmLead       = (a.pm || []).find(x => x.lead);
+  const installLead  = (a.install || []).find(x => x.lead);
 
+  // Default attendee ID list per type
+  const attendeesByType = {
+    walkthrough:     [salesLead].filter(Boolean),
+    design_kickoff:  [salesLead, designLead, pmLead].filter(Boolean),
+    handoff:         [salesLead, designLead, pmLead, installLead].filter(Boolean),
+    install_kickoff: (() => {
+      // PM Lead + entire install crew (lead + non-lead)
+      const list = [];
+      if (pmLead) list.push(pmLead);
+      (a.install || []).forEach(x => {
+        if (!list.find(y => y.id === x.id)) list.push(x);
+      });
+      return list;
+    })(),
+    closeout:        [pmLead, salesLead].filter(Boolean),
+    misc:            []
+  };
+
+  const durationByType = {
+    walkthrough:     60,
+    design_kickoff:  60,
+    handoff:         60,
+    install_kickoff: 60,
+    closeout:        30,
+    misc:            30
+  };
+
+  const attendees = (attendeesByType[meetingType] || []).map(x => x.id).filter(id => id != null);
+  const duration  = durationByType[meetingType] || 30;
+  const typeLabel = _meetingTypeLabel(meetingType);
+
+  return {
+    title: `${typeLabel} · ${p.name}`,
+    attendees,
+    duration
+  };
+}
+
+// Generic opener — used by every project meeting entry point.
+//   onConfirmExtra: optional callback to run after picker confirm (in addition
+//   to the default renderCurrentPage). Useful for refreshing dialogs that own
+//   the entry point (e.g., mobilization dialog).
+function openProjectMeetingPicker(projectId, meetingType, onConfirmExtra) {
+  const preset = getProjectMeetingPreset(projectId, meetingType);
+  if (!preset) return;
   openMeetingPicker({
     projectId,
-    defaultTitle: `Design Kickoff · ${p.name}`,
-    defaultType: 'design_kickoff',
-    defaultAttendees,
-    defaultDuration: 60,
+    defaultTitle: preset.title,
+    defaultType: meetingType,
+    defaultAttendees: preset.attendees,
+    defaultDuration: preset.duration,
     onConfirm: (meeting) => {
-      // Refresh the mobilization dialog body so the design_kickoff item updates
-      // (getMobilizationState now sees the meeting via state.meetings → derives true)
-      refreshMobilizationBody(projectId);
+      if (typeof onConfirmExtra === 'function') onConfirmExtra(meeting);
     }
   });
+}
+
+// Mobilization-specific opener — refreshes the mobilization dialog body after save.
+function openMobilizationDesignKickoffPicker(projectId) {
+  openProjectMeetingPicker(projectId, 'design_kickoff', () => refreshMobilizationBody(projectId));
+}
+
+// Generic "Schedule Meeting" with no project context — used by Quick Actions,
+// Calendar page, and My Work. The user picks attendees themselves.
+function openGenericMeetingPicker() {
+  openMeetingPicker({
+    defaultTitle: 'Meeting',
+    defaultType: 'misc',
+    defaultAttendees: [getActiveTeamMemberId()].filter(id => id != null),
+    defaultDuration: 30
+  });
+}
+
+// Small popup menu for the My Calendar card "+ Add" button.
+// Lets user pick: Personal Event or Schedule Meeting.
+function openMyCalendarAddMenu(event) {
+  document.getElementById('my-cal-add-menu')?.remove();
+  const btn = event.currentTarget;
+  const rect = btn.getBoundingClientRect();
+  const menu = document.createElement('div');
+  menu.id = 'my-cal-add-menu';
+  menu.className = 'mycal-add-menu';
+  menu.innerHTML = `
+    <button type="button" class="mycal-add-menu-item" onclick="document.getElementById('my-cal-add-menu')?.remove();openAddPersonalEventDialog()">
+      <span class="mycal-add-menu-icon">📌</span>
+      <span class="mycal-add-menu-label">Personal Event</span>
+      <span class="mycal-add-menu-desc">PTO, sick, doctor, etc.</span>
+    </button>
+    <button type="button" class="mycal-add-menu-item" onclick="document.getElementById('my-cal-add-menu')?.remove();openGenericMeetingPicker()">
+      <span class="mycal-add-menu-icon">🗓️</span>
+      <span class="mycal-add-menu-label">Schedule Meeting</span>
+      <span class="mycal-add-menu-desc">With teammates</span>
+    </button>
+  `;
+  document.body.appendChild(menu);
+  // Position below the button, right-aligned
+  const menuWidth = 220;
+  let left = rect.right - menuWidth;
+  let top = rect.bottom + 6;
+  if (left < 8) left = 8;
+  if (left + menuWidth > window.innerWidth - 8) left = window.innerWidth - menuWidth - 8;
+  menu.style.left = `${left}px`;
+  menu.style.top = `${top}px`;
+  menu.style.width = `${menuWidth}px`;
+  // Dismiss on outside click
+  setTimeout(() => {
+    document.addEventListener('click', _myCalAddMenuDismiss, { once: true });
+  }, 0);
+}
+
+function _myCalAddMenuDismiss(ev) {
+  const menu = document.getElementById('my-cal-add-menu');
+  if (!menu) return;
+  if (menu.contains(ev.target)) {
+    // Re-arm
+    document.addEventListener('click', _myCalAddMenuDismiss, { once: true });
+    return;
+  }
+  menu.remove();
 }
 
 function renderMobilizationInlineEditor(projectId, itemKey) {
@@ -12827,7 +12964,7 @@ function getPersonalEventsForMember(memberId, startDate, endDate) {
 const MEETING_TYPES = [
   { key: 'walkthrough',      label: 'Walkthrough' },
   { key: 'design_kickoff',   label: 'Design Kickoff' },
-  { key: 'handoff',          label: 'Hand-off' },
+  { key: 'handoff',          label: 'Ops Handoff' },
   { key: 'install_kickoff',  label: 'Install Kickoff' },
   { key: 'closeout',         label: 'Closeout' },
   { key: 'misc',             label: 'Other' }
