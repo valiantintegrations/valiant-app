@@ -4061,3 +4061,223 @@ td.today .cal-day-num {
   background: #161B22;
   border-color: #30363D;
 }
+
+/* ── Meeting Picker v2 — cleaner day view + attendee dots ── */
+
+/* Month view — per-attendee colored dots */
+.mp-day-att-dots {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 2px;
+  align-items: center;
+}
+.mp-day-att-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  display: inline-block;
+}
+.mp-day-att-more {
+  font-size: 8px;
+  font-weight: 700;
+  color: #8B949E;
+  margin-left: 2px;
+}
+
+/* Day view — event bar layout */
+.mp2-day-grid {
+  background: #0D1117;
+  border: 1px solid #1C2333;
+  border-radius: 6px;
+  overflow: hidden;
+}
+.mp2-day-grid-inner {
+  position: relative;
+}
+.mp2-hour-row {
+  display: flex;
+  border-bottom: 1px solid #1C2333;
+  position: relative;
+}
+.mp2-hour-row:last-child { border-bottom: none; }
+.mp2-hour-label {
+  width: 60px;
+  flex-shrink: 0;
+  font-size: 10px;
+  font-weight: 600;
+  color: #6E7681;
+  padding: 4px 8px 0;
+  border-right: 1px solid #1C2333;
+}
+.mp2-hour-quarters {
+  flex: 1;
+  display: grid;
+  grid-template-rows: repeat(4, 1fr);
+}
+.mp2-quarter {
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+  transition: background 0.08s;
+}
+.mp2-quarter:not(:last-child) {
+  border-bottom: 1px dashed #161B22;
+}
+.mp2-quarter:hover { background: rgba(88, 166, 255, 0.04); }
+
+.mp2-events-layer {
+  position: absolute;
+  top: 0;
+  left: 60px;
+  right: 0;
+  bottom: 0;
+  pointer-events: none;
+}
+.mp2-events-layer > * {
+  pointer-events: auto;
+}
+
+.mp2-event-bar {
+  position: absolute;
+  left: 4px;
+  right: 4px;
+  border-left: 3px solid;
+  border-radius: 4px;
+  padding: 4px 8px;
+  overflow: hidden;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+  display: flex;
+  align-items: center;
+}
+.mp2-event-bar-content {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  flex-wrap: wrap;
+  font-size: 11px;
+  line-height: 1.3;
+  width: 100%;
+  overflow: hidden;
+}
+.mp2-event-label {
+  font-weight: 600;
+  white-space: nowrap;
+}
+.mp2-event-context {
+  color: #C9D1D9;
+  font-weight: 500;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.mp2-event-people {
+  color: #8B949E;
+  font-size: 10px;
+  white-space: nowrap;
+}
+
+.mp2-allday-bar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 8px;
+  margin-bottom: 4px;
+  border-left: 3px solid;
+  border-radius: 4px;
+  font-size: 11px;
+}
+
+.mp2-selection {
+  position: absolute;
+  left: 2px;
+  right: 2px;
+  background: rgba(88, 166, 255, 0.18);
+  border: 2px solid #58A6FF;
+  border-radius: 4px;
+  pointer-events: none;
+  z-index: 5;
+  display: flex;
+  align-items: flex-start;
+  padding: 4px 8px;
+}
+.mp2-selection-conflict {
+  background: rgba(218, 54, 51, 0.18);
+  border-color: #DA3633;
+}
+.mp2-selection-label {
+  font-size: 10px;
+  font-weight: 700;
+  color: #58A6FF;
+  background: #0D1117;
+  padding: 2px 6px;
+  border-radius: 3px;
+  border: 1px solid #58A6FF;
+}
+.mp2-selection-conflict .mp2-selection-label {
+  color: #F85149;
+  border-color: #DA3633;
+}
+
+.mp2-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 12px;
+  padding: 8px 10px;
+  background: #161B22;
+  border: 1px solid #1C2333;
+  border-radius: 4px;
+  margin-bottom: 10px;
+  font-size: 11px;
+}
+.mp2-legend-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  color: #C9D1D9;
+}
+.mp2-legend-bar {
+  width: 12px;
+  height: 3px;
+  border-radius: 2px;
+  flex-shrink: 0;
+}
+
+/* Detail popup when tapping an event bar */
+.mp2-detail-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.6);
+  z-index: 300;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 20px;
+}
+.mp2-detail-card {
+  background: #161B22;
+  border: 1px solid #30363D;
+  border-radius: 8px;
+  padding: 14px 16px;
+  min-width: 240px;
+  max-width: 360px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.6);
+}
+.mp2-detail-title {
+  font-size: 14px;
+  font-weight: 600;
+  margin-bottom: 4px;
+}
+.mp2-detail-context {
+  font-size: 12px;
+  color: #C9D1D9;
+  margin-bottom: 6px;
+}
+.mp2-detail-time {
+  font-size: 11px;
+  color: #8B949E;
+}
+.mp2-detail-people {
+  font-size: 11px;
+  color: #8B949E;
+  margin-top: 4px;
+}
