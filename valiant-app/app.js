@@ -12871,13 +12871,16 @@ function getMeetingsForProject(projectId) {
 // startTime/endTime are null for all-day blocks.
 function getMemberBusyBlocks(memberId, startDate, endDate) {
   const blocks = [];
+  // Coerce to number for consistent comparison with possibly-string IDs in stored data
+  const memId = Number(memberId);
+  if (!Number.isFinite(memId)) return blocks;
 
   // 1. Personal events
-  getPersonalEventsForMember(memberId, startDate, endDate).forEach(e => {
+  getPersonalEventsForMember(memId, startDate, endDate).forEach(e => {
     // For typed events (PTO/Sick/etc), use the type label.
     // For custom events, use the user-entered title (or "Personal Event" fallback).
     // Owner sees real title for private; others see "Busy — Personal".
-    const viewerIsOwner = (memberId === getActiveTeamMemberId());
+    const viewerIsOwner = (memId === Number(getActiveTeamMemberId()));
     const displayTitle = getPersonalEventDisplayLabel(e, viewerIsOwner);
     blocks.push({
       date: e.date,
@@ -12890,13 +12893,13 @@ function getMemberBusyBlocks(memberId, startDate, endDate) {
       personalType: e.type,
       isPrivate: e.isPrivate,
       color: getPersonalEventColor(e),
-      attendeeIds: [memberId],
+      attendeeIds: [memId],
       sourceRef: { kind: 'personal_event', id: e.id }
     });
   });
 
   // 2. Meetings where this member is an attendee
-  getMeetingsForMember(memberId, startDate, endDate).forEach(m => {
+  getMeetingsForMember(memId, startDate, endDate).forEach(m => {
     const proj = m.projectId ? state.projects.find(pp => pp.id === m.projectId) : null;
     blocks.push({
       date: m.date,
@@ -12909,7 +12912,7 @@ function getMemberBusyBlocks(memberId, startDate, endDate) {
       meetingStatus: m.status,
       isPrivate: false,
       color: m.status === 'pending_approval' ? '#D29922' : '#58A6FF',
-      attendeeIds: Array.isArray(m.attendees) ? m.attendees : [],
+      attendeeIds: Array.isArray(m.attendees) ? m.attendees.map(Number).filter(Number.isFinite) : [],
       sourceRef: { kind: 'meeting', id: m.id, projectId: m.projectId }
     });
   });
@@ -12918,8 +12921,8 @@ function getMemberBusyBlocks(memberId, startDate, endDate) {
   state.projects.forEach(p => {
     if (p.archived) return;
     const a = getProjectAssignment(p.id);
-    const onInstall = (a.install || []).some(x => x.id === memberId);
-    const onPM = (a.pm || []).some(x => x.id === memberId);
+    const onInstall = (a.install || []).some(x => Number(x.id) === memId);
+    const onPM = (a.pm || []).some(x => Number(x.id) === memId);
     if (!onInstall && !onPM) return;
     const win = getInstallWindow(p);
     if (!win || !win.start) return;
@@ -12943,9 +12946,15 @@ function getMemberBusyBlocks(memberId, startDate, endDate) {
       if (!skipWeekend) {
         // Full crew on this install — install crew + PM lead (if any)
         const crewSet = new Set();
-        (a.install || []).forEach(x => { if (x.id != null) crewSet.add(x.id); });
+        (a.install || []).forEach(x => {
+          const cid = Number(x.id);
+          if (Number.isFinite(cid)) crewSet.add(cid);
+        });
         const pmLead = (a.pm || []).find(x => x.lead);
-        if (pmLead && pmLead.id != null) crewSet.add(pmLead.id);
+        if (pmLead) {
+          const pmId = Number(pmLead.id);
+          if (Number.isFinite(pmId)) crewSet.add(pmId);
+        }
         blocks.push({
           date: ds,
           startTime: null,
@@ -13392,16 +13401,25 @@ function refreshMeetingPicker() {
 
 function renderMeetingPickerMeta() {
   const s = _meetingPickerState;
-  // Filter team to members with valid numeric IDs (defensive against stale data)
+  // Filter team to members with valid numeric IDs and dedupe by ID
+  const seenIds = new Set();
   const team = state.team
-    .filter(m => !m.archived && Number.isFinite(Number(m.id)))
+    .filter(m => {
+      if (m.archived) return false;
+      const id = Number(m.id);
+      if (!Number.isFinite(id)) return false;
+      if (seenIds.has(id)) return false;
+      seenIds.add(id);
+      return true;
+    })
     .map(m => ({ ...m, id: Number(m.id) }));
   // Also normalize attendees to numbers for consistent comparison
   const attendeeIdsNum = (s.attendees || []).map(x => Number(x)).filter(Number.isFinite);
   const attendeeChips = team.map(m => {
     const isOn = attendeeIdsNum.includes(m.id);
     const initials = getInitials(m.name);
-    return `<button class="mp-att-chip ${isOn ? 'active' : ''}" onclick="_mpToggleAttendee(${m.id})" style="${isOn ? `background:${m.color || '#1565C0'}33;border-color:${m.color || '#1565C0'};color:${m.color || '#58A6FF'}` : ''}" title="${esc(m.name)}">
+    // Use data-attribute + delegated click to avoid any inline-onclick number-coercion oddities
+    return `<button type="button" class="mp-att-chip ${isOn ? 'active' : ''}" data-att-id="${m.id}" onclick="_mpToggleAttendee(this.dataset.attId)" style="${isOn ? `background:${m.color || '#1565C0'}33;border-color:${m.color || '#1565C0'};color:${m.color || '#58A6FF'}` : ''}" title="${esc(m.name)}">
       <span class="mp-att-init">${esc(initials)}</span>${esc(m.name.split(' ')[0])}
     </button>`;
   }).join('');
@@ -13445,6 +13463,24 @@ function _mpToggleAttendee(memberId) {
   refreshMeetingPicker();
 }
 
+// Diagnostic — call _mpDebug() from browser console to see picker + team data
+function _mpDebug() {
+  const s = _meetingPickerState;
+  const teamSummary = state.team.map(m => ({
+    id: m.id,
+    typeofId: typeof m.id,
+    name: m.name,
+    archived: !!m.archived
+  }));
+  const data = {
+    attendees: s.attendees,
+    attendeesTypes: s.attendees.map(x => typeof x),
+    team: teamSummary
+  };
+  console.log('[Meeting Picker Diagnostic]', data);
+  return data;
+}
+
 function _mpSetDuration(min) {
   const s = _meetingPickerState;
   s.duration = parseInt(min, 10) || 30;
@@ -13482,16 +13518,27 @@ function renderMeetingPickerMonth() {
   const daysInMonth = new Date(year, month + 1, 0).getDate();
   const startDow = firstOfMonth.getDay();
 
-  // Aggregate busy info per day for selected attendees
+  // Aggregate busy info per day for selected attendees.
+  // Dedupes events by sourceRef so the same install across multiple crew shows once.
   const monthStart = new Date(year, month, 1).toISOString().slice(0, 10);
   const monthEnd = new Date(year, month, daysInMonth).toISOString().slice(0, 10);
-  const busyByDate = {}; // dateStr → { count, hasFullDay, attendeeIds: Set }
-  s.attendees.forEach(memberId => {
+  const busyByDate = {};
+  // dateStr → { events: Map<dedupeKey, {block, attendeeIds:Set}>, attendeeIds:Set, hasFullDay }
+  s.attendees.forEach(memberIdRaw => {
+    const memberId = Number(memberIdRaw);
+    if (!Number.isFinite(memberId)) return;
     getMemberBusyBlocks(memberId, monthStart, monthEnd).forEach(b => {
-      if (!busyByDate[b.date]) busyByDate[b.date] = { count: 0, hasFullDay: false, attendeeIds: new Set() };
-      busyByDate[b.date].count += 1;
-      if (!b.startTime) busyByDate[b.date].hasFullDay = true;
+      if (!busyByDate[b.date]) {
+        busyByDate[b.date] = { events: new Map(), attendeeIds: new Set(), hasFullDay: false };
+      }
+      const ref = b.sourceRef || {};
+      const key = `${ref.kind || 'x'}:${ref.id || ''}:${ref.projectId || ''}:${b.startTime || ''}:${b.endTime || ''}`;
+      if (!busyByDate[b.date].events.has(key)) {
+        busyByDate[b.date].events.set(key, { block: b, viewerAttendees: new Set() });
+      }
+      busyByDate[b.date].events.get(key).viewerAttendees.add(memberId);
       busyByDate[b.date].attendeeIds.add(memberId);
+      if (!b.startTime) busyByDate[b.date].hasFullDay = true;
     });
   });
 
@@ -13516,21 +13563,32 @@ function renderMeetingPickerMonth() {
     if (busy) classes.push('mp-day-has-busy');
     if (everyoneBlocked) classes.push('mp-day-fully-blocked');
 
-    // Per-attendee dots (one per busy attendee, in their member color)
-    let attendeeDotsHTML = '';
-    if (busy && busy.attendeeIds.size > 0) {
-      const dots = Array.from(busy.attendeeIds).slice(0, 4).map(mid => {
-        const m = state.team.find(x => x.id === mid);
-        const c = m?.color || '#D29922';
-        return `<span class="mp-day-att-dot" style="background:${c}" title="${esc(m?.name || '')}"></span>`;
-      }).join('');
-      const more = busy.attendeeIds.size > 4 ? `<span class="mp-day-att-more">+${busy.attendeeIds.size - 4}</span>` : '';
-      attendeeDotsHTML = `<div class="mp-day-att-dots">${dots}${more}</div>`;
+    // Build event labels (one per distinct event) — show up to 2, with overflow indicator
+    let eventsHTML = '';
+    if (busy && busy.events.size > 0) {
+      const eventList = Array.from(busy.events.values());
+      const visible = eventList.slice(0, 2);
+      const more = eventList.length - visible.length;
+      eventsHTML = `<div class="mp-day-events">
+        ${visible.map(({ block, viewerAttendees }) => {
+          const initials = Array.from(viewerAttendees).slice(0, 3).map(mid => {
+            const m = state.team.find(x => Number(x.id) === Number(mid));
+            return getInitials(m?.name || '?');
+          }).join(',');
+          const label = block.contextLabel || block.shortTitle || block.title || 'Event';
+          return `<div class="mp-day-event" style="background:${block.color}1F;border-left-color:${block.color};color:${block.color}" title="${esc((block.title || '') + ' · ' + initials)}">
+            <span class="mp-day-event-label">${esc(label)}</span>
+            <span class="mp-day-event-init">${esc(initials)}</span>
+          </div>`;
+        }).join('')}
+        ${more > 0 ? `<div class="mp-day-events-more">+${more} more</div>` : ''}
+      </div>`;
     }
+
     cells.push(`
       <div class="${classes.join(' ')}" ${isPast ? '' : `onclick="_mpPickDate('${dateStr}')"`}>
         <div class="mp-day-num">${day}</div>
-        ${attendeeDotsHTML}
+        ${eventsHTML}
       </div>
     `);
   }
