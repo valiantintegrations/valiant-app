@@ -13359,6 +13359,7 @@ function openMeetingPicker(opts = {}) {
 }
 
 function closeMeetingPicker() {
+  _mpHideHoverPreview();
   const overlay = document.getElementById('meeting-picker');
   if (overlay) overlay.remove();
   document.body.style.overflow = '';
@@ -13589,8 +13590,11 @@ function renderMeetingPickerMonth() {
       </div>`;
     }
 
+    const hoverHandlers = (busy && busy.events.size > 0)
+      ? `onmouseenter="_mpShowHoverPreview(event, '${dateStr}')" onmouseleave="_mpHideHoverPreview()"`
+      : '';
     cells.push(`
-      <div class="${classes.join(' ')}" ${isPast ? '' : `onclick="_mpPickDate('${dateStr}')"`}>
+      <div class="${classes.join(' ')}" ${isPast ? '' : `onclick="_mpPickDate('${dateStr}')"`} ${hoverHandlers}>
         <div class="mp-day-num">${day}</div>
         ${eventsHTML}
       </div>
@@ -13616,6 +13620,7 @@ function renderMeetingPickerMonth() {
 }
 
 function _mpChangeMonth(delta) {
+  _mpHideHoverPreview();
   const s = _meetingPickerState;
   let m = s.visibleMonth.month + delta;
   let y = s.visibleMonth.year;
@@ -13754,8 +13759,9 @@ function renderMeetingPickerDay() {
       const conflicts = _mpGetSelectionConflicts();
       const isConflict = conflicts.length > 0;
       selectionOverlayHTML = `
-        <div class="mp2-selection ${isConflict ? 'mp2-selection-conflict' : ''}" style="top:${topPx}px;height:${heightPx}px">
+        <div class="mp2-selection ${isConflict ? 'mp2-selection-conflict' : ''}" id="mp2-selection-block" style="top:${topPx}px;height:${heightPx}px" onmousedown="_mpStartSelectionDrag(event)" ontouchstart="_mpStartSelectionDrag(event)">
           <div class="mp2-selection-label">${esc(s.selectedStart)} – ${esc(s.selectedEnd)}${isConflict ? ' · ⚠ conflict' : ''}</div>
+          <div class="mp2-selection-grip" aria-hidden="true">⋮⋮</div>
         </div>
       `;
     }
@@ -13796,6 +13802,223 @@ function renderMeetingPickerDay() {
 }
 
 // Show a small inline detail when user taps an event bar
+// ── Drag the selection block to change start time ──
+// Mouse-down on the selection bar starts the drag. Mouse-move updates
+// `selectedStart` based on cursor Y position within the events layer,
+// snapped to the 15-min grid. Duration stays constant.
+const _MP_DRAG_HOUR_START = 8;
+const _MP_DRAG_HOUR_END = 20;
+const _MP_DRAG_HOUR_HEIGHT = 44;
+
+let _mpDragState = null;
+
+function _mpStartSelectionDrag(event) {
+  // Only respond to primary mouse button or first touch
+  if (event.type === 'mousedown' && event.button !== 0) return;
+  event.preventDefault();
+  event.stopPropagation();
+
+  const s = _meetingPickerState;
+  if (!s.selectedStart || !s.selectedEnd) return;
+
+  const layer = document.querySelector('#meeting-picker .mp2-events-layer');
+  if (!layer) return;
+  const block = document.getElementById('mp2-selection-block');
+  if (!block) return;
+
+  // Capture the offset within the block where the user grabbed it,
+  // so the drag feels natural (not jumping to top-left under cursor)
+  const blockRect = block.getBoundingClientRect();
+  const layerRect = layer.getBoundingClientRect();
+  const startY = (event.touches ? event.touches[0].clientY : event.clientY);
+  const grabOffsetY = startY - blockRect.top;
+  const durationMin = _timeToMinutes(s.selectedEnd) - _timeToMinutes(s.selectedStart);
+
+  _mpDragState = {
+    layerRect,
+    grabOffsetY,
+    durationMin,
+    initialStart: s.selectedStart,
+    moved: false
+  };
+
+  document.body.style.cursor = 'grabbing';
+  block.classList.add('mp2-selection-dragging');
+
+  document.addEventListener('mousemove', _mpHandleSelectionDragMove);
+  document.addEventListener('mouseup', _mpEndSelectionDrag);
+  document.addEventListener('touchmove', _mpHandleSelectionDragMove, { passive: false });
+  document.addEventListener('touchend', _mpEndSelectionDrag);
+  document.addEventListener('touchcancel', _mpEndSelectionDrag);
+}
+
+function _mpHandleSelectionDragMove(event) {
+  if (!_mpDragState) return;
+  if (event.cancelable) event.preventDefault();
+
+  const clientY = event.touches ? event.touches[0].clientY : event.clientY;
+  // Position of the new TOP of the selection block, relative to the events layer
+  const proposedTopPx = clientY - _mpDragState.layerRect.top - _mpDragState.grabOffsetY;
+  // Convert to minutes since HOUR_START (8 AM)
+  let proposedStartMin = (proposedTopPx / _MP_DRAG_HOUR_HEIGHT) * 60 + (_MP_DRAG_HOUR_START * 60);
+  // Snap to 15-min grid
+  proposedStartMin = Math.round(proposedStartMin / 15) * 15;
+  // Clamp so the selection stays inside the visible time range
+  const minStart = _MP_DRAG_HOUR_START * 60;
+  const maxStart = _MP_DRAG_HOUR_END * 60 - _mpDragState.durationMin;
+  if (proposedStartMin < minStart) proposedStartMin = minStart;
+  if (proposedStartMin > maxStart) proposedStartMin = maxStart;
+
+  const newStart = _minutesToTime(proposedStartMin);
+  const newEnd = _minutesToTime(proposedStartMin + _mpDragState.durationMin);
+
+  const s = _meetingPickerState;
+  if (newStart === s.selectedStart && newEnd === s.selectedEnd) return; // no change
+  s.selectedStart = newStart;
+  s.selectedEnd = newEnd;
+  // Reset override flag — new time may have different conflicts
+  s.pendingOverride = false;
+  _mpDragState.moved = true;
+
+  // Update the visible position WITHOUT a full picker refresh — that would
+  // recreate the DOM nodes and break the in-progress drag. Instead, mutate
+  // the existing block's style + label.
+  const block = document.getElementById('mp2-selection-block');
+  if (block) {
+    const topPx = ((proposedStartMin - _MP_DRAG_HOUR_START * 60) / 60) * _MP_DRAG_HOUR_HEIGHT;
+    block.style.top = `${topPx}px`;
+    const conflicts = _mpGetSelectionConflicts();
+    const isConflict = conflicts.length > 0;
+    block.classList.toggle('mp2-selection-conflict', isConflict);
+    const label = block.querySelector('.mp2-selection-label');
+    if (label) {
+      label.textContent = `${newStart} – ${newEnd}${isConflict ? ' · ⚠ conflict' : ''}`;
+    }
+  }
+}
+
+function _mpEndSelectionDrag() {
+  document.removeEventListener('mousemove', _mpHandleSelectionDragMove);
+  document.removeEventListener('mouseup', _mpEndSelectionDrag);
+  document.removeEventListener('touchmove', _mpHandleSelectionDragMove);
+  document.removeEventListener('touchend', _mpEndSelectionDrag);
+  document.removeEventListener('touchcancel', _mpEndSelectionDrag);
+  document.body.style.cursor = '';
+  const block = document.getElementById('mp2-selection-block');
+  if (block) block.classList.remove('mp2-selection-dragging');
+  const moved = _mpDragState && _mpDragState.moved;
+  _mpDragState = null;
+  // After drag ends, re-render footer (summary + conflict banner) to match new time
+  if (moved) {
+    const footer = document.getElementById('mp-footer');
+    if (footer) footer.innerHTML = renderMeetingPickerFooter();
+  }
+}
+
+function _minutesToTime(min) {
+  const h = Math.floor(min / 60);
+  const m = min % 60;
+  return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`;
+}
+
+
+// Shows a small floating panel with full event detail when hovering a day in
+// the month grid. Anchored to the cell. Shown after a short delay to prevent
+// flicker. Skipped on touch / mobile.
+let _mpHoverTimer = null;
+function _mpShowHoverPreview(event, dateStr) {
+  // Skip on small screens — touch devices use tap-to-open instead.
+  if (window.innerWidth < 700) return;
+  const cell = event.currentTarget;
+  if (_mpHoverTimer) clearTimeout(_mpHoverTimer);
+  _mpHoverTimer = setTimeout(() => {
+    _mpHideHoverPreview();
+    _mpRenderHoverPreview(cell, dateStr);
+  }, 180);
+}
+
+function _mpHideHoverPreview() {
+  if (_mpHoverTimer) { clearTimeout(_mpHoverTimer); _mpHoverTimer = null; }
+  document.getElementById('mp-hover-preview')?.remove();
+}
+
+function _mpRenderHoverPreview(cell, dateStr) {
+  const s = _meetingPickerState;
+  const attendeeIdsNum = (s.attendees || []).map(x => Number(x)).filter(Number.isFinite);
+
+  // Collect distinct events for this date across selected attendees (same dedupe as month)
+  const eventMap = new Map();
+  attendeeIdsNum.forEach(memberId => {
+    getMemberBusyBlocks(memberId, dateStr, dateStr).forEach(block => {
+      if (block.date !== dateStr) return;
+      const ref = block.sourceRef || {};
+      const key = `${ref.kind || 'x'}:${ref.id || ''}:${ref.projectId || ''}:${block.startTime || ''}:${block.endTime || ''}`;
+      if (!eventMap.has(key)) eventMap.set(key, { block, viewerAttendees: new Set() });
+      eventMap.get(key).viewerAttendees.add(memberId);
+    });
+  });
+  const events = Array.from(eventMap.values()).sort((a, b) => {
+    const aFull = !a.block.startTime, bFull = !b.block.startTime;
+    if (aFull && !bFull) return -1;
+    if (!aFull && bFull) return 1;
+    return _timeToMinutes(a.block.startTime || '00:00') - _timeToMinutes(b.block.startTime || '00:00');
+  });
+  if (events.length === 0) return;
+
+  const d = new Date(dateStr + 'T00:00:00');
+  const longDate = d.toLocaleDateString('en-US', { weekday:'long', month:'long', day:'numeric' });
+
+  const popup = document.createElement('div');
+  popup.id = 'mp-hover-preview';
+  popup.className = 'mp-hover-preview';
+  popup.innerHTML = `
+    <div class="mp-hover-title">${esc(longDate)}</div>
+    <div class="mp-hover-events">
+      ${events.map(({ block, viewerAttendees }) => {
+        const names = Array.from(viewerAttendees).map(mid => {
+          const tm = state.team.find(x => Number(x.id) === Number(mid));
+          return tm?.name?.split(' ')[0] || '?';
+        }).join(', ');
+        const timeStr = block.startTime
+          ? `${block.startTime}${block.endTime ? '–' + block.endTime : ''}`
+          : 'all day';
+        const label = block.contextLabel || block.shortTitle || block.title || 'Event';
+        return `
+          <div class="mp-hover-event" style="border-left-color:${block.color}">
+            <div class="mp-hover-event-row">
+              <span class="mp-hover-event-label" style="color:${block.color}">${esc(block.shortTitle || block.title || 'Event')}</span>
+              <span class="mp-hover-event-time">${esc(timeStr)}</span>
+            </div>
+            ${block.contextLabel && block.contextLabel !== block.shortTitle ? `<div class="mp-hover-event-context">${esc(block.contextLabel)}</div>` : ''}
+            <div class="mp-hover-event-people">${esc(names)}</div>
+          </div>
+        `;
+      }).join('')}
+    </div>
+  `;
+  document.body.appendChild(popup);
+
+  // Position next to the cell — right side preferred, otherwise left
+  const cellRect = cell.getBoundingClientRect();
+  const popupRect = popup.getBoundingClientRect();
+  const margin = 8;
+  let left = cellRect.right + margin;
+  let top = cellRect.top;
+  // If overflow right, place to left
+  if (left + popupRect.width > window.innerWidth - 8) {
+    left = cellRect.left - popupRect.width - margin;
+  }
+  // If still overflowing left, just clamp
+  if (left < 8) left = 8;
+  // Vertical clamp
+  if (top + popupRect.height > window.innerHeight - 8) {
+    top = window.innerHeight - popupRect.height - 8;
+  }
+  if (top < 8) top = 8;
+  popup.style.left = `${left}px`;
+  popup.style.top = `${top}px`;
+}
+
 function _mpShowEventDetail(title, context, people, startTime, endTime, color) {
   document.getElementById('mp-event-detail-popup')?.remove();
   const overlay = document.createElement('div');
