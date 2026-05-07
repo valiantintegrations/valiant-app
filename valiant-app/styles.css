@@ -3646,7 +3646,10 @@ td.today .cal-day-num {
   overflow: hidden;
 }
 @media (min-width: 700px) {
-  .mp-overlay { padding: 24px; }
+  .mp-overlay {
+    padding: 24px;
+    align-items: center;          /* center panel vertically */
+  }
   .mp-panel {
     border-radius: 12px;
     height: auto;
@@ -4280,4 +4283,56 @@ td.today .cal-day-num {
   font-size: 11px;
   color: #8B949E;
   margin-top: 4px;
+}
+
+/* ── Meeting Picker — month cell event labels ── */
+.mp-day {
+  /* Bigger min-height so events fit */
+  min-height: 80px;
+  align-items: stretch;
+}
+.mp-day-events {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin-top: 4px;
+  flex: 1;
+  overflow: hidden;
+}
+.mp-day-event {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 9px;
+  font-weight: 500;
+  padding: 2px 4px;
+  border-left: 2px solid;
+  border-radius: 2px;
+  line-height: 1.2;
+}
+.mp-day-event-label {
+  flex: 1;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
+}
+.mp-day-event-init {
+  font-size: 8px;
+  font-weight: 700;
+  opacity: 0.8;
+  flex-shrink: 0;
+}
+.mp-day-events-more {
+  font-size: 8px;
+  color: #6E7681;
+  font-style: italic;
+  padding: 0 2px;
+}
+
+/* On smaller screens, hide initials part to save space */
+@media (max-width: 700px) {
+  .mp-day { min-height: 60px; }
+  .mp-day-event-init { display: none; }
+  .mp-day-event-label { font-size: 8px; }
 }
