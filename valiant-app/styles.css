@@ -5047,3 +5047,75 @@ td.today .cal-day-num {
   white-space: nowrap;
   opacity: 0.92;
 }
+
+/* ════════════════════════════════════════════════════════════════════════
+   MY WORK — RESIZE HANDLES (Round C)
+   ════════════════════════════════════════════════════════════════════════ */
+
+.mywork-resize-handle {
+  position: absolute;
+  right: -4px;
+  top: 50%;
+  transform: translateY(-50%);
+  z-index: 5;
+  background: #161B22;
+  border: 1px solid #30363D;
+  border-radius: 6px;
+  padding: 4px 6px;
+  color: #8B949E;
+  cursor: ew-resize;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  -webkit-tap-highlight-color: transparent;
+  touch-action: none;
+}
+.mywork-resize-handle:hover {
+  border-color: #58A6FF;
+  color: #58A6FF;
+}
+
+/* Span badge — small "6/12" indicator in the bottom-left while customizing */
+.mywork-span-badge {
+  position: absolute;
+  bottom: -6px;
+  left: 8px;
+  z-index: 5;
+  background: #161B22;
+  border: 1px solid #30363D;
+  border-radius: 4px;
+  padding: 2px 6px;
+  font-size: 9px;
+  font-weight: 600;
+  color: #8B949E;
+  letter-spacing: 0.04em;
+  pointer-events: none;
+}
+
+/* Resizing state — visual feedback */
+.mywork-widget-resizing {
+  outline: 2px solid #58A6FF !important;
+  outline-offset: 4px;
+}
+.mywork-widget-resizing .mywork-span-badge {
+  background: #1565C0;
+  border-color: #1976D2;
+  color: #fff;
+}
+
+/* Role-section widgets — when shrunk to ~6 cols the project cards inside need
+   to stack better. The mywork-cards grid handles this naturally via auto-fit,
+   but we can tighten gaps inside narrow widgets. */
+.mywork-widget-span-3 .mywork-cards,
+.mywork-widget-span-4 .mywork-cards,
+.mywork-widget-span-5 .mywork-cards,
+.mywork-widget-span-6 .mywork-cards,
+.mywork-widget-span-7 .mywork-cards {
+  grid-template-columns: 1fr;     /* single column inside narrow role widgets */
+}
+
+/* Resize handles hidden on mobile — customize mode itself is hidden anyway */
+@media (max-width: 768px) {
+  .mywork-resize-handle,
+  .mywork-span-badge { display: none; }
+}
