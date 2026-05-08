@@ -3116,6 +3116,15 @@ function sortByUrgency(projects) {
 //   hideable    if false, can't be hidden in customize mode.
 const MY_WORK_WIDGETS = [
   {
+    id: 'mobilization',
+    label: 'Mobilization Needed',
+    defaultSpan: 12,
+    minSpan: 12,
+    locked: true,
+    hideable: false,
+    render: (memberId, ctx) => renderMyMobilizationCard(memberId)
+  },
+  {
     id: 'metrics',
     label: 'Status Summary',
     defaultSpan: 4,
@@ -3124,13 +3133,12 @@ const MY_WORK_WIDGETS = [
     render: (memberId, ctx) => renderMetricsWidget(ctx)
   },
   {
-    id: 'mobilization',
-    label: 'Mobilization Needed',
-    defaultSpan: 12,
-    minSpan: 12,
-    locked: true,
-    hideable: false,
-    render: (memberId, ctx) => renderMyMobilizationCard(memberId)
+    id: 'my_calendar',
+    label: 'My Calendar · Next 7 Days',
+    defaultSpan: 8,
+    minSpan: 6,
+    hideable: true,
+    render: (memberId, ctx) => renderMyCalendarCard(memberId)
   },
   {
     id: 'actions',
@@ -3148,13 +3156,48 @@ const MY_WORK_WIDGETS = [
     hideable: true,
     render: (memberId, ctx) => renderPendingApprovalsCard()
   },
+  // Role-section widgets — one per assignment role. Each renders only when
+  // the user has assignments in that role. Hidden cells are filtered out
+  // automatically by the grid render.
   {
-    id: 'my_calendar',
-    label: 'My Calendar · Next 7 Days',
-    defaultSpan: 8,
+    id: 'role_sales',
+    label: 'Sales · Projects',
+    defaultSpan: 12,
     minSpan: 6,
     hideable: true,
-    render: (memberId, ctx) => renderMyCalendarCard(memberId)
+    render: (memberId, ctx) => renderRoleSectionWidget('sales', ctx)
+  },
+  {
+    id: 'role_design',
+    label: 'Design · Projects',
+    defaultSpan: 12,
+    minSpan: 6,
+    hideable: true,
+    render: (memberId, ctx) => renderRoleSectionWidget('design', ctx)
+  },
+  {
+    id: 'role_pm',
+    label: 'Project Manager · Projects',
+    defaultSpan: 12,
+    minSpan: 6,
+    hideable: true,
+    render: (memberId, ctx) => renderRoleSectionWidget('pm', ctx)
+  },
+  {
+    id: 'role_install',
+    label: 'Install · Projects',
+    defaultSpan: 12,
+    minSpan: 6,
+    hideable: true,
+    render: (memberId, ctx) => renderRoleSectionWidget('install', ctx)
+  },
+  {
+    id: 'role_warehouse',
+    label: 'Warehouse · Projects',
+    defaultSpan: 12,
+    minSpan: 6,
+    hideable: true,
+    render: (memberId, ctx) => renderRoleSectionWidget('warehouse', ctx)
   }
 ];
 
@@ -3163,16 +3206,22 @@ function getMyWorkWidget(id) {
 }
 
 // Default layout — returns array of {id, span, hidden, order}.
-//   row 1: metrics (4) + my_calendar (8) = 12
-//   row 2: mobilization (12, locked)
+//   row 1: mobilization (12, locked) — drain-the-queue surface, in your face
+//   row 2: metrics (4) + my_calendar (8) = 12
 //   row 3: actions (6) + pending_approvals (6) = 12
+//   row 4+: role sections (one per role at full width); empty roles auto-suppress
 function getDefaultMyWorkLayout(memberId) {
   return [
-    { id: 'metrics',           order: 0, span: 4,  hidden: false },
-    { id: 'my_calendar',       order: 1, span: 8,  hidden: false },
-    { id: 'mobilization',      order: 2, span: 12, hidden: false },
-    { id: 'actions',           order: 3, span: 6,  hidden: false },
-    { id: 'pending_approvals', order: 4, span: 6,  hidden: false }
+    { id: 'mobilization',      order: 0,  span: 12, hidden: false },
+    { id: 'metrics',           order: 1,  span: 4,  hidden: false },
+    { id: 'my_calendar',       order: 2,  span: 8,  hidden: false },
+    { id: 'actions',           order: 3,  span: 6,  hidden: false },
+    { id: 'pending_approvals', order: 4,  span: 6,  hidden: false },
+    { id: 'role_sales',        order: 5,  span: 12, hidden: false },
+    { id: 'role_design',       order: 6,  span: 12, hidden: false },
+    { id: 'role_pm',           order: 7,  span: 12, hidden: false },
+    { id: 'role_install',      order: 8,  span: 12, hidden: false },
+    { id: 'role_warehouse',    order: 9,  span: 12, hidden: false }
   ];
 }
 
@@ -3268,6 +3317,43 @@ function renderMyActionsWidget(ctx) {
   `;
 }
 
+// Renders one role's project list as a widget. Pulls from the precomputed
+// myAssignments in ctx. Returns '' if the user has no assignments in this role.
+function renderRoleSectionWidget(roleKey, ctx) {
+  const { myAssignments } = ctx;
+  const role = ASSIGNMENT_ROLES.find(r => r.key === roleKey);
+  if (!role) return '';
+  const assignments = myAssignments?.[roleKey] || [];
+  if (assignments.length === 0) return '';
+
+  // Sort: Leads first, then by urgency
+  const sorted = [...assignments].sort((a, b) => {
+    if (a.isLead !== b.isLead) return a.isLead ? -1 : 1;
+    const aDate = getInstallWindow(a.project)?.start;
+    const bDate = getInstallWindow(b.project)?.start;
+    if (aDate && bDate) return new Date(aDate) - new Date(bDate);
+    if (aDate) return -1;
+    if (bDate) return 1;
+    return 0;
+  });
+  const leadCount = assignments.filter(a => a.isLead).length;
+
+  return `
+    <div class="mywork-section" style="margin:0">
+      <div class="mywork-section-header">
+        <div style="display:flex;align-items:center;gap:8px">
+          <div style="width:8px;height:8px;border-radius:50%;background:${role.color}"></div>
+          <div class="mywork-section-title" style="color:${role.color}">${role.label}</div>
+          <div class="mywork-section-count">${assignments.length}${leadCount > 0 ? ` · ${leadCount} lead` : ''}</div>
+        </div>
+      </div>
+      <div class="mywork-cards">
+        ${sorted.map(entry => renderMyWorkCard(entry.project, role, entry.isLead)).join('')}
+      </div>
+    </div>
+  `;
+}
+
 // Renders the customizable widget grid. Returns the full HTML for the
 // widget zone of My Work (metrics, mobilization, actions, pending, calendar).
 // The dashboard wraps this with the closeout banner above and project
@@ -3333,7 +3419,7 @@ function renderMyWorkWidgetGrid(memberId, ctx) {
   const banner = customize ? `
     <div class="mywork-customize-banner">
       <svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M7 1v12M1 7h12" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/></svg>
-      <span>Drag widgets by their handle to reorder. <strong>Done</strong> when finished.</span>
+      <span>Drag widgets by their handle to reorder. Drag the right edge to resize. <strong>Done</strong> when finished.</span>
     </div>
   ` : '';
 
@@ -3359,14 +3445,34 @@ function renderMyWorkWidgetGrid(memberId, ctx) {
         <span>Locked</span>
       </div>
     ` : '';
+    // Resize handle on the right edge — mouse + touch. Only on non-locked
+    // widgets in customize mode. The handle dispatches to _mwResizeStart
+    // which tracks pointer movement and snaps to allowed spans.
+    const resizeHandle = customize && !isLocked ? `
+      <div class="mywork-resize-handle"
+           onmousedown="_mwResizeStart(event,'${item.entry.id}')"
+           ontouchstart="_mwResizeStart(event,'${item.entry.id}')"
+           title="Drag to resize (3 / 4 / 6 / 8 / 12 cols)">
+        <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
+          <path d="M5 5l4 4M9 5l-4 4M2 7h10" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/>
+        </svg>
+      </div>
+    ` : '';
+    // Span badge — shows current width (e.g., "6/12") in customize mode
+    const spanBadge = customize && !isLocked ? `
+      <div class="mywork-span-badge" data-span-badge>${span}/12</div>
+    ` : '';
     return `
       <div class="mywork-widget mywork-widget-span-${span}${customClass}"
            data-widget-id="${item.entry.id}"
            data-widget-idx="${idx}"
+           data-current-span="${span}"
            ${dragAttrs}>
         ${handle}
         ${lockBadge}
+        ${spanBadge}
         ${item.html}
+        ${resizeHandle}
       </div>
     `;
   }).join('');
@@ -3586,6 +3692,117 @@ function _mwTouchEnd(event) {
   _mwTouchState = null;
 }
 
+// ── Resize (Round C) ──
+//
+// Resize semantics:
+//   - The user drags a small handle on the right edge of any non-locked widget.
+//   - The widget's column span snaps to the nearest allowed value as the user
+//     drags. Allowed spans: 3, 4, 6, 8, 12.
+//   - minSpan from the widget catalog acts as the lower bound (e.g., metrics=3,
+//     role widgets=6).
+//   - Mouse + touch both supported.
+//   - Live update: the widget's span class changes mid-drag so the user sees
+//     the result. On release, persist to layout.
+
+const _MW_ALLOWED_SPANS = [3, 4, 6, 8, 12];
+let _mwResizeState = null;
+
+function _mwResizeStart(event, widgetId) {
+  // Prevent the click from bubbling up and triggering the parent's draggable.
+  event.preventDefault();
+  event.stopPropagation();
+
+  const widget = getMyWorkWidget(widgetId);
+  if (!widget || widget.locked) return;
+  const widgetEl = document.querySelector(`.mywork-widget[data-widget-id="${widgetId}"]`);
+  const gridEl = document.querySelector('.mywork-grid');
+  if (!widgetEl || !gridEl) return;
+
+  const isTouch = event.type === 'touchstart';
+  const startX = isTouch ? event.touches[0].clientX : event.clientX;
+  const gridRect = gridEl.getBoundingClientRect();
+  const colWidth = gridRect.width / 12;   // approximate, gap not subtracted (close enough)
+
+  _mwResizeState = {
+    widgetId,
+    widgetEl,
+    minSpan: widget.minSpan || 3,
+    startX,
+    startSpan: parseInt(widgetEl.dataset.currentSpan || '6', 10),
+    colWidth,
+    isTouch
+  };
+
+  widgetEl.classList.add('mywork-widget-resizing');
+  document.body.style.cursor = 'ew-resize';
+
+  if (isTouch) {
+    document.addEventListener('touchmove', _mwResizeMove, { passive: false });
+    document.addEventListener('touchend', _mwResizeEnd);
+    document.addEventListener('touchcancel', _mwResizeEnd);
+  } else {
+    document.addEventListener('mousemove', _mwResizeMove);
+    document.addEventListener('mouseup', _mwResizeEnd);
+  }
+}
+
+function _mwResizeMove(event) {
+  const s = _mwResizeState;
+  if (!s) return;
+  if (s.isTouch) event.preventDefault();
+  const x = s.isTouch ? event.touches[0].clientX : event.clientX;
+  const dx = x - s.startX;
+  const colDelta = Math.round(dx / s.colWidth);
+  const rawSpan = s.startSpan + colDelta;
+
+  // Snap to nearest allowed span value, clamped to minSpan..12
+  const allowed = _MW_ALLOWED_SPANS.filter(v => v >= s.minSpan);
+  let snapped = allowed[0];
+  let bestDist = Infinity;
+  allowed.forEach(v => {
+    const d = Math.abs(v - rawSpan);
+    if (d < bestDist) { bestDist = d; snapped = v; }
+  });
+
+  if (snapped !== parseInt(s.widgetEl.dataset.currentSpan, 10)) {
+    // Update the span class live
+    _MW_ALLOWED_SPANS.forEach(v => s.widgetEl.classList.remove(`mywork-widget-span-${v}`));
+    // Also clear arbitrary spans 1..12 in case of leftover
+    for (let i = 1; i <= 12; i++) s.widgetEl.classList.remove(`mywork-widget-span-${i}`);
+    s.widgetEl.classList.add(`mywork-widget-span-${snapped}`);
+    s.widgetEl.dataset.currentSpan = String(snapped);
+    const badge = s.widgetEl.querySelector('[data-span-badge]');
+    if (badge) badge.textContent = `${snapped}/12`;
+  }
+}
+
+function _mwResizeEnd(event) {
+  const s = _mwResizeState;
+  if (!s) return;
+  document.removeEventListener('mousemove', _mwResizeMove);
+  document.removeEventListener('mouseup', _mwResizeEnd);
+  document.removeEventListener('touchmove', _mwResizeMove);
+  document.removeEventListener('touchend', _mwResizeEnd);
+  document.removeEventListener('touchcancel', _mwResizeEnd);
+  document.body.style.cursor = '';
+  s.widgetEl.classList.remove('mywork-widget-resizing');
+
+  const finalSpan = parseInt(s.widgetEl.dataset.currentSpan || String(s.startSpan), 10);
+  if (finalSpan !== s.startSpan) {
+    // Persist to layout
+    const memberId = getActiveTeamMemberId();
+    if (memberId != null) {
+      const layout = getMyWorkLayout(memberId);
+      const entry = layout.find(w => w.id === s.widgetId);
+      if (entry) {
+        entry.span = finalSpan;
+        saveMyWorkLayout(memberId, layout);
+      }
+    }
+  }
+  _mwResizeState = null;
+}
+
 function renderMyWorkDashboard(memberId, activeProjects, myAssignments, activeMember) {
   const totalAssigned = Object.values(myAssignments).reduce((n, arr) => n + arr.length, 0);
   const myCloseoutProjects = getMyCloseoutProjects(memberId);
@@ -3654,39 +3871,8 @@ function renderMyWorkDashboard(memberId, activeProjects, myAssignments, activeMe
     return closeoutBanner;
   }
 
-  // Build sections — one per role that has assignments
-  const sections = ASSIGNMENT_ROLES.map(r => {
-    const assignments = myAssignments[r.key];
-    if (!assignments.length) return '';
-    // Sort: Leads first, then by urgency
-    const sortedAssignments = [...assignments].sort((a, b) => {
-      if (a.isLead !== b.isLead) return a.isLead ? -1 : 1;
-      const aDate = getInstallWindow(a.project)?.start;
-      const bDate = getInstallWindow(b.project)?.start;
-      if (aDate && bDate) return new Date(aDate) - new Date(bDate);
-      if (aDate) return -1;
-      if (bDate) return 1;
-      return 0;
-    });
-    const leadCount = assignments.filter(a => a.isLead).length;
-
-    return `
-      <div class="mywork-section">
-        <div class="mywork-section-header">
-          <div style="display:flex;align-items:center;gap:8px">
-            <div style="width:8px;height:8px;border-radius:50%;background:${r.color}"></div>
-            <div class="mywork-section-title" style="color:${r.color}">${r.label}</div>
-            <div class="mywork-section-count">${assignments.length}${leadCount > 0 ? ` · ${leadCount} lead` : ''}</div>
-          </div>
-        </div>
-        <div class="mywork-cards">
-          ${sortedAssignments.map(entry => renderMyWorkCard(entry.project, r, entry.isLead)).join('')}
-        </div>
-      </div>
-    `;
-  }).join('');
-
-  // Pre-compute everything widgets need so each render call is cheap
+  // Pre-compute everything widgets need so each render call is cheap.
+  // myAssignments goes into ctx so the role-section widgets can access it.
   const myActions = buildSalesActions(activeProjects, memberId, 'mine');
   const widgetCtx = {
     myProjects,
@@ -3702,7 +3888,6 @@ function renderMyWorkDashboard(memberId, activeProjects, myAssignments, activeMe
       ${renderMyWorkCustomizeButton()}
     </div>
     ${renderMyWorkWidgetGrid(memberId, widgetCtx)}
-    ${sections}
   `;
 }
 
