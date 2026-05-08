@@ -2810,15 +2810,22 @@ td.today .cal-day-num {
   max-width: 760px;
   display: flex;
   flex-direction: column;
+  /* Use dynamic viewport height so the panel fits the visible area on mobile
+     after URL/tab bars are accounted for. */
   height: 100vh;
+  height: 100dvh;
   overflow: hidden;
 }
 @media (min-width: 700px) {
-  .iwp-overlay { padding: 24px; }
+  .iwp-overlay {
+    padding: 24px;
+    align-items: center;
+  }
   .iwp-panel {
     border-radius: 12px;
     height: auto;
     max-height: calc(100vh - 48px);
+    max-height: calc(100dvh - 48px);
   }
 }
 .iwp-header {
@@ -2855,9 +2862,14 @@ td.today .cal-day-num {
 }
 .iwp-close:hover, .iwp-close:active { background: #1C2333; color: #C9D1D9; }
 .iwp-body {
-  flex: 1;
+  flex: 1 1 auto;
+  /* min-height:0 is required so flex:1 actually constrains this child;
+     without it the body grows to fit content and the footer is pushed
+     off-screen. */
+  min-height: 0;
   overflow-y: auto;
   -webkit-overflow-scrolling: touch;
+  overscroll-behavior: contain;
   padding: 14px 18px;
 }
 .iwp-footer {
@@ -4674,4 +4686,43 @@ td.today .cal-day-num {
     width: 100%;
     text-align: center;
   }
+}
+
+/* ── Mobilization dialog — explicit Back button ── */
+.mob-dialog-back {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  background: #161B22;
+  border: 1px solid #30363D;
+  color: #C9D1D9;
+  padding: 6px 10px;
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 500;
+  font-family: inherit;
+  -webkit-tap-highlight-color: transparent;
+  flex-shrink: 0;
+  margin-right: 10px;
+}
+.mob-dialog-back:hover {
+  background: #1C2333;
+  border-color: #58A6FF;
+  color: #E6EDF3;
+}
+.mob-dialog-header {
+  align-items: center !important;
+  gap: 8px;
+}
+/* On mobile, the × is redundant with the prominent Back button — hide it */
+@media (max-width: 768px) {
+  .mob-dialog-header .modal-close {
+    display: none;
+  }
+  .mob-dialog-back {
+    margin-right: 0;
+  }
+  .mob-dialog-header .modal-title { font-size: 14px; }
+  .mob-dialog-header .modal-sub { font-size: 11px; }
 }
