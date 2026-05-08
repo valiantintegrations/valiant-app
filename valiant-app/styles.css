@@ -1299,7 +1299,7 @@ td.today .cal-day-num {
   display: flex; align-items: center; justify-content: center;
 }
 .modal-close:hover { color: #E6EDF3; }
-.modal-body { padding: 20px 24px; overflow-y: auto; flex: 1; -webkit-overflow-scrolling: touch; }
+.modal-body { padding: 20px 24px; overflow-y: auto; flex: 1 1 auto; min-height: 0; -webkit-overflow-scrolling: touch; }
 
 /* ── Tabs ── */
 .tabs { display: flex; gap: 0; margin-bottom: 20px; border-bottom: 1px solid #1C2333; overflow-x: auto; -webkit-overflow-scrolling: touch; }
@@ -2258,11 +2258,20 @@ td.today .cal-day-num {
 
   .modal-overlay { padding: 0; align-items: flex-end; }
   .modal-container {
-    max-width: 100%; max-height: 92vh;
+    max-width: 100%;
+    max-height: 92vh;
+    max-height: 92dvh;
     border-radius: 16px 16px 0 0;
     border-bottom: none;
   }
-  .modal-header { padding: 16px 16px 12px; }
+  .modal-header {
+    padding: 16px 16px 12px;
+    /* Pin the header to the top of the dialog so it doesn't scroll away */
+    position: sticky;
+    top: 0;
+    background: #161B22;
+    z-index: 2;
+  }
   .modal-body { padding: 16px; }
 
   .calendar-grid td { height: 60px; padding: 4px; }
@@ -4689,6 +4698,10 @@ td.today .cal-day-num {
 }
 
 /* ── Mobilization dialog — explicit Back button ── */
+.mob-dialog-container {
+  max-height: 85vh;
+  max-height: 85dvh;
+}
 .mob-dialog-back {
   display: inline-flex;
   align-items: center;
@@ -4717,11 +4730,29 @@ td.today .cal-day-num {
 }
 /* On mobile, the × is redundant with the prominent Back button — hide it */
 @media (max-width: 768px) {
+  .mob-dialog-container {
+    /* Mobile: take the full standard mobile-modal height (uses .modal-container's
+       max-height: 92dvh). Override the desktop cap above. */
+    max-height: 92vh;
+    max-height: 92dvh;
+  }
   .mob-dialog-header .modal-close {
     display: none;
   }
   .mob-dialog-back {
     margin-right: 0;
+    /* Make the Back button more prominent on mobile — it's the primary affordance */
+    padding: 8px 14px;
+    font-size: 13px;
+    background: #1565C0;
+    border-color: #1976D2;
+    color: #fff;
+    font-weight: 600;
+  }
+  .mob-dialog-back:hover, .mob-dialog-back:active {
+    background: #1976D2;
+    border-color: #1E88E5;
+    color: #fff;
   }
   .mob-dialog-header .modal-title { font-size: 14px; }
   .mob-dialog-header .modal-sub { font-size: 11px; }
