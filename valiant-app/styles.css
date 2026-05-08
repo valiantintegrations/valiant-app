@@ -4210,7 +4210,10 @@ td.today .cal-day-num {
   padding: 4px 8px;
   user-select: none;
   -webkit-user-select: none;
-  touch-action: none;
+  /* pan-y allows vertical scroll gestures to pass through on mobile.
+     Drag is initiated via the grip handle (which has touch-action: none)
+     for touch users; mouse users can grab anywhere on the block. */
+  touch-action: pan-y;
 }
 .mp2-selection:hover {
   background: rgba(88, 166, 255, 0.26);
@@ -4221,14 +4224,21 @@ td.today .cal-day-num {
   box-shadow: 0 4px 16px rgba(88, 166, 255, 0.4);
 }
 .mp2-selection-grip {
-  font-size: 9px;
+  font-size: 10px;
   color: #58A6FF;
   letter-spacing: -2px;
-  opacity: 0.6;
+  opacity: 0.7;
   font-weight: 700;
   margin-left: auto;
-  align-self: center;
+  align-self: stretch;
+  display: flex;
+  align-items: center;
+  /* Larger tap target on mobile + initiates drag */
+  padding: 0 12px;
+  cursor: grab;
+  touch-action: none;
 }
+.mp2-selection-grip:hover { opacity: 1; }
 .mp2-selection-conflict .mp2-selection-grip {
   color: #F85149;
 }
