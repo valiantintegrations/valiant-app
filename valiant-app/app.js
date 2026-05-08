@@ -11963,13 +11963,17 @@ function openMobilizationDialog(projectId) {
   overlay.id = 'mobilization-dialog';
   overlay.className = 'modal-overlay';
   overlay.innerHTML = `
-    <div class="modal-container" style="max-width:560px;max-height:90vh;display:flex;flex-direction:column">
-      <div class="modal-header">
-        <div>
+    <div class="modal-container mob-dialog-container" style="max-width:560px;max-height:90vh;display:flex;flex-direction:column">
+      <div class="modal-header mob-dialog-header">
+        <button type="button" class="mob-dialog-back" onclick="closeMobilizationDialog()" aria-label="Back">
+          <svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M9 2L4 7l5 5" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          <span>Back</span>
+        </button>
+        <div style="flex:1;min-width:0">
           <div class="modal-title">Project Mobilization</div>
-          <div class="modal-sub">${esc(p.name)} &middot; complete to unlock Design + Planning</div>
+          <div class="modal-sub">${esc(p.name)} &middot; complete to unlock Design + Operations</div>
         </div>
-        <button class="modal-close" onclick="closeMobilizationDialog()">&times;</button>
+        <button class="modal-close" onclick="closeMobilizationDialog()" aria-label="Close">&times;</button>
       </div>
       <div class="modal-body" id="mobilization-body" style="overflow-y:auto;flex:1">
         ${renderMobilizationBody(projectId)}
@@ -12064,7 +12068,9 @@ function renderMobilizationBody(projectId) {
     } else if (it.key === 'install_window') {
       detail = win ? `${fmtDate(win.start)}${win.end && win.end !== win.start ? ' — ' + fmtDate(win.end) : ''} <span style="color:#6E7681">(${esc(win.source)})</span>` : '<span style="color:#D29922">No window set</span>';
     } else if (it.key === 'scope_tags') {
-      detail = tags.length > 0 ? tags.map(t => `<span style="font-size:10px;padding:2px 6px;background:#1C2333;border:1px solid #30363D;border-radius:3px;color:#C9D1D9;margin-right:3px">${esc(t)}</span>`).join('') : '<span style="color:#D29922">No tags</span>';
+      detail = tags.length > 0
+        ? `<div style="display:flex;flex-wrap:wrap;gap:4px;margin-top:2px">${tags.map(t => `<span style="font-size:10px;padding:2px 6px;background:#1C2333;border:1px solid #30363D;border-radius:3px;color:#C9D1D9;white-space:nowrap">${esc(t)}</span>`).join('')}</div>`
+        : '<span style="color:#D29922">No tags</span>';
     } else if (it.key === 'site_briefing') {
       const pinsCount = (state.projectPins?.[projectId] || []).length;
       detail = pinsCount > 0 ? `${pinsCount} pin${pinsCount === 1 ? '' : 's'}` : (flags.site_briefing_skipped ? '<span style="color:#8B949E">Skipped</span>' : '<span style="color:#D29922">No pins yet</span>');
