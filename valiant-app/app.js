@@ -3233,11 +3233,61 @@ function renderMyWorkDashboard(memberId, activeProjects, myAssignments, activeMe
 
   return `
     ${closeoutBanner}
+    ${renderMyMobilizationCard(memberId)}
     ${summaryRow}
     ${myActionsHTML}
     ${renderPendingApprovalsCard()}
     ${renderMyCalendarCard(memberId)}
     ${sections}
+  `;
+}
+
+// "Mobilization Needed" priority card on My Work.
+// Shows projects in Contract stage that need mobilization where the viewer is
+// a Sales/Design/PM lead OR is a Master Admin. These should be drained quickly
+// so projects can move from Sales → Design+Install workflow.
+function renderMyMobilizationCard(memberId) {
+  const isAdmin = currentUserHasPermission('admin.system');
+  const allMobilization = getProjectsNeedingMobilization();
+  const mine = allMobilization.filter(p => {
+    if (isAdmin) return true; // Master Admin sees all
+    const a = getProjectAssignment(p.id);
+    const salesLead   = (a.sales || []).find(x => x.lead);
+    const designLead  = (a.design || []).find(x => x.lead);
+    const pmLead      = (a.pm || []).find(x => x.lead);
+    return salesLead?.id === memberId || designLead?.id === memberId || pmLead?.id === memberId;
+  });
+  if (mine.length === 0) return '';
+
+  return `
+    <div data-context-section="my-mobilization" class="dashboard-card" style="margin-bottom:14px;border-left:3px solid #DA3633;background:#1A0D0D">
+      <div class="dashboard-card-title" style="display:flex;align-items:center;justify-content:space-between;color:#F85149">
+        <span style="display:flex;align-items:center;gap:8px">
+          <div style="width:8px;height:8px;border-radius:50%;background:#DA3633;animation:pulse 1.5s infinite"></div>
+          Mobilization Needed &middot; ${mine.length}
+        </span>
+      </div>
+      <div style="font-size:11px;color:#C9D1D9;margin-bottom:10px">Complete these checklists to unlock Design + Operations and clear projects from your queue.</div>
+      ${mine.map(p => {
+        const s = getMobilizationState(p.id);
+        const completed = MOBILIZATION_ITEMS.filter(it => s[it.key]).length;
+        const total = MOBILIZATION_ITEMS.length;
+        const pct = Math.round((completed / total) * 100);
+        return `
+          <div class="my-mob-row" onclick="openMobilizationDialog(${p.id})">
+            <div class="my-mob-row-main">
+              <div class="my-mob-row-name">${esc(p.name)}</div>
+              <div class="my-mob-row-meta">
+                ${p.client_name ? `<span>${esc(p.client_name)}</span>` : ''}
+                <span style="color:#D29922">${completed}/${total} items &middot; ${pct}%</span>
+              </div>
+              <div class="my-mob-row-bar"><div class="my-mob-row-bar-fill" style="width:${pct}%"></div></div>
+            </div>
+            <button type="button" class="btn-primary my-mob-row-btn" onclick="event.stopPropagation();openMobilizationDialog(${p.id})">Open Checklist &rarr;</button>
+          </div>
+        `;
+      }).join('')}
+    </div>
   `;
 }
 
@@ -3750,7 +3800,15 @@ function renderProjects(c) {
         const stg = STAGES.find(s => s.key === p.stage) || STAGES[0];
         return `
           <div class="mobile-project-item" onclick="openProject(${p.id})" data-stage="${p.stage}" data-name="${esc(p.name).toLowerCase()}" style="${isContractNeedsReview(p) ? 'border-color:#DA3633' : ''}">
-            ${isContractNeedsReview(p) ? '<div style="background:#DA3633;color:#fff;font-size:10px;font-weight:600;padding:4px 8px;border-radius:4px;margin-bottom:8px;text-align:center;letter-spacing:0.03em">REVIEW — SEND TO DESIGN & INSTALL</div>' : ''}
+            ${isContractNeedsReview(p) ? `
+              <div style="background:#1A0D0D;border:1px solid #DA3633;border-radius:6px;padding:8px 10px;margin-bottom:8px;display:flex;align-items:center;justify-content:space-between;gap:8px">
+                <div style="display:flex;align-items:center;gap:6px;flex:1;min-width:0">
+                  <div style="width:6px;height:6px;border-radius:50%;background:#DA3633;flex-shrink:0"></div>
+                  <span style="font-size:10px;font-weight:600;color:#F85149;letter-spacing:0.02em">MOBILIZATION REQUIRED</span>
+                </div>
+                <button type="button" class="btn-primary" onclick="event.stopPropagation();openMobilizationDialog(${p.id})" style="background:#238636;border-color:#2EA043;font-size:10px;padding:4px 10px;flex-shrink:0">Open Checklist &rarr;</button>
+              </div>
+            ` : ''}
             <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:6px">
               <div>
                 <div style="font-size:14px;font-weight:500;color:#E6EDF3">${esc(p.name)}</div>
@@ -3860,15 +3918,6 @@ function renderProjectPage(c) {
           </div>
         </div>
         ${p.systems.length ? `<div class="project-page-tags">${p.systems.map(systemTagHTML).join('')}</div>` : ''}
-        ${needsReview ? `
-          <div class="project-page-review-banner">
-            <div style="display:flex;align-items:center;gap:8px;flex:1">
-              <div style="width:8px;height:8px;border-radius:50%;background:#DA3633;animation:pulse 1.5s infinite;flex-shrink:0"></div>
-              <span style="font-size:12px;font-weight:600;color:#F85149">MOBILIZATION REQUIRED &mdash; COMPLETE TO SEND TO DESIGN &amp; INSTALL</span>
-            </div>
-            <button class="btn-primary" onclick="openMobilizationDialog(${p.id})" style="background:#238636;padding:6px 12px;font-size:12px;min-height:32px">Open Checklist &rarr;</button>
-          </div>
-        ` : ''}
         ${p._stage_divergence ? `
           <div style="display:flex;align-items:center;gap:10px;padding:8px 14px;background:#161B22;border:1px solid #30363D;border-left:3px solid #58A6FF;border-radius:4px;margin-top:8px">
             <svg width="14" height="14" viewBox="0 0 16 16" fill="none" style="flex-shrink:0;color:#58A6FF"><path d="M8 2v4M8 10v.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/><circle cx="8" cy="8" r="6" stroke="currentColor" stroke-width="1.2"/></svg>
@@ -3879,6 +3928,15 @@ function renderProjectPage(c) {
           </div>
         ` : ''}
       </div>
+      ${needsReview ? `
+        <div class="project-page-review-banner">
+          <div style="display:flex;align-items:center;gap:8px;flex:1;min-width:0">
+            <div style="width:8px;height:8px;border-radius:50%;background:#DA3633;animation:pulse 1.5s infinite;flex-shrink:0"></div>
+            <span style="font-size:12px;font-weight:600;color:#F85149">MOBILIZATION REQUIRED &mdash; COMPLETE TO SEND TO DESIGN &amp; INSTALL</span>
+          </div>
+          <button class="btn-primary" onclick="openMobilizationDialog(${p.id})" style="background:#238636;padding:6px 12px;font-size:12px;min-height:32px;flex-shrink:0">Open Checklist &rarr;</button>
+        </div>
+      ` : ''}
       <div class="project-page-body-wrap">
         <aside class="prail">${railHTML}</aside>
         <div class="project-page-body" id="project-page-body"></div>
