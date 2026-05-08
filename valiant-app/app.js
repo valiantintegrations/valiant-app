@@ -3060,6 +3060,8 @@ function countDesignMgmtAlerts(projects) {
 function setDashboardMode(mode) {
   state.dashboardMode = mode;
   localStorage.setItem('vi_dashboard_mode', mode);
+  // Customize mode is My-Work-only — exit if leaving My Work
+  if (mode !== 'mine') _myWorkCustomizeMode = false;
   renderDashboard(document.getElementById('content'));
 }
 
@@ -3279,14 +3281,23 @@ function renderMyActionsWidget(ctx) {
 // is empty but Actions is present.
 function renderMyWorkWidgetGrid(memberId, ctx) {
   const layout = reconcileLayoutWithLocks(getMyWorkLayout(memberId));
+  const customize = _myWorkCustomizeMode;
 
   // Pre-render widgets and filter out empties
   const rendered = [];
   layout.filter(e => !e.hidden).forEach(entry => {
     const widget = getMyWorkWidget(entry.id);
     if (!widget) return;
-    const html = widget.render(memberId, ctx);
-    if (!html) return;
+    let html = widget.render(memberId, ctx);
+    // In customize mode, render an empty-state placeholder for widgets that
+    // would otherwise return '' so the user can still see and reorder them.
+    if (!html) {
+      if (!customize) return;
+      html = `<div class="dashboard-card mywork-widget-placeholder" style="margin:0">
+        <div class="dashboard-card-title" style="margin:0;color:#6E7681">${esc(widget.label)}</div>
+        <div style="font-size:11px;color:#6E7681;font-style:italic;padding:8px 0">Empty &middot; nothing to show right now</div>
+      </div>`;
+    }
     rendered.push({ entry, widget, html });
   });
 
@@ -3294,6 +3305,7 @@ function renderMyWorkWidgetGrid(memberId, ctx) {
 
   // Row balancing — walk widgets in order, group by cumulative span, expand
   // the last widget in any row that doesn't fill 12 cols.
+  // Skipped in customize mode so the user sees true spans while editing.
   const rows = [];
   let current = { items: [], total: 0 };
   rendered.forEach(item => {
@@ -3306,32 +3318,82 @@ function renderMyWorkWidgetGrid(memberId, ctx) {
   });
   if (current.items.length) rows.push(current);
 
-  // Promote orphan widgets to fill the remaining row
-  rows.forEach(row => {
-    if (row.total < 12 && row.items.length > 0) {
-      const last = row.items[row.items.length - 1];
-      const widget = last.widget;
-      // Don't expand locked widgets beyond their own default span.
-      if (!widget.locked) {
-        const remaining = 12 - row.total;
-        last.effectiveSpan = last.entry.span + remaining;
+  if (!customize) {
+    rows.forEach(row => {
+      if (row.total < 12 && row.items.length > 0) {
+        const last = row.items[row.items.length - 1];
+        if (!last.widget.locked) {
+          const remaining = 12 - row.total;
+          last.effectiveSpan = last.entry.span + remaining;
+        }
       }
-    }
-  });
+    });
+  }
 
-  const cells = rendered.map(item => {
+  const banner = customize ? `
+    <div class="mywork-customize-banner">
+      <svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M7 1v12M1 7h12" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/></svg>
+      <span>Drag widgets by their handle to reorder. <strong>Done</strong> when finished.</span>
+    </div>
+  ` : '';
+
+  const cells = rendered.map((item, idx) => {
     const span = item.effectiveSpan || item.entry.span;
-    return `<div class="mywork-widget mywork-widget-span-${span}" data-widget-id="${item.entry.id}">${item.html}</div>`;
+    const isLocked = !!item.widget.locked;
+    const dragAttrs = customize && !isLocked
+      ? `draggable="true" ondragstart="_mwDragStart(event,'${item.entry.id}')" ondragend="_mwDragEnd(event)" ondragover="_mwDragOver(event)" ondragleave="_mwDragLeave(event)" ondrop="_mwDrop(event,'${item.entry.id}')"`
+      : '';
+    const customClass = customize ? (isLocked ? ' mywork-widget-locked' : ' mywork-widget-customizing') : '';
+    const handle = customize && !isLocked ? `
+      <div class="mywork-drag-handle" ontouchstart="_mwTouchStart(event,'${item.entry.id}')" title="Drag to reorder">
+        <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
+          <circle cx="5" cy="3" r="1" fill="currentColor"/><circle cx="9" cy="3" r="1" fill="currentColor"/>
+          <circle cx="5" cy="7" r="1" fill="currentColor"/><circle cx="9" cy="7" r="1" fill="currentColor"/>
+          <circle cx="5" cy="11" r="1" fill="currentColor"/><circle cx="9" cy="11" r="1" fill="currentColor"/>
+        </svg>
+      </div>
+    ` : '';
+    const lockBadge = customize && isLocked ? `
+      <div class="mywork-lock-badge" title="${esc(item.widget.label)} is always full-width">
+        <svg width="11" height="11" viewBox="0 0 12 12" fill="none"><rect x="2.5" y="5.5" width="7" height="5" rx="0.8" stroke="currentColor" stroke-width="1.2"/><path d="M4 5.5V4a2 2 0 014 0v1.5" stroke="currentColor" stroke-width="1.2"/></svg>
+        <span>Locked</span>
+      </div>
+    ` : '';
+    return `
+      <div class="mywork-widget mywork-widget-span-${span}${customClass}"
+           data-widget-id="${item.entry.id}"
+           data-widget-idx="${idx}"
+           ${dragAttrs}>
+        ${handle}
+        ${lockBadge}
+        ${item.html}
+      </div>
+    `;
   }).join('');
 
-  return `<div class="mywork-grid">${cells}</div>`;
+  return `
+    ${banner}
+    <div class="mywork-grid${customize ? ' mywork-grid-customizing' : ''}">${cells}</div>
+  `;
 }
 
+// Customize mode is session-only — it's just a UI flag, not persisted.
+// Set true while the user is editing layout; cleared on Done or page nav.
+let _myWorkCustomizeMode = false;
+
 function renderMyWorkCustomizeButton() {
-  // Round A: button is a placeholder — in Round B it will toggle customize mode.
-  // Hidden on mobile per design decision (#9: mobile uses defaults only).
+  // Hidden on mobile via CSS (mobile uses defaults only — design decision #9).
+  if (_myWorkCustomizeMode) {
+    return `
+      <button type="button" class="btn btn-sm" onclick="resetMyWorkLayout()" title="Restore default layout" style="font-size:11px">Reset</button>
+      <button type="button" class="btn-primary mywork-done-btn" onclick="exitMyWorkCustomizeMode()">
+        <svg width="13" height="13" viewBox="0 0 14 14" fill="none"><path d="M3 7l3 3 5-6" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        <span>Done</span>
+      </button>
+    `;
+  }
   return `
-    <button type="button" class="mywork-customize-btn" onclick="openMyWorkCustomizePlaceholder()" title="Customize layout (coming soon)">
+    <button type="button" class="mywork-customize-btn" onclick="enterMyWorkCustomizeMode()" title="Customize layout — drag widgets to reorder">
       <svg width="13" height="13" viewBox="0 0 14 14" fill="none">
         <circle cx="7" cy="3" r="1.2" stroke="currentColor" stroke-width="1.3"/>
         <circle cx="7" cy="7" r="1.2" stroke="currentColor" stroke-width="1.3"/>
@@ -3343,8 +3405,185 @@ function renderMyWorkCustomizeButton() {
   `;
 }
 
-function openMyWorkCustomizePlaceholder() {
-  showToast('Customize layout — coming soon', 'info');
+function enterMyWorkCustomizeMode() {
+  _myWorkCustomizeMode = true;
+  renderCurrentPage();
+}
+
+function exitMyWorkCustomizeMode() {
+  _myWorkCustomizeMode = false;
+  renderCurrentPage();
+}
+
+function resetMyWorkLayout() {
+  const memberId = getActiveTeamMemberId();
+  if (memberId == null) return;
+  if (!confirm('Reset your dashboard layout to the default? This will undo any customizations.')) return;
+  if (state.userLayouts && state.userLayouts[memberId]) {
+    delete state.userLayouts[memberId];
+    save('vi_user_layouts', state.userLayouts);
+  }
+  showToast('Layout reset to default', 'success');
+  renderCurrentPage();
+}
+
+// ── Drag-and-drop reordering (Round B) ──
+//
+// Two paths:
+//   - Desktop: HTML5 native drag-and-drop. The widget element has draggable=true,
+//     dragstart/dragover/drop handlers. Visual: dragged element gets opacity,
+//     drop targets highlight on hover.
+//   - Touch: HTML5 drag doesn't work reliably on touch. We intercept touchstart
+//     on the drag handle, track the finger, and find the widget under it on
+//     touchmove. On touchend, swap.
+//
+// Locked widgets (Mobilization) can't be dragged AND can't be dragged onto —
+// they keep their slot in the order. The reorder logic skips over them.
+
+let _mwDragId = null;
+let _mwTouchState = null;
+
+function _mwDragStart(event, widgetId) {
+  _mwDragId = widgetId;
+  // Required for Firefox to fire drop events
+  if (event.dataTransfer) {
+    event.dataTransfer.effectAllowed = 'move';
+    event.dataTransfer.setData('text/plain', widgetId);
+  }
+  // Visual: dim the source
+  setTimeout(() => {
+    const el = document.querySelector(`.mywork-widget[data-widget-id="${widgetId}"]`);
+    if (el) el.classList.add('mywork-widget-dragging');
+  }, 0);
+}
+
+function _mwDragEnd(event) {
+  document.querySelectorAll('.mywork-widget-dragging').forEach(el => el.classList.remove('mywork-widget-dragging'));
+  document.querySelectorAll('.mywork-widget-drop-target').forEach(el => el.classList.remove('mywork-widget-drop-target'));
+  _mwDragId = null;
+}
+
+function _mwDragOver(event) {
+  if (!_mwDragId) return;
+  const target = event.currentTarget;
+  const targetId = target.dataset.widgetId;
+  if (!targetId || targetId === _mwDragId) return;
+  // Don't allow dropping ON a locked widget (drops go before/after based on cursor position, but locked stays in place)
+  const widget = getMyWorkWidget(targetId);
+  if (widget && widget.locked) return;
+  event.preventDefault();
+  if (event.dataTransfer) event.dataTransfer.dropEffect = 'move';
+  target.classList.add('mywork-widget-drop-target');
+}
+
+function _mwDragLeave(event) {
+  event.currentTarget.classList.remove('mywork-widget-drop-target');
+}
+
+function _mwDrop(event, targetId) {
+  event.preventDefault();
+  event.currentTarget.classList.remove('mywork-widget-drop-target');
+  const sourceId = _mwDragId || (event.dataTransfer && event.dataTransfer.getData('text/plain'));
+  if (!sourceId || sourceId === targetId) return;
+  _mwReorderWidgets(sourceId, targetId);
+}
+
+// Move sourceId to be just before targetId in the order, then renumber.
+function _mwReorderWidgets(sourceId, targetId) {
+  const memberId = getActiveTeamMemberId();
+  if (memberId == null) return;
+  const layout = getMyWorkLayout(memberId);
+  const srcIdx = layout.findIndex(w => w.id === sourceId);
+  const tgtIdx = layout.findIndex(w => w.id === targetId);
+  if (srcIdx < 0 || tgtIdx < 0) return;
+  // Pull the source out and re-insert just before the target's CURRENT position
+  const [moved] = layout.splice(srcIdx, 1);
+  // After splice, target's index may have shifted by 1 if source was earlier
+  const insertAt = layout.findIndex(w => w.id === targetId);
+  layout.splice(insertAt, 0, moved);
+  // Renumber order field 0..N
+  layout.forEach((w, i) => { w.order = i; });
+  saveMyWorkLayout(memberId, layout);
+  renderCurrentPage();
+}
+
+// Touch drag — finger drags the handle; we follow with a floating ghost and
+// detect drop targets via elementFromPoint.
+function _mwTouchStart(event, widgetId) {
+  if (event.touches.length !== 1) return;
+  // Don't preventDefault here — let scroll work until the user actually moves.
+  // The handle has limited surface area (small grip), so accidental scroll-block
+  // is rare, but we still wait for the first touchmove to commit to drag.
+  const sourceEl = document.querySelector(`.mywork-widget[data-widget-id="${widgetId}"]`);
+  if (!sourceEl) return;
+  _mwTouchState = {
+    widgetId,
+    sourceEl,
+    moved: false,
+    ghost: null,
+    startX: event.touches[0].clientX,
+    startY: event.touches[0].clientY,
+    lastTarget: null
+  };
+  document.addEventListener('touchmove', _mwTouchMove, { passive: false });
+  document.addEventListener('touchend', _mwTouchEnd);
+  document.addEventListener('touchcancel', _mwTouchEnd);
+}
+
+function _mwTouchMove(event) {
+  const s = _mwTouchState;
+  if (!s) return;
+  const t = event.touches[0];
+  const dx = t.clientX - s.startX;
+  const dy = t.clientY - s.startY;
+  // Activate drag once finger moves enough — gives scroll a chance otherwise.
+  if (!s.moved) {
+    if (Math.abs(dx) < 6 && Math.abs(dy) < 6) return;
+    s.moved = true;
+    s.sourceEl.classList.add('mywork-widget-dragging');
+    // Build a floating ghost the user can see following their finger
+    const ghost = document.createElement('div');
+    ghost.className = 'mywork-touch-ghost';
+    ghost.textContent = (getMyWorkWidget(s.widgetId)?.label) || 'Widget';
+    document.body.appendChild(ghost);
+    s.ghost = ghost;
+  }
+  event.preventDefault();
+  if (s.ghost) {
+    s.ghost.style.left = `${t.clientX + 12}px`;
+    s.ghost.style.top  = `${t.clientY + 12}px`;
+  }
+  // Find drop target under finger
+  const el = document.elementFromPoint(t.clientX, t.clientY);
+  const target = el?.closest('.mywork-widget');
+  if (s.lastTarget && s.lastTarget !== target) {
+    s.lastTarget.classList.remove('mywork-widget-drop-target');
+  }
+  if (target && target.dataset.widgetId !== s.widgetId) {
+    const widget = getMyWorkWidget(target.dataset.widgetId);
+    if (widget && !widget.locked) {
+      target.classList.add('mywork-widget-drop-target');
+      s.lastTarget = target;
+    }
+  }
+}
+
+function _mwTouchEnd(event) {
+  const s = _mwTouchState;
+  if (!s) return;
+  document.removeEventListener('touchmove', _mwTouchMove);
+  document.removeEventListener('touchend', _mwTouchEnd);
+  document.removeEventListener('touchcancel', _mwTouchEnd);
+  if (s.ghost) s.ghost.remove();
+  s.sourceEl.classList.remove('mywork-widget-dragging');
+  if (s.lastTarget) {
+    const targetId = s.lastTarget.dataset.widgetId;
+    s.lastTarget.classList.remove('mywork-widget-drop-target');
+    if (s.moved && targetId && targetId !== s.widgetId) {
+      _mwReorderWidgets(s.widgetId, targetId);
+    }
+  }
+  _mwTouchState = null;
 }
 
 function renderMyWorkDashboard(memberId, activeProjects, myAssignments, activeMember) {
