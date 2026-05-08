@@ -4592,3 +4592,86 @@ td.today .cal-day-num {
   }
   .cal-month { font-size: 14px; min-width: 140px; }
 }
+
+/* ── Mobilization banner — visible on mobile (the project page header is hidden on mobile) ── */
+@media (max-width: 768px) {
+  .project-page-review-banner {
+    margin-top: 0;
+    margin-bottom: 10px;
+    padding: 12px 14px;
+    border-radius: 6px;
+  }
+  .project-page-review-banner span {
+    font-size: 11px !important;
+  }
+  .project-page-review-banner button {
+    width: 100%;
+    margin-top: 4px;
+  }
+}
+
+/* ── My Work — Mobilization Needed card rows ── */
+.my-mob-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  background: #0D1117;
+  border: 1px solid #1C2333;
+  border-radius: 6px;
+  padding: 10px 12px;
+  margin-bottom: 6px;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+  transition: border-color 0.12s;
+}
+.my-mob-row:hover { border-color: #DA3633; }
+.my-mob-row-main {
+  flex: 1;
+  min-width: 0;
+}
+.my-mob-row-name {
+  font-size: 13px;
+  font-weight: 500;
+  color: #E6EDF3;
+}
+.my-mob-row-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  font-size: 11px;
+  color: #8B949E;
+  margin-top: 3px;
+}
+.my-mob-row-bar {
+  height: 3px;
+  background: #1C2333;
+  border-radius: 2px;
+  margin-top: 6px;
+  overflow: hidden;
+}
+.my-mob-row-bar-fill {
+  height: 100%;
+  background: linear-gradient(90deg, #D29922, #3FB950);
+  border-radius: 2px;
+  transition: width 0.3s;
+}
+.my-mob-row-btn {
+  flex-shrink: 0;
+  background: #238636 !important;
+  border-color: #2EA043 !important;
+  font-size: 11px;
+  padding: 6px 12px;
+  white-space: nowrap;
+}
+@media (max-width: 600px) {
+  .my-mob-row {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 8px;
+  }
+  .my-mob-row-btn {
+    width: 100%;
+    text-align: center;
+  }
+}
