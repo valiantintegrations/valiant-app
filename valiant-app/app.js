@@ -367,6 +367,7 @@ const state = {
   meetings: JSON.parse(localStorage.getItem('vi_meetings') || '[]'),
   meetingApprovals: JSON.parse(localStorage.getItem('vi_meeting_approvals') || '{}'),
   personalEvents: JSON.parse(localStorage.getItem('vi_personal_events') || '[]'),
+  userLayouts: JSON.parse(localStorage.getItem('vi_user_layouts') || '{}'),
   calendarSelectedMembers: JSON.parse(localStorage.getItem('vi_calendar_selected_members') || '[]'),
   calendarShowBooked: JSON.parse(localStorage.getItem('vi_calendar_show_booked') || 'false'),
   calendarShowEstimated: JSON.parse(localStorage.getItem('vi_calendar_show_estimated') || 'false'),
@@ -3093,6 +3094,259 @@ function sortByUrgency(projects) {
   });
 }
 
+// ════════════════════════════════════════════════════════════════════════════
+// MY WORK — DASHBOARD WIDGET LAYOUT SYSTEM (Round A)
+// ────────────────────────────────────────────────────────────────────────────
+// 12-column responsive grid. Users (eventually) drag/resize/hide widgets;
+// Round A just establishes the data model, render engine, and sensible
+// defaults. Customize UX comes in Round B.
+// ════════════════════════════════════════════════════════════════════════════
+
+// MY_WORK_WIDGETS — registry of every customizable widget on My Work.
+//   id          stable identifier (used as the storage key for layout entries)
+//   label       human-readable name (shown in the customize palette later)
+//   defaultSpan column count on a 12-col desktop grid (3/4/6/8/12)
+//   minSpan     smallest allowed span (resize lower bound, Round C)
+//   render      (memberId, ctx) => HTML string. Returns '' if widget has nothing
+//               to show (in which case the grid cell is suppressed).
+//   locked      if true, user can't move/resize/hide. Used for Mobilization
+//               (per design decision: stays "annoying" full-width).
+//   hideable    if false, can't be hidden in customize mode.
+const MY_WORK_WIDGETS = [
+  {
+    id: 'metrics',
+    label: 'Status Summary',
+    defaultSpan: 4,
+    minSpan: 3,
+    hideable: true,
+    render: (memberId, ctx) => renderMetricsWidget(ctx)
+  },
+  {
+    id: 'mobilization',
+    label: 'Mobilization Needed',
+    defaultSpan: 12,
+    minSpan: 12,
+    locked: true,
+    hideable: false,
+    render: (memberId, ctx) => renderMyMobilizationCard(memberId)
+  },
+  {
+    id: 'actions',
+    label: 'Actions Assigned to Me',
+    defaultSpan: 6,
+    minSpan: 4,
+    hideable: true,
+    render: (memberId, ctx) => renderMyActionsWidget(ctx)
+  },
+  {
+    id: 'pending_approvals',
+    label: 'Pending Approvals',
+    defaultSpan: 6,
+    minSpan: 4,
+    hideable: true,
+    render: (memberId, ctx) => renderPendingApprovalsCard()
+  },
+  {
+    id: 'my_calendar',
+    label: 'My Calendar · Next 7 Days',
+    defaultSpan: 8,
+    minSpan: 6,
+    hideable: true,
+    render: (memberId, ctx) => renderMyCalendarCard(memberId)
+  }
+];
+
+function getMyWorkWidget(id) {
+  return MY_WORK_WIDGETS.find(w => w.id === id) || null;
+}
+
+// Default layout — returns array of {id, span, hidden, order}.
+//   row 1: metrics (4) + my_calendar (8) = 12
+//   row 2: mobilization (12, locked)
+//   row 3: actions (6) + pending_approvals (6) = 12
+function getDefaultMyWorkLayout(memberId) {
+  return [
+    { id: 'metrics',           order: 0, span: 4,  hidden: false },
+    { id: 'my_calendar',       order: 1, span: 8,  hidden: false },
+    { id: 'mobilization',      order: 2, span: 12, hidden: false },
+    { id: 'actions',           order: 3, span: 6,  hidden: false },
+    { id: 'pending_approvals', order: 4, span: 6,  hidden: false }
+  ];
+}
+
+// Returns the user's saved layout, or the default if no saved layout exists.
+// Reconciles the saved layout against the current widget catalog: appends
+// newly added widgets to the end; drops unknown widget ids silently.
+function getMyWorkLayout(memberId) {
+  const saved = state.userLayouts?.[memberId];
+  if (!saved || !Array.isArray(saved.widgets)) {
+    return getDefaultMyWorkLayout(memberId);
+  }
+  const known = MY_WORK_WIDGETS.map(w => w.id);
+  const filtered = saved.widgets.filter(w => known.includes(w.id));
+  const presentIds = filtered.map(w => w.id);
+  const missing = MY_WORK_WIDGETS.filter(w => !presentIds.includes(w.id));
+  let nextOrder = filtered.reduce((m, w) => Math.max(m, w.order || 0), -1) + 1;
+  missing.forEach(w => {
+    filtered.push({ id: w.id, order: nextOrder++, span: w.defaultSpan, hidden: false });
+  });
+  filtered.sort((a, b) => (a.order || 0) - (b.order || 0));
+  return filtered;
+}
+
+function saveMyWorkLayout(memberId, widgets) {
+  if (!state.userLayouts) state.userLayouts = {};
+  state.userLayouts[memberId] = { widgets, updatedAt: new Date().toISOString() };
+  save('vi_user_layouts', state.userLayouts);
+}
+
+// Force-locked widgets back to their canonical state so the catalog's intent
+// (e.g., Mobilization always full-width, never hidden) survives any saved data.
+function reconcileLayoutWithLocks(layout) {
+  return layout.map(entry => {
+    const widget = getMyWorkWidget(entry.id);
+    if (!widget) return entry;
+    const out = { ...entry };
+    if (widget.locked) {
+      out.span = widget.defaultSpan;
+      out.hidden = false;
+    } else if (!widget.hideable && out.hidden) {
+      out.hidden = false;
+    } else if (widget.minSpan && out.span < widget.minSpan) {
+      out.span = widget.minSpan;
+    }
+    return out;
+  });
+}
+
+// ── Widget render helpers ──
+// (renderMyMobilizationCard, renderMyCalendarCard, renderPendingApprovalsCard
+// already exist later in the file. The two below are extracted from inline.)
+
+function renderMetricsWidget(ctx) {
+  const { myProjects, myAssignments, urgentProjects, flaggedProjects } = ctx;
+  const roleCount = Object.keys(myAssignments).filter(k => myAssignments[k].length > 0).length;
+  return `
+    <div class="mywork-metrics-widget">
+      <div class="metric-card">
+        <div class="metric-label">My Projects</div>
+        <div class="metric-value">${myProjects.length}</div>
+        <div class="metric-sub">across ${roleCount} role${roleCount === 1 ? '' : 's'}</div>
+      </div>
+      ${urgentProjects.length > 0 ? `
+        <div class="metric-card" style="border-color:#DA3633">
+          <div class="metric-label">Urgent</div>
+          <div class="metric-value" style="color:#F85149">${urgentProjects.length}</div>
+          <div class="metric-sub">install within 14 days</div>
+        </div>
+      ` : ''}
+      ${flaggedProjects.length > 0 ? `
+        <div class="metric-card" style="border-color:#9E6A03">
+          <div class="metric-label">Needs Attention</div>
+          <div class="metric-value" style="color:#D29922">${flaggedProjects.length}</div>
+          <div class="metric-sub">has flagged items</div>
+        </div>
+      ` : ''}
+    </div>
+  `;
+}
+
+function renderMyActionsWidget(ctx) {
+  const { myActions } = ctx;
+  if (!myActions || myActions.length === 0) return '';
+  return `
+    <div class="dashboard-card" style="margin:0">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px">
+        <div class="dashboard-card-title" style="margin:0;color:#58A6FF">Actions Assigned to Me &middot; ${myActions.length}</div>
+        <button type="button" onclick="setDashboardMode('sales_mgmt');setSalesDashTab('action')" class="btn btn-sm" style="font-size:11px;padding:4px 10px">View all in Sales</button>
+      </div>
+      ${myActions.slice(0, 8).map(a => renderActionRow(a)).join('')}
+      ${myActions.length > 8 ? `<div style="text-align:center;font-size:11px;color:#8B949E;margin-top:8px">+ ${myActions.length - 8} more</div>` : ''}
+    </div>
+  `;
+}
+
+// Renders the customizable widget grid. Returns the full HTML for the
+// widget zone of My Work (metrics, mobilization, actions, pending, calendar).
+// The dashboard wraps this with the closeout banner above and project
+// sections below — neither is part of the customizable grid.
+//
+// Row balancing: empty widgets are filtered out, then we walk through the
+// remaining widgets in order and group them into rows (cumulative span up
+// to 12). When a row ends up < 12 cols total (because a paired widget was
+// empty), the LAST widget in that row is promoted to fill the remaining
+// space. This avoids awkward half-empty rows when, e.g., Pending Approvals
+// is empty but Actions is present.
+function renderMyWorkWidgetGrid(memberId, ctx) {
+  const layout = reconcileLayoutWithLocks(getMyWorkLayout(memberId));
+
+  // Pre-render widgets and filter out empties
+  const rendered = [];
+  layout.filter(e => !e.hidden).forEach(entry => {
+    const widget = getMyWorkWidget(entry.id);
+    if (!widget) return;
+    const html = widget.render(memberId, ctx);
+    if (!html) return;
+    rendered.push({ entry, widget, html });
+  });
+
+  if (rendered.length === 0) return '';
+
+  // Row balancing — walk widgets in order, group by cumulative span, expand
+  // the last widget in any row that doesn't fill 12 cols.
+  const rows = [];
+  let current = { items: [], total: 0 };
+  rendered.forEach(item => {
+    if (current.total + item.entry.span > 12) {
+      rows.push(current);
+      current = { items: [], total: 0 };
+    }
+    current.items.push(item);
+    current.total += item.entry.span;
+  });
+  if (current.items.length) rows.push(current);
+
+  // Promote orphan widgets to fill the remaining row
+  rows.forEach(row => {
+    if (row.total < 12 && row.items.length > 0) {
+      const last = row.items[row.items.length - 1];
+      const widget = last.widget;
+      // Don't expand locked widgets beyond their own default span.
+      if (!widget.locked) {
+        const remaining = 12 - row.total;
+        last.effectiveSpan = last.entry.span + remaining;
+      }
+    }
+  });
+
+  const cells = rendered.map(item => {
+    const span = item.effectiveSpan || item.entry.span;
+    return `<div class="mywork-widget mywork-widget-span-${span}" data-widget-id="${item.entry.id}">${item.html}</div>`;
+  }).join('');
+
+  return `<div class="mywork-grid">${cells}</div>`;
+}
+
+function renderMyWorkCustomizeButton() {
+  // Round A: button is a placeholder — in Round B it will toggle customize mode.
+  // Hidden on mobile per design decision (#9: mobile uses defaults only).
+  return `
+    <button type="button" class="mywork-customize-btn" onclick="openMyWorkCustomizePlaceholder()" title="Customize layout (coming soon)">
+      <svg width="13" height="13" viewBox="0 0 14 14" fill="none">
+        <circle cx="7" cy="3" r="1.2" stroke="currentColor" stroke-width="1.3"/>
+        <circle cx="7" cy="7" r="1.2" stroke="currentColor" stroke-width="1.3"/>
+        <circle cx="7" cy="11" r="1.2" stroke="currentColor" stroke-width="1.3"/>
+        <path d="M3 3h2M9 3h2M3 7h2M9 7h2M3 11h2M9 11h2" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/>
+      </svg>
+      <span>Customize</span>
+    </button>
+  `;
+}
+
+function openMyWorkCustomizePlaceholder() {
+  showToast('Customize layout — coming soon', 'info');
+}
+
 function renderMyWorkDashboard(memberId, activeProjects, myAssignments, activeMember) {
   const totalAssigned = Object.values(myAssignments).reduce((n, arr) => n + arr.length, 0);
   const myCloseoutProjects = getMyCloseoutProjects(memberId);
@@ -3161,31 +3415,6 @@ function renderMyWorkDashboard(memberId, activeProjects, myAssignments, activeMe
     return closeoutBanner;
   }
 
-  // Build summary row
-  const summaryRow = `
-    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:10px;margin-bottom:18px">
-      <div class="metric-card">
-        <div class="metric-label">My Projects</div>
-        <div class="metric-value">${myProjects.length}</div>
-        <div class="metric-sub">across ${Object.keys(myAssignments).filter(k => myAssignments[k].length > 0).length} role${Object.keys(myAssignments).filter(k => myAssignments[k].length > 0).length === 1 ? '' : 's'}</div>
-      </div>
-      ${urgentProjects.length > 0 ? `
-        <div class="metric-card" style="border-color:#DA3633">
-          <div class="metric-label">Urgent</div>
-          <div class="metric-value" style="color:#F85149">${urgentProjects.length}</div>
-          <div class="metric-sub">install within 14 days</div>
-        </div>
-      ` : ''}
-      ${flaggedProjects.length > 0 ? `
-        <div class="metric-card" style="border-color:#9E6A03">
-          <div class="metric-label">Needs Attention</div>
-          <div class="metric-value" style="color:#D29922">${flaggedProjects.length}</div>
-          <div class="metric-sub">has flagged items</div>
-        </div>
-      ` : ''}
-    </div>
-  `;
-
   // Build sections — one per role that has assignments
   const sections = ASSIGNMENT_ROLES.map(r => {
     const assignments = myAssignments[r.key];
@@ -3218,26 +3447,22 @@ function renderMyWorkDashboard(memberId, activeProjects, myAssignments, activeMe
     `;
   }).join('');
 
-  // Build "My Actions" — sales-relevant actions assigned to this user
+  // Pre-compute everything widgets need so each render call is cheap
   const myActions = buildSalesActions(activeProjects, memberId, 'mine');
-  const myActionsHTML = myActions.length === 0 ? '' : `
-    <div class="dashboard-card" style="margin-bottom:16px">
-      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px">
-        <div class="dashboard-card-title" style="margin:0;color:#58A6FF">Actions Assigned to Me &middot; ${myActions.length}</div>
-        <button type="button" onclick="setDashboardMode('sales_mgmt');setSalesDashTab('action')" class="btn btn-sm" style="font-size:11px;padding:4px 10px">View all in Sales</button>
-      </div>
-      ${myActions.slice(0, 8).map(a => renderActionRow(a)).join('')}
-      ${myActions.length > 8 ? `<div style="text-align:center;font-size:11px;color:#8B949E;margin-top:8px">+ ${myActions.length - 8} more</div>` : ''}
-    </div>
-  `;
+  const widgetCtx = {
+    myProjects,
+    myAssignments,
+    urgentProjects,
+    flaggedProjects,
+    myActions
+  };
 
   return `
     ${closeoutBanner}
-    ${summaryRow}
-    ${renderMyMobilizationCard(memberId)}
-    ${myActionsHTML}
-    ${renderPendingApprovalsCard()}
-    ${renderMyCalendarCard(memberId)}
+    <div class="mywork-toolbar">
+      ${renderMyWorkCustomizeButton()}
+    </div>
+    ${renderMyWorkWidgetGrid(memberId, widgetCtx)}
     ${sections}
   `;
 }
