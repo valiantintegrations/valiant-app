@@ -5256,7 +5256,7 @@ const PHASES = [
 const MILESTONE_ACTIONS = {
   'lead.walkthrough_sched': {
     type: 'meeting_then_email',
-    label: 'Schedule Walkthrough',
+    label: 'Schedule meeting and send client invite',
     meetingType: 'walkthrough',
     template: 'walkthrough_schedule'
   },
@@ -6458,7 +6458,7 @@ function renderCalendar(c) {
           <button class="cal-btn" onclick="calNav(1)"><svg width="12" height="12" viewBox="0 0 12 12" fill="none"><path d="M4 2l4 4-4 4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg></button>
         </div>
         <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
-          <button class="cal-btn" onclick="calToday()" style="width:auto;padding:0 10px;font-size:11px">Today</button>
+          <button type="button" class="cal-action-btn" onclick="calToday()">Today</button>
           <button type="button" class="cal-action-btn" onclick="openAddPersonalEventDialog()">+ Personal Event</button>
           <button type="button" class="cal-action-btn cal-action-btn-primary" onclick="openGenericMeetingPicker()">+ Schedule Meeting</button>
         </div>
@@ -14029,9 +14029,9 @@ function renderMeetingPickerDay() {
       const conflicts = _mpGetSelectionConflicts();
       const isConflict = conflicts.length > 0;
       selectionOverlayHTML = `
-        <div class="mp2-selection ${isConflict ? 'mp2-selection-conflict' : ''}" id="mp2-selection-block" style="top:${topPx}px;height:${heightPx}px" onmousedown="_mpStartSelectionDrag(event)" ontouchstart="_mpStartSelectionDrag(event)">
+        <div class="mp2-selection ${isConflict ? 'mp2-selection-conflict' : ''}" id="mp2-selection-block" style="top:${topPx}px;height:${heightPx}px" onmousedown="_mpStartSelectionDrag(event)">
           <div class="mp2-selection-label">${esc(_fmt12hRange(s.selectedStart, s.selectedEnd))}${isConflict ? ' · ⚠ conflict' : ''}</div>
-          <div class="mp2-selection-grip" aria-hidden="true">⋮⋮</div>
+          <div class="mp2-selection-grip" aria-label="Drag to reschedule" ontouchstart="_mpStartSelectionDrag(event)" onmousedown="event.stopPropagation();_mpStartSelectionDrag(event)">⋮⋮</div>
         </div>
       `;
     }
@@ -14085,7 +14085,13 @@ let _mpDragState = null;
 function _mpStartSelectionDrag(event) {
   // Only respond to primary mouse button or first touch
   if (event.type === 'mousedown' && event.button !== 0) return;
-  event.preventDefault();
+  // For touchstart, do NOT call preventDefault here — that would block
+  // any vertical scroll gesture that started on the selection. The drag
+  // is fully claimed in _mpHandleSelectionDragMove once a movement is detected.
+  // For mousedown, prevent default to suppress text-selection during drag.
+  if (event.type === 'mousedown') {
+    event.preventDefault();
+  }
   event.stopPropagation();
 
   const s = _meetingPickerState;
@@ -14096,8 +14102,6 @@ function _mpStartSelectionDrag(event) {
   const block = document.getElementById('mp2-selection-block');
   if (!block) return;
 
-  // Capture the offset within the block where the user grabbed it,
-  // so the drag feels natural (not jumping to top-left under cursor)
   const blockRect = block.getBoundingClientRect();
   const layerRect = layer.getBoundingClientRect();
   const startY = (event.touches ? event.touches[0].clientY : event.clientY);
