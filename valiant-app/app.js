@@ -3225,6 +3225,27 @@ function getDefaultMyWorkLayout(memberId) {
   ];
 }
 
+// Layout schema version. Bumped whenever we change defaults in a way that
+// pre-existing saved layouts wouldn't reflect (e.g., reordering, adding
+// locked widgets in a specific position). On load, any saved layout missing
+// or below this version is reset to defaults — the user gets the new layout
+// once and can customize from there.
+const MY_WORK_LAYOUT_VERSION = 2;
+
+function _migrateMyWorkLayoutsOnce() {
+  if (!state.userLayouts) return;
+  let dirty = false;
+  Object.keys(state.userLayouts).forEach(memberId => {
+    const saved = state.userLayouts[memberId];
+    if (!saved || (saved.version || 0) < MY_WORK_LAYOUT_VERSION) {
+      delete state.userLayouts[memberId];
+      dirty = true;
+    }
+  });
+  if (dirty) save('vi_user_layouts', state.userLayouts);
+}
+_migrateMyWorkLayoutsOnce();
+
 // Returns the user's saved layout, or the default if no saved layout exists.
 // Reconciles the saved layout against the current widget catalog: appends
 // newly added widgets to the end; drops unknown widget ids silently.
@@ -3247,7 +3268,11 @@ function getMyWorkLayout(memberId) {
 
 function saveMyWorkLayout(memberId, widgets) {
   if (!state.userLayouts) state.userLayouts = {};
-  state.userLayouts[memberId] = { widgets, updatedAt: new Date().toISOString() };
+  state.userLayouts[memberId] = {
+    widgets,
+    version: MY_WORK_LAYOUT_VERSION,
+    updatedAt: new Date().toISOString()
+  };
   save('vi_user_layouts', state.userLayouts);
 }
 
