@@ -4761,3 +4761,141 @@ td.today .cal-day-num {
   .mob-dialog-header .modal-title { font-size: 14px; }
   .mob-dialog-header .modal-sub { font-size: 11px; }
 }
+
+/* ════════════════════════════════════════════════════════════════════════
+   MY WORK — DASHBOARD WIDGET GRID (Round A)
+   12-column grid on wide screens; auto-collapses on narrower viewports.
+   ════════════════════════════════════════════════════════════════════════ */
+
+/* Toolbar (Customize button) */
+.mywork-toolbar {
+  display: flex;
+  justify-content: flex-end;
+  align-items: center;
+  margin-bottom: 10px;
+  gap: 8px;
+}
+.mywork-customize-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  background: #161B22;
+  border: 1px solid #30363D;
+  color: #8B949E;
+  padding: 6px 12px;
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 11px;
+  font-family: inherit;
+  -webkit-tap-highlight-color: transparent;
+  transition: all 0.12s;
+}
+.mywork-customize-btn:hover {
+  border-color: #58A6FF;
+  color: #C9D1D9;
+}
+
+/* Hide Customize button on mobile (mobile uses defaults only — design decision #9) */
+@media (max-width: 768px) {
+  .mywork-toolbar { display: none; }
+}
+
+/* Grid container — 12-column responsive grid */
+.mywork-grid {
+  display: grid;
+  grid-template-columns: repeat(12, 1fr);
+  gap: 14px;
+  margin-bottom: 18px;
+}
+
+/* Span classes — desktop ≥1024px gets exact column counts.
+   Smaller screens get progressive collapse. */
+.mywork-widget { min-width: 0; }      /* prevent grid blowout */
+.mywork-widget-span-1  { grid-column: span 1; }
+.mywork-widget-span-2  { grid-column: span 2; }
+.mywork-widget-span-3  { grid-column: span 3; }
+.mywork-widget-span-4  { grid-column: span 4; }
+.mywork-widget-span-5  { grid-column: span 5; }
+.mywork-widget-span-6  { grid-column: span 6; }
+.mywork-widget-span-7  { grid-column: span 7; }
+.mywork-widget-span-8  { grid-column: span 8; }
+.mywork-widget-span-9  { grid-column: span 9; }
+.mywork-widget-span-10 { grid-column: span 10; }
+.mywork-widget-span-11 { grid-column: span 11; }
+.mywork-widget-span-12 { grid-column: span 12; }
+
+/* Tablet — half-and-half pairings collapse to full width when too narrow */
+@media (max-width: 1023px) {
+  .mywork-widget-span-1,
+  .mywork-widget-span-2,
+  .mywork-widget-span-3,
+  .mywork-widget-span-4,
+  .mywork-widget-span-5 {
+    grid-column: span 6;     /* small widgets pair up two-by-two */
+  }
+  .mywork-widget-span-6,
+  .mywork-widget-span-7,
+  .mywork-widget-span-8,
+  .mywork-widget-span-9,
+  .mywork-widget-span-10,
+  .mywork-widget-span-11 {
+    grid-column: span 12;    /* medium/large go full width */
+  }
+}
+
+/* Mobile — everything stacks single-column */
+@media (max-width: 768px) {
+  .mywork-grid {
+    grid-template-columns: 1fr;
+    gap: 12px;
+  }
+  .mywork-widget,
+  .mywork-widget-span-1,
+  .mywork-widget-span-2,
+  .mywork-widget-span-3,
+  .mywork-widget-span-4,
+  .mywork-widget-span-5,
+  .mywork-widget-span-6,
+  .mywork-widget-span-7,
+  .mywork-widget-span-8,
+  .mywork-widget-span-9,
+  .mywork-widget-span-10,
+  .mywork-widget-span-11,
+  .mywork-widget-span-12 {
+    grid-column: 1 / -1;
+  }
+}
+
+/* Metrics widget — stacks the 1–3 metric cards vertically inside its cell.
+   On wider widget cells (≥6 cols), it can lay them out horizontally. */
+.mywork-metrics-widget {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  height: 100%;
+}
+.mywork-metrics-widget .metric-card {
+  margin: 0;
+}
+/* When the metrics widget is in a wider span, lay metrics horizontally */
+.mywork-widget-span-6 .mywork-metrics-widget,
+.mywork-widget-span-8 .mywork-metrics-widget,
+.mywork-widget-span-12 .mywork-metrics-widget {
+  flex-direction: row;
+  flex-wrap: wrap;
+}
+.mywork-widget-span-6 .mywork-metrics-widget .metric-card,
+.mywork-widget-span-8 .mywork-metrics-widget .metric-card,
+.mywork-widget-span-12 .mywork-metrics-widget .metric-card {
+  flex: 1 1 160px;
+}
+
+
+/* Inside the widget grid, reset card margins so the grid `gap` controls
+   spacing (otherwise margin-bottom on inner cards compounds). */
+.mywork-widget > .dashboard-card,
+.mywork-widget > [data-context-section] {
+  margin-bottom: 0 !important;
+  margin-top: 0 !important;
+  height: 100%;
+}
