@@ -4731,10 +4731,14 @@ td.today .cal-day-num {
 /* On mobile, the × is redundant with the prominent Back button — hide it */
 @media (max-width: 768px) {
   .mob-dialog-container {
-    /* Mobile: take the full standard mobile-modal height (uses .modal-container's
-       max-height: 92dvh). Override the desktop cap above. */
-    max-height: 92vh;
-    max-height: 92dvh;
+    /* Full viewport height on mobile — the mobilization dialog is a focused
+       work surface, so we use the entire screen instead of bottom-sheeting it.
+       Removes the wasted dim-overlay strip at the top showing the dashboard. */
+    height: 100vh;
+    height: 100dvh;
+    max-height: 100vh;
+    max-height: 100dvh;
+    border-radius: 0;
   }
   .mob-dialog-header .modal-close {
     display: none;
