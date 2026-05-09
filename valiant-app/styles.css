@@ -5119,3 +5119,111 @@ td.today .cal-day-num {
   .mywork-resize-handle,
   .mywork-span-badge { display: none; }
 }
+
+/* ════════════════════════════════════════════════════════════════════════
+   MY WORK — HIDE / SHOW + WIDGET PALETTE (Round D)
+   ════════════════════════════════════════════════════════════════════════ */
+
+/* Hide button — top-left × on each hideable widget in customize mode */
+.mywork-hide-btn {
+  position: absolute;
+  top: -4px;
+  left: -4px;
+  z-index: 5;
+  background: #161B22;
+  border: 1px solid #30363D;
+  color: #8B949E;
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  font-family: inherit;
+  -webkit-tap-highlight-color: transparent;
+  padding: 0;
+  transition: all 0.12s;
+}
+.mywork-hide-btn:hover {
+  background: #1A0D0D;
+  border-color: #DA3633;
+  color: #F85149;
+}
+
+/* Hide animation — applied to the widget element briefly before re-render */
+@keyframes myworkHideFade {
+  to {
+    opacity: 0;
+    transform: scale(0.94);
+  }
+}
+.mywork-widget-hiding {
+  animation: myworkHideFade 0.18s ease-out forwards;
+  pointer-events: none;
+}
+
+/* Widget palette — sits below the grid in customize mode */
+.mywork-palette {
+  margin-top: 14px;
+  padding: 12px 14px;
+  background: #0D1117;
+  border: 1px dashed #30363D;
+  border-radius: 8px;
+}
+.mywork-palette-title {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: #8B949E;
+  font-weight: 600;
+  margin-bottom: 8px;
+}
+.mywork-palette-hint {
+  font-size: 12px;
+  color: #6E7681;
+  font-style: italic;
+}
+.mywork-palette-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.mywork-palette-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  background: #161B22;
+  border: 1px solid #30363D;
+  color: #C9D1D9;
+  padding: 6px 12px;
+  border-radius: 16px;
+  font-size: 12px;
+  font-family: inherit;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+  transition: all 0.12s;
+}
+.mywork-palette-chip:hover {
+  background: #0D1F3D;
+  border-color: #58A6FF;
+  color: #58A6FF;
+}
+.mywork-palette-chip svg {
+  flex-shrink: 0;
+  opacity: 0.7;
+}
+.mywork-palette-chip:hover svg { opacity: 1; }
+
+/* Empty palette gets a softer style */
+.mywork-palette-empty {
+  background: transparent;
+  border-style: dashed;
+  border-color: #1C2333;
+}
+
+/* Hide palette on mobile (customize mode itself is mobile-hidden) */
+@media (max-width: 768px) {
+  .mywork-palette,
+  .mywork-hide-btn { display: none; }
+}
