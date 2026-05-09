@@ -3114,47 +3114,83 @@ function sortByUrgency(projects) {
 //   locked      if true, user can't move/resize/hide. Used for Mobilization
 //               (per design decision: stays "annoying" full-width).
 //   hideable    if false, can't be hidden in customize mode.
-const MY_WORK_WIDGETS = [
+// ════════════════════════════════════════════════════════════════════════════
+// DASHBOARD WIDGET SYSTEM (Round E refactor)
+// ────────────────────────────────────────────────────────────────────────────
+// Widgets are reusable building blocks that any dashboard can include.
+// The system has three layers:
+//
+//   1. WIDGET CATALOG (WIDGETS array): describes WHAT each widget is — its
+//      label, sizing constraints, scopes, render function, availability rule.
+//      Catalog entries are dashboard-agnostic.
+//
+//   2. DASHBOARD DEFINITION (DASHBOARDS object): describes WHICH widgets
+//      appear on a given dashboard, in what default order, AND any per-
+//      dashboard policy overrides like locking. Each dashboard gets its
+//      own default layout so the same widget can be locked on one dashboard
+//      and freely moveable on another.
+//
+//   3. USER LAYOUT (state.userLayouts[dashboardKey][memberId]): the user's
+//      saved customizations for a specific dashboard. Stores widget ids,
+//      spans, hidden flags, and order. Falls back to the dashboard default.
+//
+// Each widget render fn receives (ctx) where ctx is built by the dashboard:
+//   { dashboardKey, memberId, ...dashboardSpecificData }
+// ════════════════════════════════════════════════════════════════════════════
+
+// ── Widget catalog ──
+// Each widget declares:
+//   id            stable identifier (used as the layout key)
+//   label         human-readable name (palette + tooltips)
+//   defaultSpan   column count on a 12-col grid (3/4/6/8/12)
+//   minSpan       smallest allowed span (resize lower bound)
+//   render        (ctx) => HTML string. Empty string suppresses the cell.
+//   scopes        which dashboard scopes this widget supports.
+//                 Examples: ['mine'] (My Work only),
+//                           ['mine', 'sales_dept'] (multiple),
+//                           '*' (universal). Catalog hides widgets from
+//                           dashboards whose scope isn't supported.
+//   availableTo   (memberId) => boolean. Optional permission gate. Default true.
+const WIDGETS = [
   {
     id: 'mobilization',
     label: 'Mobilization Needed',
     defaultSpan: 12,
     minSpan: 12,
-    locked: true,
-    hideable: false,
-    render: (memberId, ctx) => renderMyMobilizationCard(memberId)
+    scopes: ['mine'],
+    render: (ctx) => renderMyMobilizationCard(ctx.memberId)
   },
   {
     id: 'metrics',
     label: 'Status Summary',
     defaultSpan: 4,
     minSpan: 3,
-    hideable: true,
-    render: (memberId, ctx) => renderMetricsWidget(ctx)
+    scopes: ['mine'],
+    render: (ctx) => renderMetricsWidget(ctx)
   },
   {
     id: 'my_calendar',
     label: 'My Calendar · Next 7 Days',
     defaultSpan: 8,
     minSpan: 6,
-    hideable: true,
-    render: (memberId, ctx) => renderMyCalendarCard(memberId)
+    scopes: ['mine'],
+    render: (ctx) => renderMyCalendarCard(ctx.memberId)
   },
   {
     id: 'actions',
     label: 'Actions Assigned to Me',
     defaultSpan: 6,
     minSpan: 4,
-    hideable: true,
-    render: (memberId, ctx) => renderMyActionsWidget(ctx)
+    scopes: ['mine'],
+    render: (ctx) => renderMyActionsWidget(ctx)
   },
   {
     id: 'pending_approvals',
     label: 'Pending Approvals',
     defaultSpan: 6,
     minSpan: 4,
-    hideable: true,
-    render: (memberId, ctx) => renderPendingApprovalsCard()
+    scopes: ['mine'],
+    render: (ctx) => renderPendingApprovalsCard()
   },
   // Role-section widgets — one per assignment role. Each renders only when
   // the user has assignments in that role. Hidden cells are filtered out
@@ -3164,136 +3200,243 @@ const MY_WORK_WIDGETS = [
     label: 'Sales · Projects',
     defaultSpan: 12,
     minSpan: 6,
-    hideable: true,
-    render: (memberId, ctx) => renderRoleSectionWidget('sales', ctx)
+    scopes: ['mine'],
+    render: (ctx) => renderRoleSectionWidget('sales', ctx)
   },
   {
     id: 'role_design',
     label: 'Design · Projects',
     defaultSpan: 12,
     minSpan: 6,
-    hideable: true,
-    render: (memberId, ctx) => renderRoleSectionWidget('design', ctx)
+    scopes: ['mine'],
+    render: (ctx) => renderRoleSectionWidget('design', ctx)
   },
   {
     id: 'role_pm',
     label: 'Project Manager · Projects',
     defaultSpan: 12,
     minSpan: 6,
-    hideable: true,
-    render: (memberId, ctx) => renderRoleSectionWidget('pm', ctx)
+    scopes: ['mine'],
+    render: (ctx) => renderRoleSectionWidget('pm', ctx)
   },
   {
     id: 'role_install',
     label: 'Install · Projects',
     defaultSpan: 12,
     minSpan: 6,
-    hideable: true,
-    render: (memberId, ctx) => renderRoleSectionWidget('install', ctx)
+    scopes: ['mine'],
+    render: (ctx) => renderRoleSectionWidget('install', ctx)
   },
   {
     id: 'role_warehouse',
     label: 'Warehouse · Projects',
     defaultSpan: 12,
     minSpan: 6,
-    hideable: true,
-    render: (memberId, ctx) => renderRoleSectionWidget('warehouse', ctx)
+    scopes: ['mine'],
+    render: (ctx) => renderRoleSectionWidget('warehouse', ctx)
   }
 ];
 
-function getMyWorkWidget(id) {
-  return MY_WORK_WIDGETS.find(w => w.id === id) || null;
+function getWidget(id) {
+  return WIDGETS.find(w => w.id === id) || null;
 }
 
-// Default layout — returns array of {id, span, hidden, order}.
-//   row 1: mobilization (12, locked) — drain-the-queue surface, in your face
-//   row 2: metrics (4) + my_calendar (8) = 12
-//   row 3: actions (6) + pending_approvals (6) = 12
-//   row 4+: role sections (one per role at full width); empty roles auto-suppress
-function getDefaultMyWorkLayout(memberId) {
-  return [
-    { id: 'mobilization',      order: 0,  span: 12, hidden: false },
-    { id: 'metrics',           order: 1,  span: 4,  hidden: false },
-    { id: 'my_calendar',       order: 2,  span: 8,  hidden: false },
-    { id: 'actions',           order: 3,  span: 6,  hidden: false },
-    { id: 'pending_approvals', order: 4,  span: 6,  hidden: false },
-    { id: 'role_sales',        order: 5,  span: 12, hidden: false },
-    { id: 'role_design',       order: 6,  span: 12, hidden: false },
-    { id: 'role_pm',           order: 7,  span: 12, hidden: false },
-    { id: 'role_install',      order: 8,  span: 12, hidden: false },
-    { id: 'role_warehouse',    order: 9,  span: 12, hidden: false }
-  ];
+// Returns widgets available on a given dashboard (matching scope) and
+// available to the current user (passing availableTo gate).
+function getWidgetsForDashboard(dashboardKey, memberId) {
+  return WIDGETS.filter(w => {
+    if (w.scopes !== '*' && !(w.scopes || []).includes(dashboardKey)) return false;
+    if (typeof w.availableTo === 'function' && !w.availableTo(memberId)) return false;
+    return true;
+  });
 }
 
-// Layout schema version. Bumped whenever we change defaults in a way that
-// pre-existing saved layouts wouldn't reflect (e.g., reordering, adding
-// locked widgets in a specific position). On load, any saved layout missing
-// or below this version is reset to defaults — the user gets the new layout
-// once and can customize from there.
-const MY_WORK_LAYOUT_VERSION = 2;
+// ── Dashboard definitions ──
+// Each dashboard owns its default layout AND per-dashboard policy overrides.
+//   defaultLayout  array of { id, order, span, hidden, locked?, hideable? }.
+//                  locked: prevents user from moving/resizing/hiding (wins over
+//                  catalog defaults). hideable:false: prevents hide.
+const DASHBOARDS = {
+  mine: {
+    label: 'My Work',
+    defaultLayout: [
+      // Mobilization is locked HERE (urgent, must show, can't shrink). On
+      // other dashboards mobilization could be a regular widget if reused.
+      { id: 'mobilization',      order: 0, span: 12, hidden: false, locked: true, hideable: false },
+      { id: 'metrics',           order: 1, span: 4,  hidden: false },
+      { id: 'my_calendar',       order: 2, span: 8,  hidden: false },
+      { id: 'actions',           order: 3, span: 6,  hidden: false },
+      { id: 'pending_approvals', order: 4, span: 6,  hidden: false },
+      { id: 'role_sales',        order: 5, span: 12, hidden: false },
+      { id: 'role_design',       order: 6, span: 12, hidden: false },
+      { id: 'role_pm',           order: 7, span: 12, hidden: false },
+      { id: 'role_install',      order: 8, span: 12, hidden: false },
+      { id: 'role_warehouse',    order: 9, span: 12, hidden: false }
+    ]
+  }
+  // Future: 'sales_mgmt', 'install_mgmt', 'executive', etc. each with their
+  // own defaultLayout. Adding a dashboard here is purely additive.
+};
 
-function _migrateMyWorkLayoutsOnce() {
-  if (!state.userLayouts) return;
-  let dirty = false;
-  Object.keys(state.userLayouts).forEach(memberId => {
-    const saved = state.userLayouts[memberId];
-    if (!saved || (saved.version || 0) < MY_WORK_LAYOUT_VERSION) {
-      delete state.userLayouts[memberId];
-      dirty = true;
+function getDashboardDef(dashboardKey) {
+  return DASHBOARDS[dashboardKey] || null;
+}
+
+function getDefaultLayout(dashboardKey) {
+  const def = getDashboardDef(dashboardKey);
+  if (!def) return [];
+  // Deep-clone so callers can mutate without polluting the static default
+  return def.defaultLayout.map(e => ({ ...e }));
+}
+
+// ── Layout schema versioning + migration ──
+// Bumped whenever the storage shape changes. v3 changes layout keying from
+// state.userLayouts[memberId] to state.userLayouts[dashboardKey][memberId].
+const LAYOUT_SCHEMA_VERSION = 3;
+
+function _migrateUserLayoutsOnce() {
+  if (!state.userLayouts) {
+    state.userLayouts = {};
+    return;
+  }
+  // Detect old shape: keys are member ids (numeric), each value is an object
+  // with a 'widgets' array. New shape: keys are dashboard keys (strings),
+  // each value is an object whose keys are member ids.
+  const looksOld = Object.values(state.userLayouts).some(v =>
+    v && typeof v === 'object' && Array.isArray(v.widgets)
+  );
+  if (looksOld) {
+    // v2 → v3: drop everything. Users get the new defaults; they can
+    // re-customize. We don't try to silently migrate v2 layouts because v2
+    // had a flat structure and v3 expects a dashboardKey wrapper — and the
+    // intended layout under "mine" should match the new defaults anyway.
+    state.userLayouts = {};
+    save('vi_user_layouts', state.userLayouts);
+  }
+  // Drop any per-dashboard layouts whose schema version is below current
+  Object.keys(state.userLayouts).forEach(dashboardKey => {
+    const dashLayouts = state.userLayouts[dashboardKey];
+    if (!dashLayouts || typeof dashLayouts !== 'object') {
+      delete state.userLayouts[dashboardKey];
+      return;
+    }
+    Object.keys(dashLayouts).forEach(memberId => {
+      const saved = dashLayouts[memberId];
+      if (!saved || (saved.version || 0) < LAYOUT_SCHEMA_VERSION) {
+        delete dashLayouts[memberId];
+      }
+    });
+    if (Object.keys(dashLayouts).length === 0) {
+      delete state.userLayouts[dashboardKey];
     }
   });
-  if (dirty) save('vi_user_layouts', state.userLayouts);
+  save('vi_user_layouts', state.userLayouts);
 }
-_migrateMyWorkLayoutsOnce();
+_migrateUserLayoutsOnce();
 
-// Returns the user's saved layout, or the default if no saved layout exists.
-// Reconciles the saved layout against the current widget catalog: appends
-// newly added widgets to the end; drops unknown widget ids silently.
-function getMyWorkLayout(memberId) {
-  const saved = state.userLayouts?.[memberId];
+// Returns the user's layout for a given dashboard, or the dashboard default
+// if not customized. Reconciles the saved layout against the current
+// dashboard definition: appends newly-added widgets to the end; drops
+// removed widget ids silently. Per-dashboard policy fields (locked, hideable)
+// always come from the current default — saved layouts only carry user-
+// editable fields (order, span, hidden).
+function getDashboardLayout(dashboardKey, memberId) {
+  const dashDef = getDashboardDef(dashboardKey);
+  if (!dashDef) return [];
+  const defaults = getDefaultLayout(dashboardKey);
+
+  const saved = state.userLayouts?.[dashboardKey]?.[memberId];
   if (!saved || !Array.isArray(saved.widgets)) {
-    return getDefaultMyWorkLayout(memberId);
+    return defaults;
   }
-  const known = MY_WORK_WIDGETS.map(w => w.id);
-  const filtered = saved.widgets.filter(w => known.includes(w.id));
+
+  // Index defaults by id for quick policy lookup
+  const defaultsById = {};
+  defaults.forEach(d => { defaultsById[d.id] = d; });
+
+  // Filter saved entries to widgets that still exist in this dashboard's defaults
+  const filtered = saved.widgets
+    .filter(w => defaultsById[w.id])
+    .map(w => {
+      const def = defaultsById[w.id];
+      // Merge: saved order/span/hidden + dashboard default policy (locked, hideable)
+      return {
+        id: w.id,
+        order: w.order != null ? w.order : def.order,
+        span: w.span != null ? w.span : def.span,
+        hidden: !!w.hidden,
+        locked: !!def.locked,
+        hideable: def.hideable !== false
+      };
+    });
+
+  // Append any newly-added widgets at the end
   const presentIds = filtered.map(w => w.id);
-  const missing = MY_WORK_WIDGETS.filter(w => !presentIds.includes(w.id));
-  let nextOrder = filtered.reduce((m, w) => Math.max(m, w.order || 0), -1) + 1;
-  missing.forEach(w => {
-    filtered.push({ id: w.id, order: nextOrder++, span: w.defaultSpan, hidden: false });
+  const missing = defaults.filter(d => !presentIds.includes(d.id));
+  let nextOrder = filtered.reduce((m, w) => Math.max(m, w.order), -1) + 1;
+  missing.forEach(d => {
+    filtered.push({ ...d, order: nextOrder++ });
   });
+
   filtered.sort((a, b) => (a.order || 0) - (b.order || 0));
   return filtered;
 }
 
-function saveMyWorkLayout(memberId, widgets) {
+function saveDashboardLayout(dashboardKey, memberId, widgets) {
   if (!state.userLayouts) state.userLayouts = {};
-  state.userLayouts[memberId] = {
-    widgets,
-    version: MY_WORK_LAYOUT_VERSION,
+  if (!state.userLayouts[dashboardKey]) state.userLayouts[dashboardKey] = {};
+  // Strip policy fields before saving — those live with the dashboard def,
+  // not the user's layout. Saved data only carries user-editable fields.
+  const stripped = widgets.map(w => ({
+    id: w.id,
+    order: w.order,
+    span: w.span,
+    hidden: !!w.hidden
+  }));
+  state.userLayouts[dashboardKey][memberId] = {
+    widgets: stripped,
+    version: LAYOUT_SCHEMA_VERSION,
     updatedAt: new Date().toISOString()
   };
   save('vi_user_layouts', state.userLayouts);
 }
 
-// Force-locked widgets back to their canonical state so the catalog's intent
-// (e.g., Mobilization always full-width, never hidden) survives any saved data.
-function reconcileLayoutWithLocks(layout) {
+// Force-locked widgets back to their canonical state. Pulls policy from the
+// dashboard default (where locked is now defined), not the catalog.
+function reconcileLayoutPolicies(dashboardKey, layout) {
+  const defaults = getDefaultLayout(dashboardKey);
+  const defaultsById = {};
+  defaults.forEach(d => { defaultsById[d.id] = d; });
+
   return layout.map(entry => {
-    const widget = getMyWorkWidget(entry.id);
-    if (!widget) return entry;
+    const widget = getWidget(entry.id);
+    const def = defaultsById[entry.id];
+    if (!widget || !def) return entry;
     const out = { ...entry };
-    if (widget.locked) {
-      out.span = widget.defaultSpan;
+    if (def.locked) {
+      out.span = def.span;     // locked widgets keep their dashboard's default span
       out.hidden = false;
-    } else if (!widget.hideable && out.hidden) {
-      out.hidden = false;
-    } else if (widget.minSpan && out.span < widget.minSpan) {
-      out.span = widget.minSpan;
+      out.locked = true;
+      out.hideable = false;
+    } else {
+      out.locked = false;
+      out.hideable = def.hideable !== false;
+      if (out.hideable === false && out.hidden) out.hidden = false;
+      if (widget.minSpan && out.span < widget.minSpan) out.span = widget.minSpan;
     }
     return out;
   });
 }
+
+// ── Backwards-compatible aliases ──
+// Older code referenced getMyWorkLayout / saveMyWorkLayout / getMyWorkWidget /
+// reconcileLayoutWithLocks. Keep thin shims so callers don't need to change
+// in lockstep with the refactor.
+function getMyWorkWidget(id) { return getWidget(id); }
+function getMyWorkLayout(memberId) { return getDashboardLayout('mine', memberId); }
+function saveMyWorkLayout(memberId, widgets) { saveDashboardLayout('mine', memberId, widgets); }
+function reconcileLayoutWithLocks(layout) { return reconcileLayoutPolicies('mine', layout); }
+function getDefaultMyWorkLayout(memberId) { return getDefaultLayout('mine'); }
 
 // ── Widget render helpers ──
 // (renderMyMobilizationCard, renderMyCalendarCard, renderPendingApprovalsCard
@@ -3379,10 +3522,9 @@ function renderRoleSectionWidget(roleKey, ctx) {
   `;
 }
 
-// Renders the customizable widget grid. Returns the full HTML for the
-// widget zone of My Work (metrics, mobilization, actions, pending, calendar).
-// The dashboard wraps this with the closeout banner above and project
-// sections below — neither is part of the customizable grid.
+// Renders the customizable widget grid for ANY dashboard. Returns the
+// full HTML for the widget zone — the dashboard's own renderer wraps
+// this with banners, footers, etc.
 //
 // Row balancing: empty widgets are filtered out, then we walk through the
 // remaining widgets in order and group them into rows (cumulative span up
@@ -3390,16 +3532,21 @@ function renderRoleSectionWidget(roleKey, ctx) {
 // empty), the LAST widget in that row is promoted to fill the remaining
 // space. This avoids awkward half-empty rows when, e.g., Pending Approvals
 // is empty but Actions is present.
-function renderMyWorkWidgetGrid(memberId, ctx) {
-  const layout = reconcileLayoutWithLocks(getMyWorkLayout(memberId));
-  const customize = _myWorkCustomizeMode;
+//
+// ctx is the dashboard-supplied context — must include memberId (and
+// dashboardKey, which we set ourselves below for completeness).
+function renderDashboardWidgetGrid(dashboardKey, ctx) {
+  const memberId = ctx.memberId;
+  ctx.dashboardKey = dashboardKey; // ensure widgets can read which dashboard they're rendering on
+  const layout = reconcileLayoutPolicies(dashboardKey, getDashboardLayout(dashboardKey, memberId));
+  const customize = _myWorkCustomizeMode && dashboardKey === 'mine'; // customize is currently My Work only
 
   // Pre-render widgets and filter out empties
   const rendered = [];
   layout.filter(e => !e.hidden).forEach(entry => {
-    const widget = getMyWorkWidget(entry.id);
+    const widget = getWidget(entry.id);
     if (!widget) return;
-    let html = widget.render(memberId, ctx);
+    let html = widget.render(ctx);
     // In customize mode, render an empty-state placeholder for widgets that
     // would otherwise return '' so the user can still see and reorder them.
     if (!html) {
@@ -3433,7 +3580,7 @@ function renderMyWorkWidgetGrid(memberId, ctx) {
     rows.forEach(row => {
       if (row.total < 12 && row.items.length > 0) {
         const last = row.items[row.items.length - 1];
-        if (!last.widget.locked) {
+        if (!last.entry.locked) {
           const remaining = 12 - row.total;
           last.effectiveSpan = last.entry.span + remaining;
         }
@@ -3444,13 +3591,17 @@ function renderMyWorkWidgetGrid(memberId, ctx) {
   const banner = customize ? `
     <div class="mywork-customize-banner">
       <svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M7 1v12M1 7h12" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/></svg>
-      <span>Drag widgets by their handle to reorder. Drag the right edge to resize. <strong>Done</strong> when finished.</span>
+      <span>Drag the handle to reorder. Drag the right edge to resize. <strong>×</strong> to hide. <strong>Done</strong> when finished.</span>
     </div>
   ` : '';
 
+  // Hidden-widgets palette — visible in customize mode below the grid.
+  // Lists every hideable widget that's currently hidden as a clickable chip.
+  const palette = customize ? renderHiddenWidgetsPalette(dashboardKey, memberId) : '';
+
   const cells = rendered.map((item, idx) => {
     const span = item.effectiveSpan || item.entry.span;
-    const isLocked = !!item.widget.locked;
+    const isLocked = !!item.entry.locked;
     const dragAttrs = customize && !isLocked
       ? `draggable="true" ondragstart="_mwDragStart(event,'${item.entry.id}')" ondragend="_mwDragEnd(event)" ondragover="_mwDragOver(event)" ondragleave="_mwDragLeave(event)" ondrop="_mwDrop(event,'${item.entry.id}')"`
       : '';
@@ -3487,12 +3638,24 @@ function renderMyWorkWidgetGrid(memberId, ctx) {
     const spanBadge = customize && !isLocked ? `
       <div class="mywork-span-badge" data-span-badge>${span}/12</div>
     ` : '';
+    // Hide button — top-left × in customize mode for hideable widgets only
+    const isHideable = item.entry.hideable !== false && !isLocked;
+    const hideBtn = customize && isHideable ? `
+      <button type="button" class="mywork-hide-btn"
+              onclick="_mwHideWidget('${item.entry.id}','${dashboardKey}')"
+              title="Hide ${esc(item.widget.label)}"
+              aria-label="Hide widget">
+        <svg width="12" height="12" viewBox="0 0 12 12" fill="none"><path d="M3 3l6 6M9 3l-6 6" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>
+      </button>
+    ` : '';
     return `
       <div class="mywork-widget mywork-widget-span-${span}${customClass}"
            data-widget-id="${item.entry.id}"
            data-widget-idx="${idx}"
            data-current-span="${span}"
+           data-dashboard-key="${dashboardKey}"
            ${dragAttrs}>
+        ${hideBtn}
         ${handle}
         ${lockBadge}
         ${spanBadge}
@@ -3505,7 +3668,13 @@ function renderMyWorkWidgetGrid(memberId, ctx) {
   return `
     ${banner}
     <div class="mywork-grid${customize ? ' mywork-grid-customizing' : ''}">${cells}</div>
+    ${palette}
   `;
+}
+
+// Backwards-compatible: old callers used renderMyWorkWidgetGrid(memberId, ctx).
+function renderMyWorkWidgetGrid(memberId, ctx) {
+  return renderDashboardWidgetGrid('mine', { ...ctx, memberId });
 }
 
 // Customize mode is session-only — it's just a UI flag, not persisted.
@@ -3550,8 +3719,8 @@ function resetMyWorkLayout() {
   const memberId = getActiveTeamMemberId();
   if (memberId == null) return;
   if (!confirm('Reset your dashboard layout to the default? This will undo any customizations.')) return;
-  if (state.userLayouts && state.userLayouts[memberId]) {
-    delete state.userLayouts[memberId];
+  if (state.userLayouts?.['mine']?.[memberId]) {
+    delete state.userLayouts['mine'][memberId];
     save('vi_user_layouts', state.userLayouts);
   }
   showToast('Layout reset to default', 'success');
@@ -3600,11 +3769,20 @@ function _mwDragOver(event) {
   const targetId = target.dataset.widgetId;
   if (!targetId || targetId === _mwDragId) return;
   // Don't allow dropping ON a locked widget (drops go before/after based on cursor position, but locked stays in place)
-  const widget = getMyWorkWidget(targetId);
-  if (widget && widget.locked) return;
+  const dashboardKey = target.dataset.dashboardKey || 'mine';
+  if (_mwIsLocked(dashboardKey, targetId)) return;
   event.preventDefault();
   if (event.dataTransfer) event.dataTransfer.dropEffect = 'move';
   target.classList.add('mywork-widget-drop-target');
+}
+
+// Helper — check if a widget is locked on a specific dashboard. Reads policy
+// from the dashboard's default layout (not the catalog), since the same
+// widget can be locked on one dashboard and free on another.
+function _mwIsLocked(dashboardKey, widgetId) {
+  const defaults = getDefaultLayout(dashboardKey);
+  const def = defaults.find(d => d.id === widgetId);
+  return !!(def && def.locked);
 }
 
 function _mwDragLeave(event) {
@@ -3623,7 +3801,10 @@ function _mwDrop(event, targetId) {
 function _mwReorderWidgets(sourceId, targetId) {
   const memberId = getActiveTeamMemberId();
   if (memberId == null) return;
-  const layout = getMyWorkLayout(memberId);
+  // Read dashboardKey from the source widget's DOM so this works for any dashboard
+  const sourceEl = document.querySelector(`.mywork-widget[data-widget-id="${sourceId}"]`);
+  const dashboardKey = (sourceEl && sourceEl.dataset.dashboardKey) || 'mine';
+  const layout = getDashboardLayout(dashboardKey, memberId);
   const srcIdx = layout.findIndex(w => w.id === sourceId);
   const tgtIdx = layout.findIndex(w => w.id === targetId);
   if (srcIdx < 0 || tgtIdx < 0) return;
@@ -3634,7 +3815,7 @@ function _mwReorderWidgets(sourceId, targetId) {
   layout.splice(insertAt, 0, moved);
   // Renumber order field 0..N
   layout.forEach((w, i) => { w.order = i; });
-  saveMyWorkLayout(memberId, layout);
+  saveDashboardLayout(dashboardKey, memberId, layout);
   renderCurrentPage();
 }
 
@@ -3691,8 +3872,8 @@ function _mwTouchMove(event) {
     s.lastTarget.classList.remove('mywork-widget-drop-target');
   }
   if (target && target.dataset.widgetId !== s.widgetId) {
-    const widget = getMyWorkWidget(target.dataset.widgetId);
-    if (widget && !widget.locked) {
+    const dashboardKey = target.dataset.dashboardKey || 'mine';
+    if (!_mwIsLocked(dashboardKey, target.dataset.widgetId)) {
       target.classList.add('mywork-widget-drop-target');
       s.lastTarget = target;
     }
@@ -3737,11 +3918,13 @@ function _mwResizeStart(event, widgetId) {
   event.preventDefault();
   event.stopPropagation();
 
-  const widget = getMyWorkWidget(widgetId);
-  if (!widget || widget.locked) return;
+  const widget = getWidget(widgetId);
+  if (!widget) return;
   const widgetEl = document.querySelector(`.mywork-widget[data-widget-id="${widgetId}"]`);
   const gridEl = document.querySelector('.mywork-grid');
   if (!widgetEl || !gridEl) return;
+  const dashboardKey = widgetEl.dataset.dashboardKey || 'mine';
+  if (_mwIsLocked(dashboardKey, widgetId)) return;
 
   const isTouch = event.type === 'touchstart';
   const startX = isTouch ? event.touches[0].clientX : event.clientX;
@@ -3751,6 +3934,7 @@ function _mwResizeStart(event, widgetId) {
   _mwResizeState = {
     widgetId,
     widgetEl,
+    dashboardKey,
     minSpan: widget.minSpan || 3,
     startX,
     startSpan: parseInt(widgetEl.dataset.currentSpan || '6', 10),
@@ -3817,15 +4001,105 @@ function _mwResizeEnd(event) {
     // Persist to layout
     const memberId = getActiveTeamMemberId();
     if (memberId != null) {
-      const layout = getMyWorkLayout(memberId);
+      const dashboardKey = s.dashboardKey || 'mine';
+      const layout = getDashboardLayout(dashboardKey, memberId);
       const entry = layout.find(w => w.id === s.widgetId);
       if (entry) {
         entry.span = finalSpan;
-        saveMyWorkLayout(memberId, layout);
+        saveDashboardLayout(dashboardKey, memberId, layout);
       }
     }
   }
   _mwResizeState = null;
+}
+
+// ── Hide / Show + palette (Round D) ──
+//
+// Hideable widgets get a × button in customize mode that sets hidden:true on
+// their layout entry. Hidden widgets render in the palette below the grid as
+// clickable chips that restore them (hidden:false, moved to end of order).
+// Locked or non-hideable widgets (e.g., Mobilization) are unaffected.
+
+function _mwHideWidget(widgetId, dashboardKey) {
+  dashboardKey = dashboardKey || 'mine';
+  const memberId = getActiveTeamMemberId();
+  if (memberId == null) return;
+  const layout = reconcileLayoutPolicies(dashboardKey, getDashboardLayout(dashboardKey, memberId));
+  const entry = layout.find(w => w.id === widgetId);
+  if (!entry) return;
+  if (entry.locked || entry.hideable === false) return;
+  // Apply a quick fade-out animation, then save and re-render.
+  const el = document.querySelector(`.mywork-widget[data-widget-id="${widgetId}"]`);
+  if (el) {
+    el.classList.add('mywork-widget-hiding');
+    setTimeout(() => {
+      entry.hidden = true;
+      saveDashboardLayout(dashboardKey, memberId, layout);
+      renderCurrentPage();
+    }, 180);
+  } else {
+    entry.hidden = true;
+    saveDashboardLayout(dashboardKey, memberId, layout);
+    renderCurrentPage();
+  }
+}
+
+function _mwShowWidget(widgetId, dashboardKey) {
+  dashboardKey = dashboardKey || 'mine';
+  const widget = getWidget(widgetId);
+  if (!widget) return;
+  const memberId = getActiveTeamMemberId();
+  if (memberId == null) return;
+  const layout = reconcileLayoutPolicies(dashboardKey, getDashboardLayout(dashboardKey, memberId));
+  const entry = layout.find(w => w.id === widgetId);
+  if (!entry) return;
+  // Restore: unhide and move to end of order so it appears at the bottom of
+  // the grid. User can drag it elsewhere if they want.
+  entry.hidden = false;
+  const maxOrder = layout.reduce((m, w) => Math.max(m, w.order || 0), -1);
+  entry.order = maxOrder + 1;
+  // Renumber to keep order field tidy
+  layout.sort((a, b) => (a.order || 0) - (b.order || 0));
+  layout.forEach((w, i) => { w.order = i; });
+  saveDashboardLayout(dashboardKey, memberId, layout);
+  renderCurrentPage();
+}
+
+function renderHiddenWidgetsPalette(dashboardKey, memberId) {
+  const layout = reconcileLayoutPolicies(dashboardKey, getDashboardLayout(dashboardKey, memberId));
+  const hidden = layout.filter(e => e.hidden);
+  // Filter to widgets that exist in the catalog and aren't locked here
+  const items = hidden
+    .map(e => ({ entry: e, widget: getWidget(e.id) }))
+    .filter(({ entry, widget }) => widget && entry.hideable !== false && !entry.locked);
+
+  if (items.length === 0) {
+    return `
+      <div class="mywork-palette mywork-palette-empty">
+        <div class="mywork-palette-title">Hidden widgets</div>
+        <div class="mywork-palette-hint">No widgets hidden. Click the × on any widget to hide it.</div>
+      </div>
+    `;
+  }
+
+  return `
+    <div class="mywork-palette">
+      <div class="mywork-palette-title">Hidden widgets &middot; ${items.length}</div>
+      <div class="mywork-palette-chips">
+        ${items.map(({ widget }) => `
+          <button type="button" class="mywork-palette-chip" onclick="_mwShowWidget('${widget.id}','${dashboardKey}')" title="Restore ${esc(widget.label)}">
+            <svg width="12" height="12" viewBox="0 0 12 12" fill="none"><path d="M6 2v8M2 6h8" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
+            <span>${esc(widget.label)}</span>
+          </button>
+        `).join('')}
+      </div>
+    </div>
+  `;
+}
+
+// Backwards-compatible alias
+function renderMyWorkHiddenPalette(memberId) {
+  return renderHiddenWidgetsPalette('mine', memberId);
 }
 
 function renderMyWorkDashboard(memberId, activeProjects, myAssignments, activeMember) {
