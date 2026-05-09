@@ -8771,6 +8771,34 @@ function getThisWeekActivity(activeProjects) {
 }
 
 function renderInstallMgmtDashboard(activeProjects) {
+  // Two sub-tabs: 'overview' (the existing dashboard) and 'master_calendar'.
+  // Persist the active sub-tab so navigating away and back returns to the same view.
+  const subTab = localStorage.getItem('vi_ops_dash_tab') || 'overview';
+
+  const pills = `
+    <div data-context-section="ops-subtabs" style="display:flex;gap:6px;margin-bottom:14px;flex-wrap:wrap">
+      <button type="button" class="ops-subtab${subTab === 'overview' ? ' is-active' : ''}" onclick="setOpsDashTab('overview')">Overview</button>
+      <button type="button" class="ops-subtab${subTab === 'master_calendar' ? ' is-active' : ''}" onclick="setOpsDashTab('master_calendar')">Master Calendar</button>
+    </div>
+  `;
+
+  const body = subTab === 'master_calendar'
+    ? renderMasterCalendar({ memberId: getActiveTeamMemberId(), activeProjects })
+    : renderInstallMgmtOverview(activeProjects);
+
+  return `
+    ${renderDeptDashboardHeader('Installation Department Management', 'Forward planning + active job oversight', '#F0883E')}
+    ${pills}
+    ${body}
+  `;
+}
+
+function setOpsDashTab(tab) {
+  localStorage.setItem('vi_ops_dash_tab', tab);
+  renderCurrentPage();
+}
+
+function renderInstallMgmtOverview(activeProjects) {
   const groups = getPlanningGroups(activeProjects);
   const week = getThisWeekActivity(activeProjects);
 
@@ -8782,8 +8810,6 @@ function renderInstallMgmtDashboard(activeProjects) {
   const total = planningCount + readyCount + prepCount + inInstallCount + closeoutCount;
 
   return `
-    ${renderDeptDashboardHeader('Installation Department Management', 'Forward planning + active job oversight', '#F0883E')}
-
     <!-- Hero metrics -->
     <div data-context-section="metrics" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:10px;margin-bottom:14px">
       <div class="metric-card">
@@ -8820,6 +8846,715 @@ function renderInstallMgmtDashboard(activeProjects) {
     ${renderPlanningGroup('Prep', 'prep', groups.prep, '#D29922', 'Within 7 days of install start')}
     ${renderPlanningGroup('In Install', 'in_install', groups.in_install, '#F0883E', 'Install window currently active')}
     ${renderPlanningGroup('Closeout', 'closeout', groups.closeout, '#DA3633', 'Install complete — closeout checklist incomplete')}
+  `;
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+// OPERATIONS MASTER CALENDAR (Round 1 — read + drill-in)
+// ────────────────────────────────────────────────────────────────────────────
+// A read-only master schedule view for the Operations role. Three view modes
+// (Month / Week / Day), people + event-type filters, "+ Schedule Meeting"
+// button. Tapping events drills into existing detail surfaces (project page
+// for install bars, Day Detail dialog for meetings + personal events).
+//
+// Drag-to-edit comes in a future round.
+// ════════════════════════════════════════════════════════════════════════════
+
+const MASTER_CAL_DEFAULT_FILTERS = {
+  view: 'week',                 // 'month' | 'week' | 'day'
+  scope: 'all',                 // 'all' | 'mine'
+  date: null,                   // 'YYYY-MM-DD' anchor; null = today
+  showInstalls: true,
+  showMeetings: true,
+  showPersonalEvents: true,
+  showPendingApprovals: true,
+  hours: { start: 6, end: 20 }, // 6 AM – 8 PM (point #5 — togglable later)
+  selectedMembers: null         // null = all members; array of ids = filter
+};
+
+function getMasterCalFilters() {
+  const saved = localStorage.getItem('vi_master_calendar_filters');
+  if (!saved) return { ...MASTER_CAL_DEFAULT_FILTERS };
+  try {
+    const parsed = JSON.parse(saved);
+    return { ...MASTER_CAL_DEFAULT_FILTERS, ...parsed };
+  } catch {
+    return { ...MASTER_CAL_DEFAULT_FILTERS };
+  }
+}
+
+function setMasterCalFilters(updates) {
+  const current = getMasterCalFilters();
+  const next = { ...current, ...updates };
+  localStorage.setItem('vi_master_calendar_filters', JSON.stringify(next));
+  renderCurrentPage();
+}
+
+// Anchor date — the focal date for the current view. For Month view, the
+// month containing this date. For Week view, the week containing this date.
+// For Day view, this date.
+function getMasterCalAnchorDate() {
+  const f = getMasterCalFilters();
+  if (f.date) {
+    const [y, m, d] = f.date.split('-').map(Number);
+    return new Date(y, m - 1, d);
+  }
+  const t = new Date();
+  t.setHours(0, 0, 0, 0);
+  return t;
+}
+
+function setMasterCalAnchorDate(d) {
+  const ymd = d.toISOString().slice(0, 10);
+  setMasterCalFilters({ date: ymd });
+}
+
+function masterCalNav(direction) {
+  // direction: -1 (back), 0 (today), 1 (forward)
+  const f = getMasterCalFilters();
+  if (direction === 0) {
+    setMasterCalFilters({ date: null });
+    return;
+  }
+  const d = getMasterCalAnchorDate();
+  if (f.view === 'month') {
+    d.setMonth(d.getMonth() + direction);
+    d.setDate(1);
+  } else if (f.view === 'week') {
+    d.setDate(d.getDate() + (7 * direction));
+  } else {
+    d.setDate(d.getDate() + direction);
+  }
+  setMasterCalAnchorDate(d);
+}
+
+// ── Event aggregation ──
+// Returns a flat list of events (from all sources) overlapping a date range.
+// Each event is normalized to: {
+//   type: 'install' | 'meeting' | 'personal_event',
+//   id, title, projectId?, project?,
+//   startDate, endDate,            // 'YYYY-MM-DD'
+//   startTime?, endTime?,          // 'HH:MM' (24h) — null for all-day
+//   color, attendeeIds, owner?,
+//   raw                            // original record
+// }
+//
+// Honors filters (event-type toggles, scope all/mine, selected members).
+// Privacy: private custom personal events show as "Busy — Personal" to non-owners.
+function getMasterCalendarEvents(startDateStr, endDateStr, ctx) {
+  const filters = getMasterCalFilters();
+  const memberId = ctx.memberId;
+  const events = [];
+
+  // Selected members — if explicit list, only these. If null, all team.
+  const allowedMembers = (() => {
+    if (filters.scope === 'mine') return memberId != null ? [memberId] : [];
+    if (Array.isArray(filters.selectedMembers) && filters.selectedMembers.length > 0) {
+      return filters.selectedMembers;
+    }
+    return null; // null = no filter
+  })();
+
+  function memberAllowed(id) {
+    if (allowedMembers === null) return true;
+    return allowedMembers.includes(id);
+  }
+  function anyAttendeeAllowed(ids) {
+    if (allowedMembers === null) return true;
+    return (ids || []).some(id => allowedMembers.includes(id));
+  }
+
+  // 1) Project install windows — both Booked and Estimated
+  if (filters.showInstalls) {
+    (state.projects || []).forEach(p => {
+      const win = getInstallWindow(p);
+      if (!win) return;
+      // Filter by date range overlap
+      if (win.end < startDateStr || win.start > endDateStr) return;
+      // Filter by member: install crew + PM Lead
+      const a = getProjectAssignment(p.id);
+      const involvedIds = [
+        ...((a.pm || []).filter(x => x.lead).map(x => x.id)),
+        ...((a.install || []).map(x => x.id))
+      ].filter((v, i, arr) => v != null && arr.indexOf(v) === i);
+      if (!anyAttendeeAllowed(involvedIds)) return;
+      const isBooked = win.status === 'booked';
+      events.push({
+        type: 'install',
+        id: `install-${p.id}`,
+        title: p.name,
+        projectId: p.id,
+        project: p,
+        startDate: win.start,
+        endDate: win.end,
+        startTime: null,
+        endTime: null,
+        color: isBooked ? '#3FB950' : '#58A6FF',
+        attendeeIds: involvedIds,
+        statusLabel: isBooked ? 'Booked' : 'Estimated',
+        raw: win
+      });
+    });
+  }
+
+  // 2) Meetings
+  if (filters.showMeetings) {
+    (state.meetings || []).forEach(m => {
+      if (!m || !m.date) return;
+      if (m.date < startDateStr || m.date > endDateStr) return;
+      // Pending Approvals filter — meetings with pending_approval status only
+      // count when showPendingApprovals is also on; if it's off, skip them.
+      if (m.status === 'pending_approval' && !filters.showPendingApprovals) return;
+      if (m.status === 'denied') return;
+      if (!anyAttendeeAllowed(m.attendees || [])) return;
+      const proj = m.projectId ? state.projects.find(p => p.id === m.projectId) : null;
+      events.push({
+        type: 'meeting',
+        id: `meeting-${m.id}`,
+        title: m.title || _meetingTypeLabel(m.type) || 'Meeting',
+        projectId: m.projectId,
+        project: proj,
+        startDate: m.date,
+        endDate: m.date,
+        startTime: m.startTime,
+        endTime: m.endTime,
+        color: m.status === 'pending_approval' ? '#D29922' : '#A371F7',
+        attendeeIds: m.attendees || [],
+        statusLabel: m.status === 'pending_approval' ? 'Pending' : 'Confirmed',
+        raw: m
+      });
+    });
+  }
+
+  // 3) Personal events
+  if (filters.showPersonalEvents) {
+    (state.personalEvents || []).forEach(pe => {
+      if (!pe || !pe.startDate) return;
+      const peEnd = pe.endDate || pe.startDate;
+      if (peEnd < startDateStr || pe.startDate > endDateStr) return;
+      if (!memberAllowed(pe.memberId)) return;
+      const isOwner = pe.memberId === memberId;
+      const isPrivateCustom = pe.type === 'custom' && pe.isPrivate;
+      const displayTitle = isPrivateCustom && !isOwner
+        ? 'Busy — Personal'
+        : (getPersonalEventDisplayLabel(pe) || pe.title || 'Personal');
+      events.push({
+        type: 'personal_event',
+        id: `pe-${pe.id}`,
+        title: displayTitle,
+        projectId: null,
+        project: null,
+        startDate: pe.startDate,
+        endDate: peEnd,
+        startTime: pe.startTime,
+        endTime: pe.endTime,
+        color: getPersonalEventColor(pe),
+        attendeeIds: [pe.memberId],
+        owner: pe.memberId,
+        isPrivateMasked: isPrivateCustom && !isOwner,
+        raw: pe
+      });
+    });
+  }
+
+  return events;
+}
+
+// Tap-to-drill: route based on event type
+function masterCalEventTap(eventType, raw) {
+  if (eventType === 'install') {
+    openProject(raw.projectId);
+    return;
+  }
+  // Meetings + personal events drill into the existing Day Detail dialog.
+  // It's a popup, so it works regardless of which view we're in.
+  if (eventType === 'meeting' || eventType === 'personal_event') {
+    const dateStr = (eventType === 'meeting' ? raw.date : raw.startDate);
+    if (dateStr) openCalendarDayDetail(dateStr);
+  }
+}
+
+// Friendly bridge for inline onclick handlers — finds the underlying record
+// by event id (e.g., "meeting-7" or "pe-3") and dispatches.
+function _mcTapEvent(eventId) {
+  if (eventId.startsWith('install-')) {
+    const pid = parseInt(eventId.slice(8), 10);
+    openProject(pid);
+    return;
+  }
+  if (eventId.startsWith('meeting-')) {
+    const mid = parseInt(eventId.slice(8), 10);
+    const m = (state.meetings || []).find(x => x.id === mid);
+    if (m) openCalendarDayDetail(m.date);
+    return;
+  }
+  if (eventId.startsWith('pe-')) {
+    const peid = parseInt(eventId.slice(3), 10);
+    const pe = (state.personalEvents || []).find(x => x.id === peid);
+    if (pe) openCalendarDayDetail(pe.startDate);
+    return;
+  }
+}
+
+// ── Header + filter bar ──
+function renderMasterCalendarHeader() {
+  const f = getMasterCalFilters();
+  const anchor = getMasterCalAnchorDate();
+
+  // Date label varies by view
+  let dateLabel = '';
+  if (f.view === 'month') {
+    dateLabel = anchor.toLocaleDateString('en-US', { month: 'long', year: 'numeric' });
+  } else if (f.view === 'week') {
+    const start = new Date(anchor);
+    start.setDate(start.getDate() - start.getDay()); // back to Sunday
+    const end = new Date(start);
+    end.setDate(end.getDate() + 6);
+    const sameMonth = start.getMonth() === end.getMonth();
+    if (sameMonth) {
+      dateLabel = `${start.toLocaleDateString('en-US', { month: 'short' })} ${start.getDate()}–${end.getDate()}, ${end.getFullYear()}`;
+    } else {
+      dateLabel = `${start.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })} – ${end.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}, ${end.getFullYear()}`;
+    }
+  } else {
+    dateLabel = anchor.toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric' });
+  }
+
+  return `
+    <div class="mcal-header">
+      <div class="mcal-header-row">
+        <div class="mcal-view-toggle">
+          <button type="button" class="mcal-view-btn${f.view === 'month' ? ' is-active' : ''}" onclick="setMasterCalFilters({view:'month'})">Month</button>
+          <button type="button" class="mcal-view-btn${f.view === 'week' ? ' is-active' : ''}" onclick="setMasterCalFilters({view:'week'})">Week</button>
+          <button type="button" class="mcal-view-btn${f.view === 'day' ? ' is-active' : ''}" onclick="setMasterCalFilters({view:'day'})">Day</button>
+        </div>
+        <div class="mcal-date-nav">
+          <button type="button" class="mcal-nav-btn" onclick="masterCalNav(-1)" aria-label="Previous">
+            <svg width="12" height="12" viewBox="0 0 12 12" fill="none"><path d="M8 2L4 6l4 4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
+          </button>
+          <button type="button" class="mcal-today-btn" onclick="masterCalNav(0)">Today</button>
+          <button type="button" class="mcal-nav-btn" onclick="masterCalNav(1)" aria-label="Next">
+            <svg width="12" height="12" viewBox="0 0 12 12" fill="none"><path d="M4 2l4 4-4 4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
+          </button>
+          <span class="mcal-date-label">${esc(dateLabel)}</span>
+        </div>
+        <div class="mcal-actions">
+          <button type="button" class="cal-action-btn cal-action-btn-primary" onclick="openGenericMeetingPicker()">+ Schedule Meeting</button>
+        </div>
+      </div>
+    </div>
+  `;
+}
+
+function renderMasterCalendarFilterBar() {
+  const f = getMasterCalFilters();
+  const team = (state.team || []).filter(m => !m.archived);
+  const selectedMembers = Array.isArray(f.selectedMembers) ? f.selectedMembers : null;
+
+  return `
+    <div class="mcal-filter-bar">
+      <div class="mcal-filter-row">
+        <span class="mcal-filter-label">SCOPE:</span>
+        <div class="mcal-scope-toggle">
+          <button type="button" class="mcal-scope-btn${f.scope === 'all' ? ' is-active' : ''}" onclick="setMasterCalFilters({scope:'all'})">All</button>
+          <button type="button" class="mcal-scope-btn${f.scope === 'mine' ? ' is-active' : ''}" onclick="setMasterCalFilters({scope:'mine'})">Mine</button>
+        </div>
+      </div>
+      ${f.scope === 'all' ? `
+        <div class="mcal-filter-row">
+          <span class="mcal-filter-label">PEOPLE:</span>
+          <button type="button" class="mcal-chip${selectedMembers === null ? ' is-active' : ''}" onclick="setMasterCalFilters({selectedMembers:null})">Everyone</button>
+          ${team.map(m => `
+            <button type="button" class="mcal-chip${selectedMembers && selectedMembers.includes(m.id) ? ' is-active' : ''}" onclick="_mcToggleMember(${m.id})">
+              ${esc(m.name.split(' ')[0])}
+            </button>
+          `).join('')}
+        </div>
+      ` : ''}
+      <div class="mcal-filter-row">
+        <span class="mcal-filter-label">SHOW:</span>
+        <button type="button" class="mcal-chip mcal-chip-typed${f.showInstalls ? ' is-active' : ''}" onclick="setMasterCalFilters({showInstalls:${!f.showInstalls}})">
+          <span class="mcal-chip-dot" style="background:#3FB950"></span>Installs
+        </button>
+        <button type="button" class="mcal-chip mcal-chip-typed${f.showMeetings ? ' is-active' : ''}" onclick="setMasterCalFilters({showMeetings:${!f.showMeetings}})">
+          <span class="mcal-chip-dot" style="background:#A371F7"></span>Meetings
+        </button>
+        <button type="button" class="mcal-chip mcal-chip-typed${f.showPendingApprovals ? ' is-active' : ''}" onclick="setMasterCalFilters({showPendingApprovals:${!f.showPendingApprovals}})">
+          <span class="mcal-chip-dot" style="background:#D29922"></span>Pending
+        </button>
+        <button type="button" class="mcal-chip mcal-chip-typed${f.showPersonalEvents ? ' is-active' : ''}" onclick="setMasterCalFilters({showPersonalEvents:${!f.showPersonalEvents}})">
+          <span class="mcal-chip-dot" style="background:#8B949E"></span>Personal
+        </button>
+      </div>
+    </div>
+  `;
+}
+
+function _mcToggleMember(memberId) {
+  const f = getMasterCalFilters();
+  let selected = Array.isArray(f.selectedMembers) ? [...f.selectedMembers] : [];
+  if (selected.includes(memberId)) {
+    selected = selected.filter(x => x !== memberId);
+    if (selected.length === 0) selected = null; // null = everyone
+  } else {
+    selected.push(memberId);
+  }
+  setMasterCalFilters({ selectedMembers: selected });
+}
+
+// ── Top-level Master Calendar render ──
+function renderMasterCalendar(ctx) {
+  const f = getMasterCalFilters();
+  let body = '';
+  if (f.view === 'month') body = renderMasterCalMonthView(ctx);
+  else if (f.view === 'week') body = renderMasterCalWeekView(ctx);
+  else body = renderMasterCalDayView(ctx);
+
+  return `
+    <div class="mcal-root">
+      ${renderMasterCalendarHeader()}
+      ${renderMasterCalendarFilterBar()}
+      ${body}
+    </div>
+  `;
+}
+
+// ── Date helpers ──
+function _ymd(d) {
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${y}-${m}-${day}`;
+}
+
+function _addDays(d, n) {
+  const r = new Date(d);
+  r.setDate(r.getDate() + n);
+  return r;
+}
+
+function _startOfWeek(d) {
+  // Sunday start (US convention, locked design decision)
+  const r = new Date(d);
+  r.setDate(r.getDate() - r.getDay());
+  r.setHours(0, 0, 0, 0);
+  return r;
+}
+
+// ── MONTH VIEW ──
+function renderMasterCalMonthView(ctx) {
+  const anchor = getMasterCalAnchorDate();
+  const year = anchor.getFullYear();
+  const month = anchor.getMonth();
+  const first = new Date(year, month, 1);
+  const lastDay = new Date(year, month + 1, 0).getDate();
+
+  // Build a 6-week grid starting from the Sunday before/on day 1
+  const gridStart = _startOfWeek(first);
+  const startStr = _ymd(gridStart);
+  const gridEnd = _addDays(gridStart, 41);
+  const endStr = _ymd(gridEnd);
+
+  const events = getMasterCalendarEvents(startStr, endStr, ctx);
+
+  // Group events by date for quick lookup
+  const eventsByDate = {};
+  events.forEach(e => {
+    // Multi-day event: tag every date in its span
+    let cursor = new Date(e.startDate + 'T00:00:00');
+    const end = new Date(e.endDate + 'T00:00:00');
+    while (cursor <= end) {
+      const k = _ymd(cursor);
+      if (!eventsByDate[k]) eventsByDate[k] = [];
+      eventsByDate[k].push(e);
+      cursor.setDate(cursor.getDate() + 1);
+    }
+  });
+
+  const todayStr = _ymd(new Date());
+  const cells = [];
+  for (let i = 0; i < 42; i++) {
+    const d = _addDays(gridStart, i);
+    const k = _ymd(d);
+    const inMonth = d.getMonth() === month;
+    const isToday = k === todayStr;
+    const dayEvents = (eventsByDate[k] || []).slice(0, 3); // first 3
+    const overflow = (eventsByDate[k] || []).length - dayEvents.length;
+
+    cells.push(`
+      <div class="mcal-month-cell${inMonth ? '' : ' is-other-month'}${isToday ? ' is-today' : ''}" onclick="setMasterCalFilters({view:'day',date:'${k}'})">
+        <div class="mcal-month-daynum">${d.getDate()}</div>
+        <div class="mcal-month-events">
+          ${dayEvents.map(e => `
+            <div class="mcal-month-event" style="background:${e.color}22;border-left:3px solid ${e.color};color:${e.color}" onclick="event.stopPropagation();_mcTapEvent('${e.id}')" title="${esc(e.title)}">
+              ${e.startTime ? `<span class="mcal-month-event-time">${esc(_fmt12h(e.startTime))}</span> ` : ''}${esc(e.title)}
+            </div>
+          `).join('')}
+          ${overflow > 0 ? `<div class="mcal-month-overflow">+${overflow} more</div>` : ''}
+        </div>
+      </div>
+    `);
+  }
+
+  const days = ['SUN', 'MON', 'TUE', 'WED', 'THU', 'FRI', 'SAT'];
+  return `
+    <div class="mcal-month">
+      <div class="mcal-month-header">${days.map(d => `<div class="mcal-month-dow">${d}</div>`).join('')}</div>
+      <div class="mcal-month-grid">${cells.join('')}</div>
+    </div>
+  `;
+}
+
+// ── WEEK VIEW ──
+// 7 columns, each column = one day. Top section = all-day strip (install bars
+// and any all-day personal events), spans visually across the days they cover.
+// Below: hour grid 6 AM – 8 PM with timed events (meetings, timed personal
+// events) positioned absolutely.
+function renderMasterCalWeekView(ctx) {
+  const anchor = getMasterCalAnchorDate();
+  const weekStart = _startOfWeek(anchor);
+  const weekEnd = _addDays(weekStart, 6);
+  const startStr = _ymd(weekStart);
+  const endStr = _ymd(weekEnd);
+  const filters = getMasterCalFilters();
+
+  const events = getMasterCalendarEvents(startStr, endStr, ctx);
+
+  // Split events into all-day (multi-day or no times) vs timed
+  const allDayEvents = [];
+  const timedEvents = [];
+  events.forEach(e => {
+    const isMultiDay = e.endDate && e.endDate !== e.startDate;
+    const isTimed = !!(e.startTime && e.endTime);
+    if (isMultiDay || !isTimed) {
+      allDayEvents.push(e);
+    } else {
+      timedEvents.push(e);
+    }
+  });
+
+  // For all-day strip: sort by start, pack into rows so overlapping bars stack.
+  // Each event gets a row index. Bars span their days visually.
+  allDayEvents.sort((a, b) => a.startDate.localeCompare(b.startDate));
+  const allDayRows = [];
+  allDayEvents.forEach(e => {
+    let rowIdx = -1;
+    for (let r = 0; r < allDayRows.length; r++) {
+      const conflict = allDayRows[r].some(x => !(x.endDate < e.startDate || x.startDate > e.endDate));
+      if (!conflict) { rowIdx = r; break; }
+    }
+    if (rowIdx === -1) {
+      allDayRows.push([e]);
+    } else {
+      allDayRows[rowIdx].push(e);
+    }
+    e._weekRow = allDayRows.length === 0 ? 0 : (rowIdx === -1 ? allDayRows.length - 1 : rowIdx);
+  });
+
+  // Build day columns + headers
+  const todayStr = _ymd(new Date());
+  const dayCols = [];
+  for (let i = 0; i < 7; i++) {
+    const d = _addDays(weekStart, i);
+    const k = _ymd(d);
+    const isToday = k === todayStr;
+    const dayTimed = timedEvents.filter(e => e.startDate === k);
+    dayCols.push({ date: d, dateStr: k, isToday, timed: dayTimed });
+  }
+
+  // Hour grid
+  const hourStart = filters.hours.start;
+  const hourEnd = filters.hours.end;
+  const totalHours = hourEnd - hourStart;
+  const HOUR_PX = 44;
+  const gridHeight = totalHours * HOUR_PX;
+
+  // Header strip with day labels + day numbers
+  const headerCells = dayCols.map(c => `
+    <div class="mcal-week-day-header${c.isToday ? ' is-today' : ''}" onclick="setMasterCalFilters({view:'day',date:'${c.dateStr}'})">
+      <div class="mcal-week-dow">${c.date.toLocaleDateString('en-US', { weekday: 'short' }).toUpperCase()}</div>
+      <div class="mcal-week-day-num">${c.date.getDate()}</div>
+    </div>
+  `).join('');
+
+  // All-day strip — bars positioned by column, spanning days
+  const allDayRowCount = Math.max(allDayRows.length, 1);
+  const ALL_DAY_ROW_PX = 22;
+  const allDayHeight = allDayRowCount * (ALL_DAY_ROW_PX + 4) + 4;
+  const allDayBars = allDayEvents.map(e => {
+    // If event starts before this week, clamp start to column 0.
+    // If event ends after this week, clamp end to column 6.
+    const startIdx = Math.max(0, dayCols.findIndex(c => c.dateStr === e.startDate));
+    let endIdx = dayCols.findIndex(c => c.dateStr === e.endDate);
+    if (endIdx === -1) endIdx = 6;
+    const span = Math.max(1, (endIdx - startIdx) + 1);
+    const leftPct = (startIdx / 7) * 100;
+    const widthPct = (span / 7) * 100;
+    const rowIdx = e._weekRow || 0;
+    const top = 4 + rowIdx * (ALL_DAY_ROW_PX + 4);
+    return `
+      <div class="mcal-allday-bar" style="left:${leftPct}%;width:calc(${widthPct}% - 4px);top:${top}px;height:${ALL_DAY_ROW_PX}px;background:${e.color}22;border-left:3px solid ${e.color};color:${e.color}" onclick="_mcTapEvent('${e.id}')" title="${esc(e.title)}">
+        ${esc(e.title)}${e.statusLabel ? ` · ${esc(e.statusLabel)}` : ''}
+      </div>
+    `;
+  }).join('');
+
+  // Hour rows backdrop
+  const hourLabels = [];
+  for (let h = hourStart; h < hourEnd; h++) {
+    const label = h === 0 ? '12 AM' : h < 12 ? `${h} AM` : h === 12 ? '12 PM' : `${h - 12} PM`;
+    hourLabels.push(`<div class="mcal-week-hour-label" style="height:${HOUR_PX}px">${label}</div>`);
+  }
+
+  // Hour grid lines per day column
+  function gridLinesForDay() {
+    const lines = [];
+    for (let h = hourStart; h <= hourEnd; h++) {
+      lines.push(`<div class="mcal-week-hour-line" style="top:${(h - hourStart) * HOUR_PX}px"></div>`);
+    }
+    return lines.join('');
+  }
+
+  // Timed event bars per column
+  function timedBarsForDay(timed) {
+    return timed.map(e => {
+      const sMin = _timeToMinutes(e.startTime);
+      const eMin = _timeToMinutes(e.endTime);
+      const top = ((sMin / 60) - hourStart) * HOUR_PX;
+      const height = Math.max(20, ((eMin - sMin) / 60) * HOUR_PX - 2);
+      return `
+        <div class="mcal-week-event" style="top:${top}px;height:${height}px;background:${e.color}33;border-left:3px solid ${e.color};color:${e.color}" onclick="_mcTapEvent('${e.id}')" title="${esc(e.title)}">
+          <div class="mcal-week-event-time">${esc(_fmt12hRange(e.startTime, e.endTime))}</div>
+          <div class="mcal-week-event-title">${esc(e.title)}</div>
+        </div>
+      `;
+    }).join('');
+  }
+
+  return `
+    <div class="mcal-week">
+      <div class="mcal-week-header">
+        <div class="mcal-week-corner"></div>
+        ${headerCells}
+      </div>
+      <div class="mcal-week-allday">
+        <div class="mcal-week-allday-label">all-day</div>
+        <div class="mcal-week-allday-strip" style="height:${allDayHeight}px">
+          ${allDayBars}
+        </div>
+      </div>
+      <div class="mcal-week-body">
+        <div class="mcal-week-hours-col">${hourLabels.join('')}</div>
+        <div class="mcal-week-grid" style="height:${gridHeight}px">
+          ${dayCols.map(c => `
+            <div class="mcal-week-col${c.isToday ? ' is-today' : ''}" data-date="${c.dateStr}">
+              ${gridLinesForDay()}
+              ${timedBarsForDay(c.timed)}
+            </div>
+          `).join('')}
+        </div>
+      </div>
+    </div>
+  `;
+}
+
+// ── DAY VIEW ──
+// Full-width hour grid for one day. Events stack into columns when overlapping.
+function renderMasterCalDayView(ctx) {
+  const anchor = getMasterCalAnchorDate();
+  const k = _ymd(anchor);
+  const filters = getMasterCalFilters();
+
+  const events = getMasterCalendarEvents(k, k, ctx);
+  const allDay = events.filter(e => !e.startTime || !e.endTime || (e.endDate && e.endDate !== e.startDate));
+  const timed = events.filter(e => e.startTime && e.endTime && (!e.endDate || e.endDate === e.startDate));
+
+  // Pack overlapping timed events into columns
+  timed.sort((a, b) => _timeToMinutes(a.startTime) - _timeToMinutes(b.startTime));
+  const eventCols = [];
+  timed.forEach(e => {
+    const eStart = _timeToMinutes(e.startTime);
+    const eEnd = _timeToMinutes(e.endTime);
+    let placed = false;
+    for (let c = 0; c < eventCols.length; c++) {
+      const lastInCol = eventCols[c][eventCols[c].length - 1];
+      const lastEnd = _timeToMinutes(lastInCol.endTime);
+      if (lastEnd <= eStart) {
+        eventCols[c].push(e);
+        e._dayCol = c;
+        placed = true;
+        break;
+      }
+    }
+    if (!placed) {
+      eventCols.push([e]);
+      e._dayCol = eventCols.length - 1;
+    }
+  });
+  const totalCols = Math.max(eventCols.length, 1);
+
+  const hourStart = filters.hours.start;
+  const hourEnd = filters.hours.end;
+  const HOUR_PX = 56;
+  const gridHeight = (hourEnd - hourStart) * HOUR_PX;
+
+  const hourLabels = [];
+  const hourLines = [];
+  for (let h = hourStart; h < hourEnd; h++) {
+    const label = h === 0 ? '12 AM' : h < 12 ? `${h} AM` : h === 12 ? '12 PM' : `${h - 12} PM`;
+    hourLabels.push(`<div class="mcal-day-hour-label" style="height:${HOUR_PX}px">${label}</div>`);
+    hourLines.push(`<div class="mcal-day-hour-line" style="top:${(h - hourStart) * HOUR_PX}px"></div>`);
+  }
+  hourLines.push(`<div class="mcal-day-hour-line" style="top:${gridHeight}px"></div>`);
+
+  const allDayHTML = allDay.length === 0 ? '' : `
+    <div class="mcal-day-allday">
+      ${allDay.map(e => `
+        <div class="mcal-day-allday-bar" style="background:${e.color}22;border-left:3px solid ${e.color};color:${e.color}" onclick="_mcTapEvent('${e.id}')">
+          ${esc(e.title)}${e.statusLabel ? ` · ${esc(e.statusLabel)}` : ''}
+        </div>
+      `).join('')}
+    </div>
+  `;
+
+  const timedBars = timed.map(e => {
+    const sMin = _timeToMinutes(e.startTime);
+    const eMin = _timeToMinutes(e.endTime);
+    const top = ((sMin / 60) - hourStart) * HOUR_PX;
+    const height = Math.max(28, ((eMin - sMin) / 60) * HOUR_PX - 2);
+    const colIdx = e._dayCol || 0;
+    const colWidth = 100 / totalCols;
+    const left = colIdx * colWidth;
+    const attendeeNames = (e.attendeeIds || [])
+      .map(id => (state.team.find(m => m.id === id) || {}).name)
+      .filter(Boolean)
+      .map(n => n.split(' ')[0])
+      .join(', ');
+    return `
+      <div class="mcal-day-event" style="top:${top}px;height:${height}px;left:${left}%;width:calc(${colWidth}% - 4px);background:${e.color}33;border-left:3px solid ${e.color};color:${e.color}" onclick="_mcTapEvent('${e.id}')">
+        <div class="mcal-day-event-time">${esc(_fmt12hRange(e.startTime, e.endTime))}</div>
+        <div class="mcal-day-event-title">${esc(e.title)}</div>
+        ${attendeeNames && height >= 60 ? `<div class="mcal-day-event-attendees">${esc(attendeeNames)}</div>` : ''}
+      </div>
+    `;
+  }).join('');
+
+  return `
+    <div class="mcal-day">
+      ${allDayHTML}
+      <div class="mcal-day-body">
+        <div class="mcal-day-hours-col">${hourLabels.join('')}</div>
+        <div class="mcal-day-grid" style="height:${gridHeight}px">
+          ${hourLines.join('')}
+          ${timedBars}
+        </div>
+      </div>
+      ${timed.length === 0 && allDay.length === 0 ? `
+        <div style="padding:24px;text-align:center;color:#6E7681;font-size:13px;font-style:italic">
+          Nothing scheduled for ${esc(anchor.toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric' }))}
+        </div>
+      ` : ''}
+    </div>
   `;
 }
 
