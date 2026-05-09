@@ -3013,16 +3013,35 @@ function renderDashboard(c) {
   }
   if (canSeeAllProjects) tabs.push({ key: 'pipeline', label: 'Full Pipeline' });
 
+  // Dept meta — title + accent color, used to render an inline title to
+  // the right of the tab strip. Only dept-management dashboards have this;
+  // executive/mine/pipeline use the page-level header instead.
+  const DEPT_META = {
+    sales_mgmt:   { title: 'Sales Department Management',        color: '#3FB950' },
+    design_mgmt:  { title: 'Design Department Management',       color: '#A371F7' },
+    install_mgmt: { title: 'Installation Department Management', color: '#F0883E' }
+  };
+  const deptMeta = DEPT_META[dashboardMode] || null;
+  const deptInline = deptMeta ? `
+    <div class="dash-dept-inline">
+      <span class="dash-dept-dot" style="background:${deptMeta.color}"></span>
+      <span class="dash-dept-title" style="color:${deptMeta.color}">${esc(deptMeta.title)}</span>
+    </div>
+  ` : '';
+
   // Horizontally scrollable tab bar for mobile
   const modeToggle = tabs.length > 1 ? `
-    <div class="dash-mode-scroll" style="display:block;overflow-x:auto;-webkit-overflow-scrolling:touch;margin:0 0 14px;padding:0 0 4px;white-space:nowrap">
-      <div class="dash-mode-inner" style="display:inline-flex;background:#0D1117;border:1px solid #30363D;border-radius:6px;overflow:hidden;font-size:12px;white-space:nowrap;vertical-align:top">
-        ${tabs.map(t => `
-          <div onclick="setDashboardMode('${t.key}')" style="padding:8px 14px;cursor:pointer;transition:all 0.15s;${dashboardMode === t.key ? 'background:#1565C0;color:#58A6FF;font-weight:500' : 'color:#8B949E'};-webkit-tap-highlight-color:transparent;display:inline-flex;align-items:center;gap:5px;border-right:1px solid #30363D">
-            ${t.label}${t.badge > 0 ? `<span style="opacity:0.7;margin-left:2px">${t.badge}</span>` : ''}
-          </div>
-        `).join('')}
+    <div class="dash-mode-row">
+      <div class="dash-mode-scroll" style="display:block;overflow-x:auto;-webkit-overflow-scrolling:touch;padding:0 0 4px;white-space:nowrap">
+        <div class="dash-mode-inner" style="display:inline-flex;background:#0D1117;border:1px solid #30363D;border-radius:6px;overflow:hidden;font-size:12px;white-space:nowrap;vertical-align:top">
+          ${tabs.map(t => `
+            <div onclick="setDashboardMode('${t.key}')" style="padding:8px 14px;cursor:pointer;transition:all 0.15s;${dashboardMode === t.key ? 'background:#1565C0;color:#58A6FF;font-weight:500' : 'color:#8B949E'};-webkit-tap-highlight-color:transparent;display:inline-flex;align-items:center;gap:5px;border-right:1px solid #30363D">
+              ${t.label}${t.badge > 0 ? `<span style="opacity:0.7;margin-left:2px">${t.badge}</span>` : ''}
+            </div>
+          `).join('')}
+        </div>
       </div>
+      ${deptInline}
     </div>
   ` : '';
 
@@ -8793,7 +8812,6 @@ function renderInstallMgmtDashboard(activeProjects) {
     : renderInstallMgmtOverview(activeProjects);
 
   return `
-    ${subTab === 'master_calendar' ? '' : renderDeptDashboardHeader('Installation Department Management', 'Forward planning + active job oversight', '#F0883E')}
     ${pills}
     ${body}
   `;
@@ -9864,7 +9882,6 @@ function renderDesignMgmtDashboard(activeProjects) {
   });
 
   return `
-    ${renderDeptDashboardHeader('Design Department Management', 'Design phase oversight across all active projects', '#A371F7')}
 
     <!-- Hero metrics -->
     <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:10px;margin-bottom:18px">
@@ -10015,7 +10032,6 @@ function renderSalesMgmtDashboard(activeProjects) {
   }
 
   return `
-    ${renderDeptDashboardHeader('Sales Department Management', 'Pipeline oversight and sales rep performance', '#3FB950')}
     ${searchBar}
     ${tabBar}
     ${body}
