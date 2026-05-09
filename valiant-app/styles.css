@@ -5840,3 +5840,22 @@ td.today .cal-day-num {
   border-color: #58A6FF;
   color: #58A6FF;
 }
+
+/* Day view all-day overflow button */
+.mcal-day-allday-more {
+  background: transparent;
+  border: 1px dashed #30363D;
+  color: #8B949E;
+  padding: 6px 14px;
+  border-radius: 4px;
+  font-size: 11px;
+  font-family: inherit;
+  cursor: pointer;
+  margin-top: 4px;
+  -webkit-tap-highlight-color: transparent;
+  align-self: flex-start;
+}
+.mcal-day-allday-more:hover {
+  border-color: #58A6FF;
+  color: #58A6FF;
+}
