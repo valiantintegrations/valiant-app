@@ -8793,7 +8793,7 @@ function renderInstallMgmtDashboard(activeProjects) {
     : renderInstallMgmtOverview(activeProjects);
 
   return `
-    ${renderDeptDashboardHeader('Installation Department Management', 'Forward planning + active job oversight', '#F0883E')}
+    ${subTab === 'master_calendar' ? '' : renderDeptDashboardHeader('Installation Department Management', 'Forward planning + active job oversight', '#F0883E')}
     ${pills}
     ${body}
   `;
@@ -9626,8 +9626,10 @@ function renderMasterCalDayView(ctx) {
   const allDayOverflow = allDay.length - visibleAllDay.length;
   const allDayHTML = allDay.length === 0 ? '' : `
     <div class="mcal-day-allday">
+      <div class="mcal-day-allday-section-label">ALL-DAY</div>
       ${visibleAllDay.map(e => `
         <div class="mcal-day-allday-bar" style="background:${e.color}22;border-left:3px solid ${e.color};color:${e.color}" onclick="_mcTapEvent('${e.id}')">
+          <span class="mcal-day-allday-tag">all-day</span>
           ${esc(e.title)}${e.statusLabel ? ` · ${esc(e.statusLabel)}` : ''}
         </div>
       `).join('')}
