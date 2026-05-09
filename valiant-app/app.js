@@ -4338,9 +4338,11 @@ function renderMyWorkCard(p, role, isLead) {
     }
   }
 
+  const projectColor = getProjectColor(p.id);
+
   return `
-    <div class="mywork-card ${isLead ? 'is-lead' : ''} ${urgent ? 'urgent' : ''}" onclick="openProject(${p.id})" style="${isLead ? `border-left:3px solid ${role.color}` : ''}">
-      <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:8px;margin-bottom:6px">
+    <div class="mywork-card ${isLead ? 'is-lead' : ''} ${urgent ? 'urgent' : ''}" onclick="openProject(${p.id})" style="${isLead ? `border-left:3px solid ${role.color};` : ''}box-shadow:inset 4px 0 0 ${projectColor}">
+      <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:8px;margin-bottom:6px;padding-left:6px">
         <div style="flex:1;min-width:0">
           <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap">
             ${isLead ? `<div style="width:10px;height:10px;border-radius:50%;background:${role.color};flex-shrink:0" title="Lead"></div>` : ''}
@@ -4746,8 +4748,9 @@ function renderProjects(c) {
     <div class="mobile-project-list" id="proj-mobile">
       ${sorted.map(p => {
         const stg = STAGES.find(s => s.key === p.stage) || STAGES[0];
+        const projectColor = getProjectColor(p.id);
         return `
-          <div class="mobile-project-item" onclick="openProject(${p.id})" data-stage="${p.stage}" data-name="${esc(p.name).toLowerCase()}" style="${isContractNeedsReview(p) ? 'border-color:#DA3633' : ''}">
+          <div class="mobile-project-item" onclick="openProject(${p.id})" data-stage="${p.stage}" data-name="${esc(p.name).toLowerCase()}" style="${isContractNeedsReview(p) ? 'border-color:#DA3633;' : ''}box-shadow:inset 4px 0 0 ${projectColor}">
             ${isContractNeedsReview(p) ? `
               <div style="background:#1A0D0D;border:1px solid #DA3633;border-radius:6px;padding:8px 10px;margin-bottom:8px;display:flex;align-items:center;justify-content:space-between;gap:8px">
                 <div style="display:flex;align-items:center;gap:6px;flex:1;min-width:0">
@@ -4842,9 +4845,12 @@ function renderProjectPage(c) {
     <div class="prail-item ${tab === item.key ? 'active' : ''}" onclick="switchProjectTab('${item.key}')">${item.label}</div>
   `).join('');
 
+  const projectColor = getProjectColor(p.id);
+
   // Page structure: existing header at top (unchanged from Stage B), then body split into rail + content
   c.innerHTML = `
     <div class="project-page">
+      <div class="project-page-color-bar" style="background:${projectColor}"></div>
       <div class="project-page-header">
         <div class="project-page-top">
           <button class="project-back-btn" onclick="closeProjectPage()">
@@ -8850,6 +8856,35 @@ function renderInstallMgmtOverview(activeProjects) {
 }
 
 // ════════════════════════════════════════════════════════════════════════════
+// PROJECT COLORS — visual identity for projects across the app
+// ────────────────────────────────────────────────────────────────────────────
+// Each project gets a deterministic color drawn from a 20-color palette.
+// Used as: left-edge stripe on project cards, header accent on project page,
+// event color on Master Calendar Month view, etc.
+//
+// Auto-assigned by hashing the project id. Round 1 — no user override yet.
+// ════════════════════════════════════════════════════════════════════════════
+
+const PROJECT_COLOR_PALETTE = [
+  '#58A6FF', '#A371F7', '#3FB950', '#F85149', '#F0883E',
+  '#D29922', '#39C5BB', '#DB61A2', '#9E6A03', '#1F6FCC',
+  '#7EE787', '#FF7B72', '#79C0FF', '#FFA657', '#D2A8FF',
+  '#56D4DD', '#FFAB70', '#A5F3DC', '#F778BA', '#6E7681'
+];
+
+// Returns a color string like '#58A6FF' for a project. Stable across
+// sessions and devices (hash is deterministic on numeric id).
+function getProjectColor(projectId) {
+  if (projectId == null) return '#6E7681';
+  // Stable hash — projects with adjacent ids get visually distinct colors
+  const idNum = typeof projectId === 'number' ? projectId : parseInt(projectId, 10);
+  if (!Number.isFinite(idNum)) return '#6E7681';
+  // Multiplicative hash to scatter adjacent ids into different palette buckets
+  const h = Math.abs((idNum * 2654435761) % PROJECT_COLOR_PALETTE.length);
+  return PROJECT_COLOR_PALETTE[h];
+}
+
+// ════════════════════════════════════════════════════════════════════════════
 // OPERATIONS MASTER CALENDAR (Round 1 — read + drill-in)
 // ────────────────────────────────────────────────────────────────────────────
 // A read-only master schedule view for the Operations role. Three view modes
@@ -8869,7 +8904,8 @@ const MASTER_CAL_DEFAULT_FILTERS = {
   showPersonalEvents: true,
   showPendingApprovals: true,
   hours: { start: 6, end: 20 }, // 6 AM – 8 PM (point #5 — togglable later)
-  selectedMembers: null         // null = all members; array of ids = filter
+  selectedMembers: null,        // null = all members; array of ids = filter
+  filtersExpanded: false        // collapsed by default (saves real estate)
 };
 
 function getMasterCalFilters() {
@@ -9150,9 +9186,46 @@ function renderMasterCalendarFilterBar() {
   const f = getMasterCalFilters();
   const team = (state.team || []).filter(m => !m.archived);
   const selectedMembers = Array.isArray(f.selectedMembers) ? f.selectedMembers : null;
+  const expanded = !!f.filtersExpanded;
+
+  // Build a one-line summary for the collapsed state
+  const peopleSummary = (() => {
+    if (f.scope === 'mine') return 'Mine';
+    if (selectedMembers === null) return 'Everyone';
+    if (selectedMembers.length === 0) return 'Everyone';
+    if (selectedMembers.length === 1) {
+      const m = team.find(x => x.id === selectedMembers[0]);
+      return m ? m.name.split(' ')[0] : '1 person';
+    }
+    return `${selectedMembers.length} people`;
+  })();
+  const typeCount = [f.showInstalls, f.showMeetings, f.showPendingApprovals, f.showPersonalEvents].filter(Boolean).length;
+  const typeSummary = typeCount === 4 ? 'all types' : typeCount === 0 ? 'none' : `${typeCount} of 4 types`;
+
+  if (!expanded) {
+    return `
+      <div class="mcal-filter-bar mcal-filter-bar-collapsed">
+        <button type="button" class="mcal-filter-toggle" onclick="setMasterCalFilters({filtersExpanded:true})" title="Expand filters">
+          <svg width="12" height="12" viewBox="0 0 12 12" fill="none"><path d="M2 4h8M3 6h6M4 8h4" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></svg>
+          <span>Filters</span>
+        </button>
+        <span class="mcal-filter-summary">${esc(peopleSummary)} &middot; ${esc(typeSummary)}</span>
+        <button type="button" class="mcal-filter-expand-btn" onclick="setMasterCalFilters({filtersExpanded:true})" aria-label="Expand filters">
+          <svg width="12" height="12" viewBox="0 0 12 12" fill="none"><path d="M3 5l3 3 3-3" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        </button>
+      </div>
+    `;
+  }
 
   return `
     <div class="mcal-filter-bar">
+      <div class="mcal-filter-bar-header">
+        <button type="button" class="mcal-filter-toggle is-expanded" onclick="setMasterCalFilters({filtersExpanded:false})">
+          <svg width="12" height="12" viewBox="0 0 12 12" fill="none"><path d="M2 4h8M3 6h6M4 8h4" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></svg>
+          <span>Filters</span>
+          <svg width="12" height="12" viewBox="0 0 12 12" fill="none" style="margin-left:auto"><path d="M3 7l3-3 3 3" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        </button>
+      </div>
       <div class="mcal-filter-row">
         <span class="mcal-filter-label">SCOPE:</span>
         <div class="mcal-scope-toggle">
@@ -9285,11 +9358,17 @@ function renderMasterCalMonthView(ctx) {
       <div class="mcal-month-cell${inMonth ? '' : ' is-other-month'}${isToday ? ' is-today' : ''}" onclick="setMasterCalFilters({view:'day',date:'${k}'})">
         <div class="mcal-month-daynum">${d.getDate()}</div>
         <div class="mcal-month-events">
-          ${dayEvents.map(e => `
-            <div class="mcal-month-event" style="background:${e.color}22;border-left:3px solid ${e.color};color:${e.color}" onclick="event.stopPropagation();_mcTapEvent('${e.id}')" title="${esc(e.title)}">
+          ${dayEvents.map(e => {
+            // In Month view, project events use the project color so projects
+            // are visually grouped at a glance. Non-project events (generic
+            // meetings, personal events) keep their type color.
+            const c = e.projectId != null ? getProjectColor(e.projectId) : e.color;
+            return `
+            <div class="mcal-month-event" style="background:${c}22;border-left:3px solid ${c};color:${c}" onclick="event.stopPropagation();_mcTapEvent('${e.id}')" title="${esc(e.title)}">
               ${e.startTime ? `<span class="mcal-month-event-time">${esc(_fmt12h(e.startTime))}</span> ` : ''}${esc(e.title)}
             </div>
-          `).join('')}
+          `;
+          }).join('')}
           ${overflow > 0 ? `<div class="mcal-month-overflow">+${overflow} more</div>` : ''}
         </div>
       </div>
@@ -9377,11 +9456,29 @@ function renderMasterCalWeekView(ctx) {
     </div>
   `).join('');
 
-  // All-day strip — bars positioned by column, spanning days
-  const allDayRowCount = Math.max(allDayRows.length, 1);
+  // All-day strip — cap visible rows so a single day with many events doesn't
+  // blow up the strip's vertical height. Beyond MAX_VISIBLE_ROWS, hidden
+  // events surface as a small "+N more" badge per day column.
   const ALL_DAY_ROW_PX = 22;
-  const allDayHeight = allDayRowCount * (ALL_DAY_ROW_PX + 4) + 4;
+  const MAX_VISIBLE_ROWS = 4;
+  const visibleRowCount = Math.min(allDayRows.length, MAX_VISIBLE_ROWS);
+  const allDayHeight = Math.max(visibleRowCount, 1) * (ALL_DAY_ROW_PX + 4) + 4 + (allDayRows.length > MAX_VISIBLE_ROWS ? 18 : 0);
+
+  // Count hidden events per column (for the "+N more" indicator)
+  const hiddenByCol = new Array(7).fill(0);
+  allDayEvents.forEach(e => {
+    const rowIdx = e._weekRow || 0;
+    if (rowIdx >= MAX_VISIBLE_ROWS) {
+      const startIdx = Math.max(0, dayCols.findIndex(c => c.dateStr === e.startDate));
+      let endIdx = dayCols.findIndex(c => c.dateStr === e.endDate);
+      if (endIdx === -1) endIdx = 6;
+      for (let i = startIdx; i <= endIdx && i < 7; i++) hiddenByCol[i]++;
+    }
+  });
+
   const allDayBars = allDayEvents.map(e => {
+    const rowIdx = e._weekRow || 0;
+    if (rowIdx >= MAX_VISIBLE_ROWS) return ''; // hidden — surfaced via per-col counter
     // If event starts before this week, clamp start to column 0.
     // If event ends after this week, clamp end to column 6.
     const startIdx = Math.max(0, dayCols.findIndex(c => c.dateStr === e.startDate));
@@ -9390,11 +9487,23 @@ function renderMasterCalWeekView(ctx) {
     const span = Math.max(1, (endIdx - startIdx) + 1);
     const leftPct = (startIdx / 7) * 100;
     const widthPct = (span / 7) * 100;
-    const rowIdx = e._weekRow || 0;
     const top = 4 + rowIdx * (ALL_DAY_ROW_PX + 4);
     return `
       <div class="mcal-allday-bar" style="left:${leftPct}%;width:calc(${widthPct}% - 4px);top:${top}px;height:${ALL_DAY_ROW_PX}px;background:${e.color}22;border-left:3px solid ${e.color};color:${e.color}" onclick="_mcTapEvent('${e.id}')" title="${esc(e.title)}">
         ${esc(e.title)}${e.statusLabel ? ` · ${esc(e.statusLabel)}` : ''}
+      </div>
+    `;
+  }).join('');
+
+  // Per-day overflow badges (only when something is hidden in that column)
+  const overflowBadges = hiddenByCol.map((n, i) => {
+    if (n === 0) return '';
+    const leftPct = (i / 7) * 100;
+    const widthPct = (1 / 7) * 100;
+    const top = 4 + MAX_VISIBLE_ROWS * (ALL_DAY_ROW_PX + 4);
+    return `
+      <div class="mcal-allday-overflow" style="left:${leftPct}%;width:calc(${widthPct}% - 4px);top:${top}px" onclick="setMasterCalFilters({view:'day',date:'${dayCols[i].dateStr}'})" title="See all events on ${esc(dayCols[i].dateStr)}">
+        +${n} more
       </div>
     `;
   }).join('');
@@ -9441,6 +9550,7 @@ function renderMasterCalWeekView(ctx) {
         <div class="mcal-week-allday-label">all-day</div>
         <div class="mcal-week-allday-strip" style="height:${allDayHeight}px">
           ${allDayBars}
+          ${overflowBadges}
         </div>
       </div>
       <div class="mcal-week-body">
@@ -9507,13 +9617,30 @@ function renderMasterCalDayView(ctx) {
   }
   hourLines.push(`<div class="mcal-day-hour-line" style="top:${gridHeight}px"></div>`);
 
+  // Day view all-day section — cap to 8 visible rows with a "Show all N"
+  // expand button. Without this, a day with many meetings dominates the entire
+  // viewport and pushes the timed grid off-screen.
+  const ALL_DAY_VISIBLE = 8;
+  const allDayShownAll = !!(window._mcalDayAllDayExpanded);
+  const visibleAllDay = allDayShownAll ? allDay : allDay.slice(0, ALL_DAY_VISIBLE);
+  const allDayOverflow = allDay.length - visibleAllDay.length;
   const allDayHTML = allDay.length === 0 ? '' : `
     <div class="mcal-day-allday">
-      ${allDay.map(e => `
+      ${visibleAllDay.map(e => `
         <div class="mcal-day-allday-bar" style="background:${e.color}22;border-left:3px solid ${e.color};color:${e.color}" onclick="_mcTapEvent('${e.id}')">
           ${esc(e.title)}${e.statusLabel ? ` · ${esc(e.statusLabel)}` : ''}
         </div>
       `).join('')}
+      ${allDayOverflow > 0 ? `
+        <button type="button" class="mcal-day-allday-more" onclick="window._mcalDayAllDayExpanded=true;renderCurrentPage()">
+          + Show ${allDayOverflow} more
+        </button>
+      ` : ''}
+      ${allDayShownAll && allDay.length > ALL_DAY_VISIBLE ? `
+        <button type="button" class="mcal-day-allday-more" onclick="window._mcalDayAllDayExpanded=false;renderCurrentPage()">
+          Show fewer
+        </button>
+      ` : ''}
     </div>
   `;
 
@@ -9643,8 +9770,10 @@ function renderPlanningRow(p, statusKey) {
     }
   }
 
+  const projectColor = getProjectColor(p.id);
+
   return `
-    <div class="planning-row" onclick="openProject(${p.id},'install')">
+    <div class="planning-row" onclick="openProject(${p.id},'install')" style="box-shadow:inset 4px 0 0 ${projectColor}">
       <div class="planning-row-main">
         <div class="planning-row-name">${esc(p.name)}${p.client_name ? `<span class="planning-row-client"> · ${esc(p.client_name)}</span>` : ''}</div>
         <div class="planning-row-meta">
@@ -13454,8 +13583,10 @@ function renderOpenProjectCard(p, memberId, canSeeFinancials) {
   }).join('');
   const teamMore = allRolePeople.length > 5 ? `<div class="op-team-circle" style="background:#1C2333;margin-left:-6px;color:#8B949E">+${allRolePeople.length - 5}</div>` : '';
 
+  const projectColor = getProjectColor(p.id);
+
   return `
-    <div class="op-card${isOnTeam ? ' op-card-mine' : ''}${closeout ? ' op-card-closeout' : ''}" onclick="openProject(${p.id})">
+    <div class="op-card${isOnTeam ? ' op-card-mine' : ''}${closeout ? ' op-card-closeout' : ''}" onclick="openProject(${p.id})" style="box-shadow:inset 4px 0 0 ${projectColor}">
       <div class="op-card-top">
         <div class="op-card-name">${esc(p.name)}</div>
         <span class="status-pill status-${stg.color}">${stg.label}</span>
@@ -14962,8 +15093,39 @@ function viewerCanSeeMemberCalendar(viewerId, targetMemberId) {
   return true;
 }
 
+// Removes duplicate meetings created when an earlier version of the
+// reschedule flow failed to delete the old meeting on save.
+// Strategy: any two meetings with the same projectId + type + date + startTime
+// + status are duplicates; we keep the highest id (most recent) and drop the
+// rest. Runs on every load — idempotent, cheap, and safer than a one-shot
+// flag (the flag could get set without the cleanup actually running).
+function _dedupeMeetingsOnce() {
+  if (!Array.isArray(state.meetings) || state.meetings.length === 0) return;
+  const seen = {};
+  const keep = [];
+  // Walk in descending id order so the highest id wins
+  const sorted = [...state.meetings].sort((a, b) => (b.id || 0) - (a.id || 0));
+  let removed = 0;
+  sorted.forEach(m => {
+    if (!m) return;
+    const key = `${m.projectId || 'none'}|${m.type || ''}|${m.date || ''}|${m.startTime || ''}|${m.status || ''}`;
+    if (seen[key]) {
+      removed++;
+      return;
+    }
+    seen[key] = true;
+    keep.push(m);
+  });
+  if (removed > 0) {
+    state.meetings = keep;
+    save('vi_meetings', state.meetings);
+    console.log(`[dedupe] removed ${removed} duplicate meeting${removed === 1 ? '' : 's'} from ${sorted.length} total → ${keep.length} kept`);
+  }
+}
+
 // Run migration on first load
 _migrateMeetingLogsOnce();
+_dedupeMeetingsOnce();
 
 // ── Calendar Day Detail Dialog ──
 // Tap a day in the Calendar to see all events that day in full detail.
@@ -15021,8 +15183,9 @@ function renderCalendarDayDetail(dateStr) {
               const proj = state.projects.find(pp => pp.id === e.id);
               const win = getInstallWindow(proj);
               const dateColor = e.color === 'booked' ? '#3FB950' : '#58A6FF';
+              const projColor = getProjectColor(e.id);
               return `
-                <div class="day-detail-item" onclick="document.getElementById('cal-day-detail-dialog')?.remove();openProject(${e.id},'install')" style="border-left-color:${dateColor};cursor:pointer">
+                <div class="day-detail-item" onclick="document.getElementById('cal-day-detail-dialog')?.remove();openProject(${e.id},'install')" style="border-left-color:${projColor};cursor:pointer">
                   <div class="day-detail-item-title">${esc(e.name)}</div>
                   <div class="day-detail-item-meta">
                     <span style="color:${dateColor}">${e.booked ? 'Booked' : 'Estimated'}</span>
@@ -15041,8 +15204,9 @@ function renderCalendarDayDetail(dateStr) {
             ${allMeetings.map(m => {
               const proj = m.projectId ? state.projects.find(pp => pp.id === m.projectId) : null;
               const timeStr = m.startTime && m.endTime ? _fmt12hRange(m.startTime, m.endTime) : (m.startTime ? _fmt12h(m.startTime) : 'All day');
+              const stripeColor = m.projectId != null ? getProjectColor(m.projectId) : '#58A6FF';
               return `
-                <div class="day-detail-item" style="border-left-color:#58A6FF">
+                <div class="day-detail-item" style="border-left-color:${stripeColor}">
                   <div class="day-detail-item-title">${esc(m.title)}</div>
                   <div class="day-detail-item-meta">
                     <span>${esc(timeStr)}</span>
