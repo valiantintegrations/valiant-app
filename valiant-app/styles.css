@@ -5987,3 +5987,26 @@ td.today .cal-day-num {
   text-transform: uppercase;
   letter-spacing: 0.03em;
 }
+
+/* ════════════════════════════════════════════════════════════════════════
+   MASTER CALENDAR DRAG-TO-EDIT (Round 2)
+   ════════════════════════════════════════════════════════════════════════ */
+.mcal-event-draggable {
+  cursor: grab;
+}
+.mcal-event-draggable:active {
+  cursor: grabbing;
+}
+.mcal-event-dragging {
+  opacity: 0.4;
+}
+.mcal-month-cell.mcal-drop-target {
+  background: #11304F !important;
+  outline: 2px dashed #58A6FF;
+  outline-offset: -2px;
+}
+.mcal-touch-ghost {
+  border-radius: 4px;
+  box-shadow: 0 6px 20px rgba(0,0,0,0.5);
+  transform: translate(-50%, -50%);
+}
