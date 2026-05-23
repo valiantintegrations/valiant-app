@@ -7524,14 +7524,19 @@ function renderCalendar(c) {
             const notesPart = proj?.scheduling_notes ? `\n\nNotes: ${proj.scheduling_notes}` : '';
             const tooltip = `${e.name}${e.booked ? ' (Booked)' : ' (Estimated)'}${notesPart}`;
             const hasNotes = !!proj?.scheduling_notes;
-            return `<div class="cal-event cal-event-${e.color}${hasNotes ? ' cal-event-has-notes' : ''}" onclick="event.stopPropagation();openProject(${e.id},'install')" title="${esc(tooltip)}">${hasNotes ? '📝 ' : ''}${esc(e.name)}</div>`;
+            // Unified: project color, solid for booked, outline for estimated
+            const st = getEventStyle(getProjectColor(e.id), !!e.booked);
+            return `<div class="cal-event${hasNotes ? ' cal-event-has-notes' : ''}" style="${st.css}" onclick="event.stopPropagation();openProject(${e.id},'install')" title="${esc(tooltip)}">${hasNotes ? '📝 ' : ''}${esc(e.name)}</div>`;
           }).join('')}
           ${meetingShown.map(m => {
             const mColor = m.projectId != null ? getProjectColor(m.projectId) : '#A371F7';
             const timeLabel = m.startTime ? _fmt12h(m.startTime) + ' ' : '';
             const isPending = m.status === 'pending_approval';
             const tooltip = `${m.title}${m.startTime && m.endTime ? ' · ' + _fmt12hRange(m.startTime, m.endTime) : ''}`;
-            return `<div class="cal-event" style="background:${mColor}1F;border-color:${isPending ? '#D29922' : mColor};color:${isPending ? '#D29922' : mColor}" onclick="event.stopPropagation();openMeetingDetail(${m.id})" title="${esc(tooltip)}">${timeLabel ? `<span style="font-weight:600">${esc(timeLabel)}</span>` : ''}${esc(m.title)}</div>`;
+            // Unified: solid when confirmed, outline when pending
+            const st = getEventStyle(mColor, !isPending);
+            const timeColor = st.fill === 'transparent' ? mColor : st.text;
+            return `<div class="cal-event" style="${st.css}" onclick="event.stopPropagation();openMeetingDetail(${m.id})" title="${esc(tooltip)}">${timeLabel ? `<span style="font-weight:600;color:${timeColor}">${esc(timeLabel)}</span>` : ''}${esc(m.title)}</div>`;
           }).join('')}
           ${personalShown.map(pe => {
             const owner = getTeamMember(pe.memberId);
@@ -9002,6 +9007,63 @@ function getProjectColor(projectId) {
   return PROJECT_COLOR_PALETTE[h];
 }
 
+// Decide readable text color (dark vs light) for a given solid fill color.
+// Uses relative luminance — light fills get dark text, dark fills get light text.
+function _contrastTextFor(hex) {
+  if (!hex || hex[0] !== '#' || hex.length < 7) return '#fff';
+  const r = parseInt(hex.slice(1, 3), 16);
+  const g = parseInt(hex.slice(3, 5), 16);
+  const b = parseInt(hex.slice(5, 7), 16);
+  // Perceptual luminance (sRGB-ish weighting)
+  const lum = (0.299 * r + 0.587 * g + 0.114 * b) / 255;
+  return lum > 0.6 ? '#0D1117' : '#FFFFFF';
+}
+
+// ── Shared calendar event styling (Round 4.5 — unified colors) ──
+// One source of truth for how an event is colored on BOTH the Operations
+// Master Calendar and the main Calendar tab, across all views.
+//
+// Rule:
+//   - Anything tied to a project (installs, project meetings) uses the
+//     project color.
+//   - Confirmed / booked => SOLID fill (committed).
+//   - Estimated / pending => OUTLINE only (tentative).
+//   - Events with no project keep their passed-in fallback color.
+//
+// Args:
+//   color       base color to use (project color, or a type color fallback)
+//   committed   true => solid fill, false => outline-only
+// Returns an object with ready-to-use inline-style fragments:
+//   { fill, border, text, css }  where css is the full inline style string.
+function getEventStyle(color, committed) {
+  const c = color || '#6E7681';
+  if (committed) {
+    return {
+      fill: c,
+      border: c,
+      text: _contrastTextFor(c),
+      css: `background:${c};border:1px solid ${c};color:${_contrastTextFor(c)}`
+    };
+  }
+  // Outline-only — faint tint so it's still visible on dark bg, colored border + text
+  return {
+    fill: 'transparent',
+    border: c,
+    text: c,
+    css: `background:${c}14;border:1px solid ${c};color:${c}`
+  };
+}
+
+// Convenience: given a normalized master-calendar event, is it "committed"?
+//   install  => booked (statusLabel 'Booked')
+//   meeting  => confirmed (not pending_approval)
+//   personal => always treated as committed (solid) since they're real blocks
+function _eventIsCommitted(e) {
+  if (e.type === 'install') return e.statusLabel === 'Booked';
+  if (e.type === 'meeting') return e.statusLabel !== 'Pending';
+  return true;
+}
+
 // ════════════════════════════════════════════════════════════════════════════
 // OPERATIONS MASTER CALENDAR (Round 1 — read + drill-in)
 // ────────────────────────────────────────────────────────────────────────────
@@ -9144,6 +9206,8 @@ function getMasterCalendarEvents(startDateStr, endDateStr, ctx) {
         startTime: null,
         endTime: null,
         color: isBooked ? '#3FB950' : '#58A6FF',
+        displayColor: getProjectColor(p.id),
+        committed: isBooked,
         attendeeIds: involvedIds,
         statusLabel: isBooked ? 'Booked' : 'Estimated',
         raw: win
@@ -9173,6 +9237,8 @@ function getMasterCalendarEvents(startDateStr, endDateStr, ctx) {
         startTime: m.startTime,
         endTime: m.endTime,
         color: m.status === 'pending_approval' ? '#D29922' : '#A371F7',
+        displayColor: m.projectId != null ? getProjectColor(m.projectId) : '#A371F7',
+        committed: m.status !== 'pending_approval',
         attendeeIds: m.attendees || [],
         statusLabel: m.status === 'pending_approval' ? 'Pending' : 'Confirmed',
         raw: m
@@ -9203,6 +9269,8 @@ function getMasterCalendarEvents(startDateStr, endDateStr, ctx) {
         startTime: pe.startTime,
         endTime: pe.endTime,
         color: getPersonalEventColor(pe),
+        displayColor: getPersonalEventColor(pe),
+        committed: true,
         attendeeIds: [pe.memberId],
         owner: pe.memberId,
         isPrivateMasked: isPrivateCustom && !isOwner,
@@ -9476,13 +9544,13 @@ function renderMasterCalMonthView(ctx) {
         <div class="mcal-month-daynum">${d.getDate()}</div>
         <div class="mcal-month-events">
           ${dayEvents.map(e => {
-            // In Month view, project events use the project color so projects
-            // are visually grouped at a glance. Non-project events (generic
-            // meetings, personal events) keep their type color.
-            const c = e.projectId != null ? getProjectColor(e.projectId) : e.color;
+            // Unified styling: project color, solid when committed (booked /
+            // confirmed), outline when tentative (estimated / pending).
+            const st = getEventStyle(e.displayColor || e.color, e.committed);
+            const timeColor = st.fill === 'transparent' ? (e.displayColor || e.color) : st.text;
             return `
-            <div class="mcal-month-event" style="background:${c}22;border-left:3px solid ${c};color:${c}" onclick="event.stopPropagation();_mcTapEvent('${e.id}')" title="${esc(e.title)}">
-              ${e.startTime ? `<span class="mcal-month-event-time">${esc(_fmt12h(e.startTime))}</span> ` : ''}${esc(e.title)}
+            <div class="mcal-month-event" style="${st.css}" onclick="event.stopPropagation();_mcTapEvent('${e.id}')" title="${esc(e.title)}">
+              ${e.startTime ? `<span class="mcal-month-event-time" style="color:${timeColor}">${esc(_fmt12h(e.startTime))}</span> ` : ''}${esc(e.title)}
             </div>
           `;
           }).join('')}
@@ -9605,8 +9673,9 @@ function renderMasterCalWeekView(ctx) {
     const leftPct = (startIdx / 7) * 100;
     const widthPct = (span / 7) * 100;
     const top = 4 + rowIdx * (ALL_DAY_ROW_PX + 4);
+    const st = getEventStyle(e.displayColor || e.color, e.committed);
     return `
-      <div class="mcal-allday-bar" style="left:${leftPct}%;width:calc(${widthPct}% - 4px);top:${top}px;height:${ALL_DAY_ROW_PX}px;background:${e.color}22;border-left:3px solid ${e.color};color:${e.color}" onclick="_mcTapEvent('${e.id}')" title="${esc(e.title)}">
+      <div class="mcal-allday-bar" style="left:${leftPct}%;width:calc(${widthPct}% - 4px);top:${top}px;height:${ALL_DAY_ROW_PX}px;${st.css}" onclick="_mcTapEvent('${e.id}')" title="${esc(e.title)}">
         ${esc(e.title)}${e.statusLabel ? ` · ${esc(e.statusLabel)}` : ''}
       </div>
     `;
@@ -9648,8 +9717,9 @@ function renderMasterCalWeekView(ctx) {
       const eMin = _timeToMinutes(e.endTime);
       const top = ((sMin / 60) - hourStart) * HOUR_PX;
       const height = Math.max(20, ((eMin - sMin) / 60) * HOUR_PX - 2);
+      const st = getEventStyle(e.displayColor || e.color, e.committed);
       return `
-        <div class="mcal-week-event" style="top:${top}px;height:${height}px;background:${e.color}33;border-left:3px solid ${e.color};color:${e.color}" onclick="_mcTapEvent('${e.id}')" title="${esc(e.title)}">
+        <div class="mcal-week-event" style="top:${top}px;height:${height}px;${st.css}" onclick="_mcTapEvent('${e.id}')" title="${esc(e.title)}">
           <div class="mcal-week-event-time">${esc(_fmt12hRange(e.startTime, e.endTime))}</div>
           <div class="mcal-week-event-title">${esc(e.title)}</div>
         </div>
@@ -9744,12 +9814,15 @@ function renderMasterCalDayView(ctx) {
   const allDayHTML = allDay.length === 0 ? '' : `
     <div class="mcal-day-allday">
       <div class="mcal-day-allday-section-label">ALL-DAY</div>
-      ${visibleAllDay.map(e => `
-        <div class="mcal-day-allday-bar" style="background:${e.color}22;border-left:3px solid ${e.color};color:${e.color}" onclick="_mcTapEvent('${e.id}')">
+      ${visibleAllDay.map(e => {
+        const st = getEventStyle(e.displayColor || e.color, e.committed);
+        return `
+        <div class="mcal-day-allday-bar" style="${st.css}" onclick="_mcTapEvent('${e.id}')">
           <span class="mcal-day-allday-tag">all-day</span>
           ${esc(e.title)}${e.statusLabel ? ` · ${esc(e.statusLabel)}` : ''}
         </div>
-      `).join('')}
+      `;
+      }).join('')}
       ${allDayOverflow > 0 ? `
         <button type="button" class="mcal-day-allday-more" onclick="window._mcalDayAllDayExpanded=true;renderCurrentPage()">
           + Show ${allDayOverflow} more
@@ -9776,11 +9849,13 @@ function renderMasterCalDayView(ctx) {
       .filter(Boolean)
       .map(n => n.split(' ')[0])
       .join(', ');
+    const st = getEventStyle(e.displayColor || e.color, e.committed);
+    const attColor = st.fill === 'transparent' ? '#8B949E' : st.text;
     return `
-      <div class="mcal-day-event" style="top:${top}px;height:${height}px;left:${left}%;width:calc(${colWidth}% - 4px);background:${e.color}33;border-left:3px solid ${e.color};color:${e.color}" onclick="_mcTapEvent('${e.id}')">
+      <div class="mcal-day-event" style="top:${top}px;height:${height}px;left:${left}%;width:calc(${colWidth}% - 4px);${st.css}" onclick="_mcTapEvent('${e.id}')">
         <div class="mcal-day-event-time">${esc(_fmt12hRange(e.startTime, e.endTime))}</div>
         <div class="mcal-day-event-title">${esc(e.title)}</div>
-        ${attendeeNames && height >= 60 ? `<div class="mcal-day-event-attendees">${esc(attendeeNames)}</div>` : ''}
+        ${attendeeNames && height >= 60 ? `<div class="mcal-day-event-attendees" style="color:${attColor}">${esc(attendeeNames)}</div>` : ''}
       </div>
     `;
   }).join('');
