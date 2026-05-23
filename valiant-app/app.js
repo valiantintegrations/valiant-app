@@ -487,7 +487,15 @@ function getTeamByAccess(accessKey) {
 }
 
 function getInitials(name) {
-  return name.split(' ').map(w => w[0]).join('').toUpperCase().slice(0, 2);
+  if (!name) return '';
+  const words = name.trim().split(/\s+/).filter(Boolean);
+  if (words.length === 0) return '';
+  if (words.length === 1) {
+    // Single-word name (e.g. "Jacob") — use its first two letters ("Ja")
+    return words[0].slice(0, 2).toUpperCase();
+  }
+  // Multi-word — first letter of the first two words ("Clint Cowley" -> "CC")
+  return (words[0][0] + words[1][0]).toUpperCase();
 }
 
 function hasAccess(memberId, accessKey) {
