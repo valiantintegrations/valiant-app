@@ -9282,6 +9282,26 @@ function masterCalNav(direction) {
   setMasterCalAnchorDate(d);
 }
 
+// Normalize any stored date to 'YYYY-MM-DD'. Jetbuilt-imported dates may carry
+// a time component ('2026-05-13T00:00:00') or other formats; the calendar grid
+// keys are bare YYYY-MM-DD, so a mismatch makes events undraggable / misplaced.
+function _mcNormalizeDate(d) {
+  if (!d) return d;
+  if (typeof d === 'string') {
+    // Already YYYY-MM-DD
+    if (/^\d{4}-\d{2}-\d{2}$/.test(d)) return d;
+    // Has a time component or other ISO form — take the date part
+    const m = d.match(/^(\d{4}-\d{2}-\d{2})/);
+    if (m) return m[1];
+    // Fallback: parse and reformat
+    const parsed = new Date(d);
+    if (!isNaN(parsed)) return _ymd(parsed);
+    return d;
+  }
+  if (d instanceof Date) return _ymd(d);
+  return d;
+}
+
 // ── Event aggregation ──
 // Returns a flat list of events (from all sources) overlapping a date range.
 // Each event is normalized to: {
@@ -9332,15 +9352,15 @@ function getMasterCalendarEvents(startDateStr, endDateStr, ctx) {
         ...((a.install || []).map(x => x.id))
       ].filter((v, i, arr) => v != null && arr.indexOf(v) === i);
       if (!anyAttendeeAllowed(involvedIds)) return;
-      const isBooked = win.status === 'booked';
+      const isBooked = win.source === 'booked';
       events.push({
         type: 'install',
         id: `install-${p.id}`,
         title: p.name,
         projectId: p.id,
         project: p,
-        startDate: win.start,
-        endDate: win.end,
+        startDate: _mcNormalizeDate(win.start),
+        endDate: _mcNormalizeDate(win.end),
         startTime: null,
         endTime: null,
         color: isBooked ? '#3FB950' : '#58A6FF',
@@ -9364,14 +9384,15 @@ function getMasterCalendarEvents(startDateStr, endDateStr, ctx) {
       if (m.status === 'denied') return;
       if (!anyAttendeeAllowed(m.attendees || [])) return;
       const proj = m.projectId ? state.projects.find(p => p.id === m.projectId) : null;
+      const mDate = _mcNormalizeDate(m.date);
       events.push({
         type: 'meeting',
         id: `meeting-${m.id}`,
         title: m.title || _meetingTypeLabel(m.type) || 'Meeting',
         projectId: m.projectId,
         project: proj,
-        startDate: m.date,
-        endDate: m.date,
+        startDate: mDate,
+        endDate: mDate,
         startTime: m.startTime,
         endTime: m.endTime,
         color: m.status === 'pending_approval' ? '#D29922' : '#A371F7',
@@ -9390,7 +9411,7 @@ function getMasterCalendarEvents(startDateStr, endDateStr, ctx) {
       if (!pe || !pe.date) return;
       // Personal events are single-day (one `date` field). Normalize to the
       // calendar's startDate/endDate shape using that one date for both.
-      const peDate = pe.date;
+      const peDate = _mcNormalizeDate(pe.date);
       if (peDate < startDateStr || peDate > endDateStr) return;
       if (!memberAllowed(pe.memberId)) return;
       const isOwner = pe.memberId === memberId;
@@ -9698,14 +9719,16 @@ function _mcProposeMove(eventId, newStartDate, perm) {
     if (!p) return;
     const win = getInstallWindow(p);
     if (!win || !win.start) return;
-    if (win.start === newStartDate) return; // no move
-    const startD = new Date(win.start + 'T00:00:00');
-    const endD = new Date((win.end || win.start) + 'T00:00:00');
+    const winStart = _mcNormalizeDate(win.start);
+    const winEnd = _mcNormalizeDate(win.end || win.start);
+    if (winStart === newStartDate) return; // no move
+    const startD = new Date(winStart + 'T00:00:00');
+    const endD = new Date(winEnd + 'T00:00:00');
     const durationDays = Math.round((endD - startD) / 86400000);
     const newStart = newStartDate;
     const newEnd = _ymd(_addDays(new Date(newStartDate + 'T00:00:00'), durationDays));
     const verb = perm === 'request' ? 'Request moving' : 'Move';
-    const msg = `${verb} "${p.name}" install\nfrom ${fmtDateRange(win.start, win.end)}\nto ${fmtDateRange(newStart, newEnd)}?`;
+    const msg = `${verb} "${p.name}" install\nfrom ${fmtDateRange(winStart, winEnd)}\nto ${fmtDateRange(newStart, newEnd)}?`;
     showMoveConfirm(msg, () => {
       if (perm === 'request') {
         createInstallChangeRequest(rawId, {
@@ -9733,7 +9756,7 @@ function _mcProposeMove(eventId, newStartDate, perm) {
   if (type === 'meeting') {
     const m = (state.meetings || []).find(x => x.id === rawId);
     if (!m) return;
-    if (m.date === newStartDate) return;
+    if (_mcNormalizeDate(m.date) === newStartDate) return;
     const msg = `Move "${m.title}"\nfrom ${fmtDate(m.date)} to ${fmtDate(newStartDate)}?\n${m.startTime ? 'Time stays ' + _fmt12hRange(m.startTime, m.endTime) + '.' : ''}`;
     showMoveConfirm(msg, () => {
       const conflictIds = _mcMeetingConflicts(m, newStartDate);
