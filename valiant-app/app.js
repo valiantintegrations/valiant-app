@@ -9531,6 +9531,7 @@ const _mcDrag = {
   active: false,
   eventId: null,
   perm: null,
+  grabbedDay: null,   // the specific day (YYYY-MM-DD) the user grabbed — for multi-day shift math
   ghost: null,
   touchHoldTimer: null,
   touchStartXY: null,
@@ -9539,12 +9540,13 @@ const _mcDrag = {
 };
 
 // ── Desktop HTML5 drag ──
-function _mcDragStart(event, eventId) {
+function _mcDragStart(event, eventId, grabDay) {
   const perm = _mcGetEventPermission(eventId);
   if (!perm) { event.preventDefault(); return; }
   _mcDrag.active = true;
   _mcDrag.eventId = eventId;
   _mcDrag.perm = perm;
+  _mcDrag.grabbedDay = grabDay || null;
   _mcDrag.isTouch = false;
   if (event.dataTransfer) {
     event.dataTransfer.effectAllowed = 'move';
@@ -9582,19 +9584,21 @@ function _mcCellDrop(event, dateStr) {
   event.preventDefault();
   const eventId = _mcDrag.eventId;
   const perm = _mcDrag.perm;
+  const grabbedDay = _mcDrag.grabbedDay;
   document.querySelectorAll('.mcal-month-cell.mcal-drop-target').forEach(el => el.classList.remove('mcal-drop-target'));
   _mcDrag.active = false;
-  if (eventId) _mcProposeMove(eventId, dateStr, perm);
+  if (eventId) _mcProposeMove(eventId, dateStr, perm, grabbedDay);
 }
 
 // ── Touch drag (press-and-hold) ──
-function _mcTouchStart(event, eventId) {
+function _mcTouchStart(event, eventId, grabDay) {
   const perm = _mcGetEventPermission(eventId);
   if (!perm) return; // not draggable — let normal tap/scroll happen
   const t = event.touches[0];
   _mcDrag.touchStartXY = { x: t.clientX, y: t.clientY };
   _mcDrag.eventId = eventId;
   _mcDrag.perm = perm;
+  _mcDrag.grabbedDay = grabDay || null;
   _mcDrag.isTouch = true;
   const sourceEl = event.currentTarget;
   // Press-and-hold: after 400ms without much movement, pick the event up.
@@ -9662,6 +9666,7 @@ function _mcTouchEnd(event) {
   }
   const eventId = _mcDrag.eventId;
   const perm = _mcDrag.perm;
+  const grabbedDay = _mcDrag.grabbedDay;
   let dropDate = null;
   if (_mcDrag.lastCellEl) {
     dropDate = _mcDrag.lastCellEl.dataset.date || null;
@@ -9671,7 +9676,7 @@ function _mcTouchEnd(event) {
   document.querySelectorAll('.mcal-event-dragging').forEach(el => el.classList.remove('mcal-event-dragging'));
   _mcDrag.active = false;
   _mcDrag.isTouch = false;
-  if (eventId && dropDate) _mcProposeMove(eventId, dropDate, perm);
+  if (eventId && dropDate) _mcProposeMove(eventId, dropDate, perm, grabbedDay);
   _mcDrag.eventId = null;
 }
 
@@ -9710,7 +9715,7 @@ function showMoveConfirm(message, onYes, opts) {
 // ── Move proposal + confirm ──
 // Computes the new dates (preserving duration for multi-day installs), then
 // shows a confirm dialog. On confirm, applies directly or files a request.
-function _mcProposeMove(eventId, newStartDate, perm) {
+function _mcProposeMove(eventId, dropDate, perm, grabbedDay) {
   const { type, rawId } = _mcParseEventId(eventId);
   if (!type) return;
 
@@ -9721,12 +9726,19 @@ function _mcProposeMove(eventId, newStartDate, perm) {
     if (!win || !win.start) return;
     const winStart = _mcNormalizeDate(win.start);
     const winEnd = _mcNormalizeDate(win.end || win.start);
-    if (winStart === newStartDate) return; // no move
+    // Shift the whole window by (dropDate - grabbedDay) so the day the user
+    // grabbed lands on the drop cell. Falls back to treating drop as the new
+    // start if we don't know which day was grabbed.
+    const grab = grabbedDay || winStart;
+    const shiftDays = Math.round(
+      (new Date(dropDate + 'T00:00:00') - new Date(grab + 'T00:00:00')) / 86400000
+    );
+    if (shiftDays === 0) return; // no move
     const startD = new Date(winStart + 'T00:00:00');
     const endD = new Date(winEnd + 'T00:00:00');
     const durationDays = Math.round((endD - startD) / 86400000);
-    const newStart = newStartDate;
-    const newEnd = _ymd(_addDays(new Date(newStartDate + 'T00:00:00'), durationDays));
+    const newStart = _ymd(_addDays(startD, shiftDays));
+    const newEnd = _ymd(_addDays(new Date(newStart + 'T00:00:00'), durationDays));
     const verb = perm === 'request' ? 'Request moving' : 'Move';
     const msg = `${verb} "${p.name}" install\nfrom ${fmtDateRange(winStart, winEnd)}\nto ${fmtDateRange(newStart, newEnd)}?`;
     showMoveConfirm(msg, () => {
@@ -9756,18 +9768,18 @@ function _mcProposeMove(eventId, newStartDate, perm) {
   if (type === 'meeting') {
     const m = (state.meetings || []).find(x => x.id === rawId);
     if (!m) return;
-    if (_mcNormalizeDate(m.date) === newStartDate) return;
-    const msg = `Move "${m.title}"\nfrom ${fmtDate(m.date)} to ${fmtDate(newStartDate)}?\n${m.startTime ? 'Time stays ' + _fmt12hRange(m.startTime, m.endTime) + '.' : ''}`;
+    if (_mcNormalizeDate(m.date) === dropDate) return;
+    const msg = `Move "${m.title}"\nfrom ${fmtDate(m.date)} to ${fmtDate(dropDate)}?\n${m.startTime ? 'Time stays ' + _fmt12hRange(m.startTime, m.endTime) + '.' : ''}`;
     showMoveConfirm(msg, () => {
-      const conflictIds = _mcMeetingConflicts(m, newStartDate);
+      const conflictIds = _mcMeetingConflicts(m, dropDate);
       if (conflictIds.length > 0) {
-        m.date = newStartDate;
+        m.date = dropDate;
         m.status = 'pending_approval';
         _mcSetMeetingApprovalsNeeded(m, conflictIds);
         save('vi_meetings', state.meetings);
         showToast('Moved — attendee conflict, approval requested', 'info');
       } else {
-        m.date = newStartDate;
+        m.date = dropDate;
         if (m.status === 'pending_approval') m.status = 'confirmed';
         save('vi_meetings', state.meetings);
         showToast('Meeting moved', 'success');
@@ -9780,11 +9792,11 @@ function _mcProposeMove(eventId, newStartDate, perm) {
   if (type === 'personal_event') {
     const pe = (state.personalEvents || []).find(x => x.id === rawId);
     if (!pe) return;
-    if (pe.date === newStartDate) return;
+    if (pe.date === dropDate) return;
     const label = getPersonalEventDisplayLabel(pe) || 'event';
-    const msg = `Move "${label}"\nfrom ${fmtDate(pe.date)} to ${fmtDate(newStartDate)}?`;
+    const msg = `Move "${label}"\nfrom ${fmtDate(pe.date)} to ${fmtDate(dropDate)}?`;
     showMoveConfirm(msg, () => {
-      editPersonalEvent(rawId, { date: newStartDate });
+      editPersonalEvent(rawId, { date: dropDate });
       showToast('Personal event moved', 'success');
       renderCurrentPage();
     }, { confirmLabel: 'Move' });
@@ -10045,8 +10057,17 @@ function renderMasterCalMonthView(ctx) {
     const k = _ymd(d);
     const inMonth = d.getMonth() === month;
     const isToday = k === todayStr;
-    const dayEvents = (eventsByDate[k] || []).slice(0, 3); // first 3
-    const overflow = (eventsByDate[k] || []).length - dayEvents.length;
+    // Sort each cell's events so multi-day spans sit in a stable order across
+    // days (keeps a continuous bar on the same row from cell to cell).
+    const cellEvents = (eventsByDate[k] || []).slice().sort((a, b) => {
+      const aMulti = (a.endDate && a.endDate !== a.startDate) ? 0 : 1;
+      const bMulti = (b.endDate && b.endDate !== b.startDate) ? 0 : 1;
+      if (aMulti !== bMulti) return aMulti - bMulti;
+      if (a.startDate !== b.startDate) return a.startDate.localeCompare(b.startDate);
+      return String(a.id).localeCompare(String(b.id));
+    });
+    const dayEvents = cellEvents.slice(0, 3);
+    const overflow = cellEvents.length - dayEvents.length;
 
     cells.push(`
       <div class="mcal-month-cell${inMonth ? '' : ' is-other-month'}${isToday ? ' is-today' : ''}"
@@ -10058,20 +10079,37 @@ function renderMasterCalMonthView(ctx) {
         <div class="mcal-month-daynum">${d.getDate()}</div>
         <div class="mcal-month-events">
           ${dayEvents.map(e => {
-            // Unified styling: project color, solid when committed (booked /
-            // confirmed), outline when tentative (estimated / pending).
             const st = getEventStyle(e.displayColor || e.color, e.committed);
             const timeColor = st.fill === 'transparent' ? (e.displayColor || e.color) : st.text;
-            // Only the start-date cell of a multi-day event is the draggable
-            // handle, so a 3-day install isn't draggable from 3 different cells.
-            const isStartCell = e.startDate === k;
-            const canDrag = isStartCell && !!_mcGetEventPermission(e.id);
+            const isMultiDay = e.endDate && e.endDate !== e.startDate;
+            // Segment geometry for multi-day events: is this the span start/end,
+            // and is it the left/right edge of the current week (col 0 / col 6)?
+            const dow = d.getDay(); // 0=Sun..6=Sat
+            const isSpanStart = e.startDate === k;
+            const isSpanEnd = e.endDate === k;
+            const isWeekStart = dow === 0;
+            const isWeekEnd = dow === 6;
+            // The title shows on the span start, or at the start of a new week
+            // for a continuing bar (so a job spanning weeks is labeled each row).
+            const showTitle = !isMultiDay || isSpanStart || isWeekStart;
+            // Connected look: square off the inner edges so adjacent days merge.
+            const roundLeft = !isMultiDay || isSpanStart || isWeekStart;
+            const roundRight = !isMultiDay || isSpanEnd || isWeekEnd;
+            // Draggable from ANY day of the event (multi-day grabbable anywhere).
+            const canDrag = !!_mcGetEventPermission(e.id);
             const dragAttrs = canDrag
-              ? `draggable="true" ondragstart="_mcDragStart(event,'${e.id}')" ondragend="_mcDragEnd(event)" ontouchstart="_mcTouchStart(event,'${e.id}')" ontouchmove="_mcTouchMove(event)" ontouchend="_mcTouchEnd(event)"`
+              ? `draggable="true" ondragstart="_mcDragStart(event,'${e.id}','${k}')" ondragend="_mcDragEnd(event)" ontouchstart="_mcTouchStart(event,'${e.id}','${k}')" ontouchmove="_mcTouchMove(event)" ontouchend="_mcTouchEnd(event)"`
               : '';
+            const radiusStyle = `border-top-left-radius:${roundLeft ? '4px' : '0'};border-bottom-left-radius:${roundLeft ? '4px' : '0'};border-top-right-radius:${roundRight ? '4px' : '0'};border-bottom-right-radius:${roundRight ? '4px' : '0'}`;
+            // For continuation segments (no title), drop the left border so the
+            // colored fill reads as one continuous bar.
+            const borderTweak = (isMultiDay && !roundLeft) ? 'border-left:none;' : '';
+            const continuationClass = isMultiDay ? ' mcal-month-event-span' : '';
             return `
-            <div class="mcal-month-event${canDrag ? ' mcal-event-draggable' : ''}" style="${st.css}" ${dragAttrs} onclick="event.stopPropagation();_mcTapEvent('${e.id}')" title="${esc(e.title)}">
-              ${e.startTime ? `<span class="mcal-month-event-time" style="color:${timeColor}">${esc(_fmt12h(e.startTime))}</span> ` : ''}${esc(e.title)}
+            <div class="mcal-month-event${continuationClass}${canDrag ? ' mcal-event-draggable' : ''}" style="${st.css};${radiusStyle};${borderTweak}" ${dragAttrs} onclick="event.stopPropagation();_mcTapEvent('${e.id}')" title="${esc(e.title)}">
+              ${showTitle
+                ? `${e.startTime ? `<span class="mcal-month-event-time" style="color:${timeColor}">${esc(_fmt12h(e.startTime))}</span> ` : ''}${esc(e.title)}`
+                : '&nbsp;'}
             </div>
           `;
           }).join('')}
