@@ -6053,3 +6053,96 @@ td.today .cal-day-num {
   font-weight: 600;
   opacity: 0.75;
 }
+
+/* ════════════════════════════════════════════════════════════════════════
+   MASTER CALENDAR DAY DETAIL — List/Timeline toggle + List view (Drop 3)
+   ════════════════════════════════════════════════════════════════════════ */
+.mcal-day-modetoggle {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 12px;
+  flex-wrap: wrap;
+}
+.mcal-day-modetoggle-date {
+  font-size: 14px;
+  font-weight: 600;
+  color: #E6EDF3;
+}
+.mcal-day-modetoggle-btns {
+  display: inline-flex;
+  background: #161B22;
+  border: 1px solid #30363D;
+  border-radius: 6px;
+  overflow: hidden;
+}
+.mcal-day-modebtn {
+  background: transparent;
+  border: none;
+  color: #8B949E;
+  padding: 5px 14px;
+  cursor: pointer;
+  font-family: inherit;
+  font-size: 12px;
+  font-weight: 500;
+  -webkit-tap-highlight-color: transparent;
+}
+.mcal-day-modebtn + .mcal-day-modebtn { border-left: 1px solid #30363D; }
+.mcal-day-modebtn:hover { color: #C9D1D9; }
+.mcal-day-modebtn.is-active { background: #1565C0; color: #fff; }
+
+.mcal-day-list { display: flex; flex-direction: column; gap: 6px; }
+.mcal-daylist-section-label {
+  font-size: 10px;
+  font-weight: 600;
+  color: #6E7681;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  margin: 10px 0 2px;
+}
+.mcal-daylist-job {
+  background: #0D1117;
+  border: 1px solid #1C2333;
+  border-radius: 6px;
+  padding: 10px 12px;
+}
+.mcal-daylist-job-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  cursor: pointer;
+}
+.mcal-daylist-job-title { font-size: 14px; font-weight: 600; color: #E6EDF3; }
+.mcal-daylist-job-status { font-size: 11px; font-weight: 600; flex-shrink: 0; }
+.mcal-daylist-job-meta { font-size: 11px; color: #8B949E; margin-top: 3px; }
+.mcal-daylist-tasks {
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px dashed #1C2333;
+}
+.mcal-daylist-tasks-empty {
+  font-size: 11px;
+  color: #6E7681;
+  font-style: italic;
+}
+.mcal-daylist-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  background: #0D1117;
+  border: 1px solid #1C2333;
+  border-radius: 6px;
+  padding: 8px 12px;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+.mcal-daylist-row:hover { background: #161B22; }
+.mcal-daylist-row-time {
+  font-size: 11px;
+  color: #8B949E;
+  flex-shrink: 0;
+  min-width: 90px;
+}
+.mcal-daylist-row-title { font-size: 13px; color: #E6EDF3; }
