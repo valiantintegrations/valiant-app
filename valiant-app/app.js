@@ -366,6 +366,7 @@ const state = {
   meetingLogs: JSON.parse(localStorage.getItem('vi_meeting_logs') || '{}'),
   meetings: JSON.parse(localStorage.getItem('vi_meetings') || '[]'),
   meetingApprovals: JSON.parse(localStorage.getItem('vi_meeting_approvals') || '{}'),
+  installChangeRequests: JSON.parse(localStorage.getItem('vi_install_change_requests') || '{}'),
   personalEvents: JSON.parse(localStorage.getItem('vi_personal_events') || '[]'),
   userLayouts: JSON.parse(localStorage.getItem('vi_user_layouts') || '{}'),
   calendarSelectedMembers: JSON.parse(localStorage.getItem('vi_calendar_selected_members') || '[]'),
@@ -1052,20 +1053,135 @@ function canEditInstallWindow(projectId) {
   return false;
 }
 
-// Lead Installer (lead in assignment.install) can request a change. Used by
-// Round 2 to gate the "request change" path. Round 1 just returns true if
-// person is lead installer — UI shows tooltip but doesn't action yet.
+// Any assigned install crew member (lead or not) can REQUEST a change to a
+// booked install window. The PM lead (or Master Admin) approves. This is the
+// gate for the request-and-approval flow (Part C). People who can edit directly
+// (PM lead, Master Admin) don't go through here — they edit outright.
 function canRequestInstallWindowChange(projectId) {
   const viewerId = getActiveTeamMemberId();
   const a = getProjectAssignment(projectId);
-  const installLead = (a.install || []).find(x => x.lead);
-  return !!(installLead && installLead.id === viewerId);
+  return (a.install || []).some(x => x.id === viewerId);
+}
+
+// ── Install window change requests (Part C) ──
+// When an installer (not PM lead / Master Admin) wants to move a booked
+// install window, the change is captured as a pending request keyed by project
+// id rather than applied immediately. The PM lead (or Master Admin) approves or
+// denies via the Pending Approvals widget. One pending request per project — a
+// new request replaces any prior unresolved one.
+//
+// Shape: state.installChangeRequests[projectId] = {
+//   projectId, requestedStart, requestedEnd, requestedExcludeWeekends,
+//   requestedWeekendIncludes, currentStart, currentEnd,
+//   requestedBy (memberId), requestedAt (ISO), note
+// }
+
+function getInstallChangeRequest(projectId) {
+  return state.installChangeRequests?.[projectId] || null;
+}
+
+function hasPendingInstallChange(projectId) {
+  return !!getInstallChangeRequest(projectId);
+}
+
+function createInstallChangeRequest(projectId, requested) {
+  if (!state.installChangeRequests) state.installChangeRequests = {};
+  const p = state.projects.find(x => x.id === projectId);
+  const current = getInstallWindow(p) || {};
+  state.installChangeRequests[projectId] = {
+    projectId,
+    requestedStart: requested.start,
+    requestedEnd: requested.end || requested.start,
+    requestedExcludeWeekends: requested.excludeWeekends !== false,
+    requestedWeekendIncludes: Array.isArray(requested.weekendIncludes) ? [...requested.weekendIncludes] : [],
+    currentStart: current.start || null,
+    currentEnd: current.end || null,
+    requestedBy: getActiveTeamMemberId(),
+    requestedAt: new Date().toISOString(),
+    note: requested.note || ''
+  };
+  save('vi_install_change_requests', state.installChangeRequests);
+}
+
+// Who can approve a given project's pending install change: PM lead or Master Admin.
+function canApproveInstallChange(projectId) {
+  if (currentUserHasPermission('admin.system')) return true;
+  const viewerId = getActiveTeamMemberId();
+  const a = getProjectAssignment(projectId);
+  const pmLead = (a.pm || []).find(x => x.lead);
+  return !!(pmLead && pmLead.id === viewerId);
+}
+
+function approveInstallChangeRequest(projectId) {
+  const req = getInstallChangeRequest(projectId);
+  if (!req) return;
+  if (!canApproveInstallChange(projectId)) {
+    showToast('Only the project PM can approve schedule changes', 'info');
+    return;
+  }
+  // Apply the requested dates to the booked window.
+  setBookedDates(projectId, req.requestedStart, req.requestedEnd, {
+    excludeWeekends: req.requestedExcludeWeekends,
+    weekendIncludes: req.requestedWeekendIncludes
+  });
+  delete state.installChangeRequests[projectId];
+  save('vi_install_change_requests', state.installChangeRequests);
+  showToast('Schedule change approved — install window updated', 'success');
+  renderCurrentPage();
+}
+
+function denyInstallChangeRequest(projectId) {
+  if (!canApproveInstallChange(projectId)) {
+    showToast('Only the project PM can deny schedule changes', 'info');
+    return;
+  }
+  if (!state.installChangeRequests?.[projectId]) return;
+  delete state.installChangeRequests[projectId];
+  save('vi_install_change_requests', state.installChangeRequests);
+  showToast('Schedule change denied', 'info');
+  renderCurrentPage();
+}
+
+// All pending install-change requests the current user is allowed to approve.
+function getInstallChangesAwaitingMyApproval() {
+  const out = [];
+  Object.keys(state.installChangeRequests || {}).forEach(pidStr => {
+    const pid = Number(pidStr);
+    if (canApproveInstallChange(pid)) {
+      const req = state.installChangeRequests[pidStr];
+      if (req) out.push(req);
+    }
+  });
+  return out;
+}
+
+// Opens the install window picker in REQUEST mode for an installer who can't
+// edit directly. On confirm, a pending change request is created for the PM.
+function openInstallWindowChangeRequest(projectId) {
+  const p = state.projects.find(x => x.id === projectId);
+  if (!p) return;
+  const win = getInstallWindow(p);
+  const bookedStored = state.bookedDates?.[projectId];
+  const storedObj = (bookedStored && typeof bookedStored === 'object') ? bookedStored : {};
+  openInstallWindowPicker({
+    projectId,
+    mode: 'booked',
+    requestMode: true,
+    initialStart: win?.start,
+    initialEnd: win?.end,
+    initialExcludeWeekends: storedObj.excludeWeekends !== false,
+    initialWeekendIncludes: storedObj.weekendIncludes || [],
+    onConfirm: () => { renderCurrentPage(); }
+  });
 }
 
 function showSetBookedDatesDialog(projectId) {
   if (!canEditInstallWindow(projectId)) {
     if (canRequestInstallWindowChange(projectId)) {
-      showToast('Lead installers can request schedule changes via the PM (coming soon)', 'info');
+      // Installer (not PM lead) — open the picker as a CHANGE REQUEST. On
+      // confirm, the dates are captured as a pending request for the PM to
+      // approve rather than applied directly.
+      openInstallWindowChangeRequest(projectId);
     } else {
       showToast('Only the project PM can edit install dates', 'info');
     }
@@ -5211,8 +5327,30 @@ function renderProjectOverviewHTML(p) {
         <div style="padding:12px;background:${getBookedTimeline(p.id) ? '#0D1A0E' : '#0D1117'};border-radius:8px;border:1px solid ${getBookedTimeline(p.id) ? '#238636' : '#1C2333'}">
           <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px">
             <div style="font-size:10px;color:#6E7681;text-transform:uppercase;letter-spacing:0.06em">Booked Install Window</div>
-            ${canEditInstallWindow(p.id) ? `<button class="btn btn-sm" onclick="showSetBookedDatesDialog(${p.id})" style="font-size:10px;padding:3px 8px">${getBookedTimeline(p.id) ? 'Edit' : 'Book'}</button>` : ''}
+            ${canEditInstallWindow(p.id)
+              ? `<button class="btn btn-sm" onclick="showSetBookedDatesDialog(${p.id})" style="font-size:10px;padding:3px 8px">${getBookedTimeline(p.id) ? 'Edit' : 'Book'}</button>`
+              : (canRequestInstallWindowChange(p.id) && getBookedTimeline(p.id)
+                  ? `<button class="btn btn-sm" onclick="showSetBookedDatesDialog(${p.id})" style="font-size:10px;padding:3px 8px">Request Change</button>`
+                  : '')}
           </div>
+          ${hasPendingInstallChange(p.id) ? (() => {
+            const req = getInstallChangeRequest(p.id);
+            const requester = getTeamMember(req.requestedBy);
+            const reqStr = fmtDateRange(req.requestedStart, req.requestedEnd);
+            const canApprove = canApproveInstallChange(p.id);
+            return `
+              <div style="background:#1A1206;border:1px solid #F0883E;border-radius:6px;padding:8px 10px;margin-bottom:8px">
+                <div style="font-size:10px;color:#F0883E;font-weight:600;text-transform:uppercase;letter-spacing:0.04em">Change Requested</div>
+                <div style="font-size:12px;color:#E6EDF3;margin-top:3px">${esc(reqStr)}${requester ? ` · by ${esc(requester.name.split(' ')[0])}` : ''}</div>
+                ${canApprove ? `
+                  <div style="display:flex;gap:6px;margin-top:6px">
+                    <button type="button" class="btn btn-sm" onclick="denyInstallChangeRequest(${p.id})" style="font-size:10px;padding:3px 8px">Deny</button>
+                    <button type="button" class="btn-primary" onclick="approveInstallChangeRequest(${p.id})" style="font-size:10px;padding:3px 8px;background:#238636;border-color:#2EA043">Approve</button>
+                  </div>
+                ` : `<div style="font-size:10px;color:#8B949E;margin-top:4px;font-style:italic">Awaiting PM approval</div>`}
+              </div>
+            `;
+          })() : ''}
           ${(() => {
             const b = getBookedTimeline(p.id);
             if (!b) return '<div style="font-size:13px;color:#6E7681;font-style:italic">Not booked</div>';
@@ -9317,7 +9455,330 @@ function _mcTapEvent(eventId) {
   }
 }
 
-// ── Header + filter bar ──
+// ════════════════════════════════════════════════════════════════════════════
+// MASTER CALENDAR DRAG-TO-EDIT (Round 2, Drop 1 — Month view, move only)
+// ────────────────────────────────────────────────────────────────────────────
+// Permission model:
+//   install        — PM lead / Master Admin drag directly; assigned installers
+//                    generate a change request; everyone else can't drag.
+//   meeting        — attendees (or Master Admin) can drag; a drop onto someone's
+//                    busy time routes through the existing conflict/approval flow.
+//   personal_event — owner only.
+// Desktop drags immediately; touch requires press-and-hold to pick up so normal
+// scrolling still works.
+// ════════════════════════════════════════════════════════════════════════════
+
+// Parse an event id ("install-7", "meeting-3", "pe-12") into {type, rawId}.
+function _mcParseEventId(eventId) {
+  if (eventId.startsWith('install-')) return { type: 'install', rawId: parseInt(eventId.slice(8), 10) };
+  if (eventId.startsWith('meeting-')) return { type: 'meeting', rawId: parseInt(eventId.slice(8), 10) };
+  if (eventId.startsWith('pe-')) return { type: 'personal_event', rawId: parseInt(eventId.slice(3), 10) };
+  return { type: null, rawId: null };
+}
+
+// Returns how the viewer may move a given event:
+//   'edit'    — can move directly
+//   'request' — can move, but it becomes a change request (installer on booked job)
+//   null      — cannot move
+function _mcGetEventPermission(eventId) {
+  const { type, rawId } = _mcParseEventId(eventId);
+  const me = getActiveTeamMemberId();
+  if (type === 'install') {
+    if (canEditInstallWindow(rawId)) return 'edit';
+    if (canRequestInstallWindowChange(rawId)) return 'request';
+    return null;
+  }
+  if (type === 'meeting') {
+    const m = (state.meetings || []).find(x => x.id === rawId);
+    if (!m) return null;
+    if (currentUserHasPermission('admin.system')) return 'edit';
+    if ((m.attendees || []).includes(me)) return 'edit';
+    return null;
+  }
+  if (type === 'personal_event') {
+    const pe = (state.personalEvents || []).find(x => x.id === rawId);
+    if (!pe) return null;
+    if (pe.memberId === me || currentUserHasPermission('admin.system')) return 'edit';
+    return null;
+  }
+  return null;
+}
+
+const _mcDrag = {
+  active: false,
+  eventId: null,
+  perm: null,
+  ghost: null,
+  touchHoldTimer: null,
+  touchStartXY: null,
+  isTouch: false,
+  lastCellEl: null
+};
+
+// ── Desktop HTML5 drag ──
+function _mcDragStart(event, eventId) {
+  const perm = _mcGetEventPermission(eventId);
+  if (!perm) { event.preventDefault(); return; }
+  _mcDrag.active = true;
+  _mcDrag.eventId = eventId;
+  _mcDrag.perm = perm;
+  _mcDrag.isTouch = false;
+  if (event.dataTransfer) {
+    event.dataTransfer.effectAllowed = 'move';
+    event.dataTransfer.setData('text/plain', eventId);
+  }
+  event.currentTarget.classList.add('mcal-event-dragging');
+}
+
+function _mcDragEnd(event) {
+  if (event.currentTarget) event.currentTarget.classList.remove('mcal-event-dragging');
+  document.querySelectorAll('.mcal-month-cell.mcal-drop-target').forEach(el => el.classList.remove('mcal-drop-target'));
+  _mcDrag.active = false;
+  _mcDrag.eventId = null;
+  _mcDrag.perm = null;
+}
+
+function _mcCellDragOver(event, dateStr) {
+  if (!_mcDrag.active) return;
+  event.preventDefault();
+  if (event.dataTransfer) event.dataTransfer.dropEffect = 'move';
+  const cell = event.currentTarget;
+  if (_mcDrag.lastCellEl && _mcDrag.lastCellEl !== cell) {
+    _mcDrag.lastCellEl.classList.remove('mcal-drop-target');
+  }
+  cell.classList.add('mcal-drop-target');
+  _mcDrag.lastCellEl = cell;
+}
+
+function _mcCellDragLeave(event) {
+  event.currentTarget.classList.remove('mcal-drop-target');
+}
+
+function _mcCellDrop(event, dateStr) {
+  if (!_mcDrag.active) return;
+  event.preventDefault();
+  const eventId = _mcDrag.eventId;
+  const perm = _mcDrag.perm;
+  document.querySelectorAll('.mcal-month-cell.mcal-drop-target').forEach(el => el.classList.remove('mcal-drop-target'));
+  _mcDrag.active = false;
+  if (eventId) _mcProposeMove(eventId, dateStr, perm);
+}
+
+// ── Touch drag (press-and-hold) ──
+function _mcTouchStart(event, eventId) {
+  const perm = _mcGetEventPermission(eventId);
+  if (!perm) return; // not draggable — let normal tap/scroll happen
+  const t = event.touches[0];
+  _mcDrag.touchStartXY = { x: t.clientX, y: t.clientY };
+  _mcDrag.eventId = eventId;
+  _mcDrag.perm = perm;
+  _mcDrag.isTouch = true;
+  const sourceEl = event.currentTarget;
+  // Press-and-hold: after 400ms without much movement, pick the event up.
+  _mcDrag.touchHoldTimer = setTimeout(() => {
+    _mcDrag.active = true;
+    if (navigator.vibrate) { try { navigator.vibrate(15); } catch (e) {} }
+    // Build a floating ghost that follows the finger
+    const ghost = sourceEl.cloneNode(true);
+    ghost.classList.add('mcal-touch-ghost');
+    ghost.style.position = 'fixed';
+    ghost.style.left = _mcDrag.touchStartXY.x + 'px';
+    ghost.style.top = _mcDrag.touchStartXY.y + 'px';
+    ghost.style.width = sourceEl.offsetWidth + 'px';
+    ghost.style.zIndex = '9999';
+    ghost.style.pointerEvents = 'none';
+    ghost.style.opacity = '0.85';
+    document.body.appendChild(ghost);
+    _mcDrag.ghost = ghost;
+    sourceEl.classList.add('mcal-event-dragging');
+  }, 400);
+}
+
+function _mcTouchMove(event) {
+  // If we haven't picked up yet, a meaningful move cancels the hold (it's a scroll)
+  if (!_mcDrag.active) {
+    if (_mcDrag.touchHoldTimer && _mcDrag.touchStartXY) {
+      const t = event.touches[0];
+      const dx = Math.abs(t.clientX - _mcDrag.touchStartXY.x);
+      const dy = Math.abs(t.clientY - _mcDrag.touchStartXY.y);
+      if (dx > 10 || dy > 10) {
+        clearTimeout(_mcDrag.touchHoldTimer);
+        _mcDrag.touchHoldTimer = null;
+      }
+    }
+    return;
+  }
+  // Actively dragging — move ghost, highlight cell under finger
+  event.preventDefault();
+  const t = event.touches[0];
+  if (_mcDrag.ghost) {
+    _mcDrag.ghost.style.left = t.clientX + 'px';
+    _mcDrag.ghost.style.top = t.clientY + 'px';
+  }
+  const el = document.elementFromPoint(t.clientX, t.clientY);
+  const cell = el ? el.closest('.mcal-month-cell') : null;
+  if (_mcDrag.lastCellEl && _mcDrag.lastCellEl !== cell) {
+    _mcDrag.lastCellEl.classList.remove('mcal-drop-target');
+  }
+  if (cell) {
+    cell.classList.add('mcal-drop-target');
+    _mcDrag.lastCellEl = cell;
+  }
+}
+
+function _mcTouchEnd(event) {
+  if (_mcDrag.touchHoldTimer) {
+    clearTimeout(_mcDrag.touchHoldTimer);
+    _mcDrag.touchHoldTimer = null;
+  }
+  if (!_mcDrag.active) {
+    // Was a tap, not a drag — let the click handler drill in
+    _mcDrag.eventId = null;
+    _mcDrag.isTouch = false;
+    return;
+  }
+  const eventId = _mcDrag.eventId;
+  const perm = _mcDrag.perm;
+  let dropDate = null;
+  if (_mcDrag.lastCellEl) {
+    dropDate = _mcDrag.lastCellEl.dataset.date || null;
+    _mcDrag.lastCellEl.classList.remove('mcal-drop-target');
+  }
+  if (_mcDrag.ghost) { _mcDrag.ghost.remove(); _mcDrag.ghost = null; }
+  document.querySelectorAll('.mcal-event-dragging').forEach(el => el.classList.remove('mcal-event-dragging'));
+  _mcDrag.active = false;
+  _mcDrag.isTouch = false;
+  if (eventId && dropDate) _mcProposeMove(eventId, dropDate, perm);
+  _mcDrag.eventId = null;
+}
+
+// ── Move proposal + confirm ──
+// Computes the new dates (preserving duration for multi-day installs), then
+// shows a confirm dialog. On confirm, applies directly or files a request.
+function _mcProposeMove(eventId, newStartDate, perm) {
+  const { type, rawId } = _mcParseEventId(eventId);
+  if (!type) return;
+
+  if (type === 'install') {
+    const p = state.projects.find(x => x.id === rawId);
+    if (!p) return;
+    const win = getInstallWindow(p);
+    if (!win || !win.start) return;
+    if (win.start === newStartDate) return; // no move
+    // Preserve duration
+    const startD = new Date(win.start + 'T00:00:00');
+    const endD = new Date((win.end || win.start) + 'T00:00:00');
+    const durationDays = Math.round((endD - startD) / 86400000);
+    const newStart = newStartDate;
+    const newEnd = _ymd(_addDays(new Date(newStartDate + 'T00:00:00'), durationDays));
+    const verb = perm === 'request' ? 'Request moving' : 'Move';
+    const msg = `${verb} "${p.name}" install\nfrom ${fmtDateRange(win.start, win.end)}\nto ${fmtDateRange(newStart, newEnd)}?`;
+    if (!confirm(msg)) return;
+    if (perm === 'request') {
+      createInstallChangeRequest(rawId, {
+        start: newStart, end: newEnd,
+        excludeWeekends: (state.bookedDates?.[rawId]?.excludeWeekends) !== false,
+        weekendIncludes: state.bookedDates?.[rawId]?.weekendIncludes || []
+      });
+      showToast('Change requested — sent to the PM for approval', 'success');
+    } else {
+      // Direct edit — preserve which field (booked vs estimated) it lives in
+      if (win.source === 'booked') {
+        setBookedDates(rawId, newStart, newEnd, {
+          excludeWeekends: state.bookedDates?.[rawId]?.excludeWeekends !== false,
+          weekendIncludes: state.bookedDates?.[rawId]?.weekendIncludes || []
+        });
+      } else {
+        setEstimatedInstallOverride(rawId, { start: newStart, end: newEnd });
+      }
+      showToast('Install window moved', 'success');
+    }
+    renderCurrentPage();
+    return;
+  }
+
+  if (type === 'meeting') {
+    const m = (state.meetings || []).find(x => x.id === rawId);
+    if (!m) return;
+    if (m.date === newStartDate) return;
+    const msg = `Move "${m.title}"\nfrom ${fmtDate(m.date)} to ${fmtDate(newStartDate)}?\n(Time stays ${m.startTime ? _fmt12hRange(m.startTime, m.endTime) : 'the same'}.)`;
+    if (!confirm(msg)) return;
+    // Conflict check against attendees on the new date at the same time.
+    const conflictIds = _mcMeetingConflicts(m, newStartDate);
+    if (conflictIds.length > 0) {
+      // Route through approval — set pending and record approvals needed
+      m.date = newStartDate;
+      m.status = 'pending_approval';
+      _mcSetMeetingApprovalsNeeded(m, conflictIds);
+      save('vi_meetings', state.meetings);
+      showToast('Moved — attendees have a conflict, approval requested', 'info');
+    } else {
+      m.date = newStartDate;
+      if (m.status === 'pending_approval') m.status = 'confirmed';
+      save('vi_meetings', state.meetings);
+      showToast('Meeting moved', 'success');
+    }
+    renderCurrentPage();
+    return;
+  }
+
+  if (type === 'personal_event') {
+    const pe = (state.personalEvents || []).find(x => x.id === rawId);
+    if (!pe) return;
+    const peEnd = pe.endDate || pe.startDate;
+    if (pe.startDate === newStartDate) return;
+    // Preserve duration
+    const sD = new Date(pe.startDate + 'T00:00:00');
+    const eD = new Date(peEnd + 'T00:00:00');
+    const durDays = Math.round((eD - sD) / 86400000);
+    const newStart = newStartDate;
+    const newEnd = _ymd(_addDays(new Date(newStartDate + 'T00:00:00'), durDays));
+    const label = getPersonalEventDisplayLabel(pe) || 'event';
+    if (!confirm(`Move "${label}"\nfrom ${fmtDate(pe.startDate)} to ${fmtDate(newStart)}?`)) return;
+    pe.startDate = newStart;
+    pe.endDate = newEnd;
+    save('vi_personal_events', state.personalEvents);
+    showToast('Personal event moved', 'success');
+    renderCurrentPage();
+    return;
+  }
+}
+
+// Returns attendee ids who are busy at the meeting's time on a candidate date
+// (excluding this meeting itself). Mirrors the picker's conflict logic.
+function _mcMeetingConflicts(meeting, candidateDate) {
+  if (!meeting.startTime || !meeting.endTime) return [];
+  const conflicts = [];
+  (meeting.attendees || []).forEach(aid => {
+    const blocks = getMemberBusyBlocks(aid, candidateDate, candidateDate) || [];
+    const sMin = _timeToMinutes(meeting.startTime);
+    const eMin = _timeToMinutes(meeting.endTime);
+    const hit = blocks.some(b => {
+      if (b.sourceRef && b.sourceRef.kind === 'meeting' && b.sourceRef.id === meeting.id) return false; // ignore self
+      if (!b.startTime || !b.endTime) return false;
+      const bs = _timeToMinutes(b.startTime);
+      const be = _timeToMinutes(b.endTime);
+      return sMin < be && eMin > bs; // overlap
+    });
+    if (hit) conflicts.push(aid);
+  });
+  return conflicts;
+}
+
+function _mcSetMeetingApprovalsNeeded(meeting, conflictIds) {
+  if (!state.meetingApprovals) state.meetingApprovals = {};
+  state.meetingApprovals[meeting.id] = {
+    meetingId: meeting.id,
+    requesterId: getActiveTeamMemberId(),
+    conflictedMemberIds: [...conflictIds],
+    approvedBy: [],
+    deniedBy: [],
+    requestedAt: new Date().toISOString()
+  };
+  save('vi_meeting_approvals', state.meetingApprovals);
+}
+
+
 function renderMasterCalendarHeader() {
   const f = getMasterCalFilters();
   const anchor = getMasterCalAnchorDate();
@@ -9540,7 +10001,12 @@ function renderMasterCalMonthView(ctx) {
     const overflow = (eventsByDate[k] || []).length - dayEvents.length;
 
     cells.push(`
-      <div class="mcal-month-cell${inMonth ? '' : ' is-other-month'}${isToday ? ' is-today' : ''}" onclick="setMasterCalFilters({view:'day',date:'${k}'})">
+      <div class="mcal-month-cell${inMonth ? '' : ' is-other-month'}${isToday ? ' is-today' : ''}"
+           data-date="${k}"
+           ondragover="_mcCellDragOver(event,'${k}')"
+           ondragleave="_mcCellDragLeave(event)"
+           ondrop="_mcCellDrop(event,'${k}')"
+           onclick="setMasterCalFilters({view:'day',date:'${k}'})">
         <div class="mcal-month-daynum">${d.getDate()}</div>
         <div class="mcal-month-events">
           ${dayEvents.map(e => {
@@ -9548,8 +10014,15 @@ function renderMasterCalMonthView(ctx) {
             // confirmed), outline when tentative (estimated / pending).
             const st = getEventStyle(e.displayColor || e.color, e.committed);
             const timeColor = st.fill === 'transparent' ? (e.displayColor || e.color) : st.text;
+            // Only the start-date cell of a multi-day event is the draggable
+            // handle, so a 3-day install isn't draggable from 3 different cells.
+            const isStartCell = e.startDate === k;
+            const canDrag = isStartCell && !!_mcGetEventPermission(e.id);
+            const dragAttrs = canDrag
+              ? `draggable="true" ondragstart="_mcDragStart(event,'${e.id}')" ondragend="_mcDragEnd(event)" ontouchstart="_mcTouchStart(event,'${e.id}')" ontouchmove="_mcTouchMove(event)" ontouchend="_mcTouchEnd(event)"`
+              : '';
             return `
-            <div class="mcal-month-event" style="${st.css}" onclick="event.stopPropagation();_mcTapEvent('${e.id}')" title="${esc(e.title)}">
+            <div class="mcal-month-event${canDrag ? ' mcal-event-draggable' : ''}" style="${st.css}" ${dragAttrs} onclick="event.stopPropagation();_mcTapEvent('${e.id}')" title="${esc(e.title)}">
               ${e.startTime ? `<span class="mcal-month-event-time" style="color:${timeColor}">${esc(_fmt12h(e.startTime))}</span> ` : ''}${esc(e.title)}
             </div>
           `;
@@ -9975,6 +10448,7 @@ function renderPlanningRow(p, statusKey) {
           ${pmName ? `<span>PM: ${esc(pmName)}</span>` : '<span style="color:#D29922">No PM</span>'}
           ${crewCount > 0 ? `<span>${crewCount} crew</span>` : '<span style="color:#D29922">No crew</span>'}
           ${installTotal > 0 ? `<span>Tasks: ${installDone}/${installTotal}</span>` : ''}
+          ${hasPendingInstallChange(p.id) ? `<span style="color:#F0883E;font-weight:600">⚠ Change requested</span>` : ''}
         </div>
         ${gateInfo}
       </div>
@@ -14508,13 +14982,15 @@ const _pickerState = {
   visibleMonth: null,       // {year, month}
   excludeWeekends: true,    // default ON — weekends are off-days unless explicitly included
   weekendIncludes: [],      // array of YYYY-MM-DD strings — weekends user opted INTO as work days
-  onConfirm: null
+  onConfirm: null,
+  requestMode: false        // when true, confirm captures a pending change request instead of saving directly
 };
 
 function openInstallWindowPicker(opts) {
   document.getElementById('install-window-picker')?.remove();
   _pickerState.projectId = opts.projectId;
   _pickerState.mode = opts.mode || 'booked';
+  _pickerState.requestMode = !!opts.requestMode;
   _pickerState.selectStart = opts.initialStart || null;
   _pickerState.selectEnd = opts.initialEnd || null;
   _pickerState.hoveredDate = null;
@@ -14666,6 +15142,22 @@ function _iwpConfirm() {
   if (proj) {
     proj.scheduling_notes = s.notes || '';
     save('vi_projects', state.projects);
+  }
+
+  // Request mode (installer requesting a change) — capture as a pending
+  // request instead of writing the dates. The PM lead approves later.
+  if (s.requestMode) {
+    createInstallChangeRequest(s.projectId, {
+      start: result.start,
+      end: result.end,
+      excludeWeekends: result.excludeWeekends,
+      weekendIncludes: result.weekendIncludes
+    });
+    closeInstallWindowPicker();
+    showToast('Change requested — sent to the PM for approval', 'success');
+    if (typeof cb === 'function') cb(result.start, result.end, result);
+    renderCurrentPage();
+    return;
   }
 
   // Enforce "only one window per project" rule.
@@ -16780,32 +17272,64 @@ function denyMeeting(meetingId) {
 
 function renderPendingApprovalsCard() {
   const reqs = getMeetingsAwaitingMyApproval();
-  if (reqs.length === 0) return '';
+  const installReqs = getInstallChangesAwaitingMyApproval();
+  const total = reqs.length + installReqs.length;
+  if (total === 0) return '';
+
+  const meetingItems = reqs.map(req => {
+    const m = req.meeting;
+    const requester = getTeamMember(req.requesterId);
+    const proj = m.projectId ? state.projects.find(p => p.id === m.projectId) : null;
+    const dStr = new Date(m.date + 'T00:00:00').toLocaleDateString('en-US', { weekday:'short', month:'short', day:'numeric' });
+    return `
+      <div style="background:#0D1117;border:1px solid #1C2333;border-radius:6px;padding:10px 12px;margin-bottom:6px">
+        <div style="font-size:11px;color:#A371F7;font-weight:600;text-transform:uppercase;letter-spacing:0.04em;margin-bottom:3px">Meeting conflict</div>
+        <div style="font-size:13px;color:#E6EDF3;font-weight:500">${esc(m.title)}</div>
+        <div style="font-size:11px;color:#8B949E;margin-top:3px">
+          ${esc(dStr)} · ${esc(_fmt12hRange(m.startTime, m.endTime))}
+          ${proj ? ` · ${esc(proj.name)}` : ''}
+          ${requester ? ` · requested by ${esc(requester.name.split(' ')[0])}` : ''}
+        </div>
+        ${m.notes ? `<div style="font-size:11px;color:#C9D1D9;margin-top:6px;font-style:italic">${esc(m.notes)}</div>` : ''}
+        <div style="display:flex;gap:6px;margin-top:8px">
+          <button type="button" class="btn btn-sm" onclick="denyMeeting(${m.id})" style="font-size:11px;padding:4px 10px">Deny</button>
+          <button type="button" class="btn-primary" onclick="approveMeeting(${m.id})" style="font-size:11px;padding:4px 10px;background:#238636;border-color:#2EA043">Approve</button>
+        </div>
+      </div>
+    `;
+  }).join('');
+
+  const installItems = installReqs.map(req => {
+    const proj = state.projects.find(p => p.id === req.projectId);
+    const requester = getTeamMember(req.requestedBy);
+    const projColor = getProjectColor(req.projectId);
+    const curStr = req.currentStart
+      ? fmtDateRange(req.currentStart, req.currentEnd)
+      : 'No current window';
+    const reqStr = fmtDateRange(req.requestedStart, req.requestedEnd);
+    return `
+      <div style="background:#0D1117;border:1px solid #1C2333;border-radius:6px;padding:10px 12px;margin-bottom:6px;box-shadow:inset 4px 0 0 ${projColor}">
+        <div style="font-size:11px;color:#F0883E;font-weight:600;text-transform:uppercase;letter-spacing:0.04em;margin-bottom:3px">Install date change</div>
+        <div style="font-size:13px;color:#E6EDF3;font-weight:500">${esc(proj ? proj.name : 'Project')}</div>
+        <div style="font-size:11px;color:#8B949E;margin-top:4px">
+          <span style="text-decoration:line-through;opacity:0.7">${esc(curStr)}</span>
+          <span style="color:#3FB950"> → ${esc(reqStr)}</span>
+        </div>
+        ${requester ? `<div style="font-size:11px;color:#8B949E;margin-top:2px">requested by ${esc(requester.name.split(' ')[0])}</div>` : ''}
+        <div style="display:flex;gap:6px;margin-top:8px">
+          <button type="button" class="btn btn-sm" onclick="denyInstallChangeRequest(${req.projectId})" style="font-size:11px;padding:4px 10px">Deny</button>
+          <button type="button" class="btn-primary" onclick="approveInstallChangeRequest(${req.projectId})" style="font-size:11px;padding:4px 10px;background:#238636;border-color:#2EA043">Approve</button>
+        </div>
+      </div>
+    `;
+  }).join('');
+
   return `
     <div class="dashboard-card" style="margin-bottom:14px;border-left:3px solid #D29922">
-      <div class="dashboard-card-title" style="color:#D29922">⚠ Pending Approvals · ${reqs.length}</div>
-      <div style="font-size:12px;color:#8B949E;margin-bottom:10px">Meetings requested during your existing busy time</div>
-      ${reqs.map(req => {
-        const m = req.meeting;
-        const requester = getTeamMember(req.requesterId);
-        const proj = m.projectId ? state.projects.find(p => p.id === m.projectId) : null;
-        const dStr = new Date(m.date + 'T00:00:00').toLocaleDateString('en-US', { weekday:'short', month:'short', day:'numeric' });
-        return `
-          <div style="background:#0D1117;border:1px solid #1C2333;border-radius:6px;padding:10px 12px;margin-bottom:6px">
-            <div style="font-size:13px;color:#E6EDF3;font-weight:500">${esc(m.title)}</div>
-            <div style="font-size:11px;color:#8B949E;margin-top:3px">
-              ${esc(dStr)} · ${esc(_fmt12hRange(m.startTime, m.endTime))}
-              ${proj ? ` · ${esc(proj.name)}` : ''}
-              ${requester ? ` · requested by ${esc(requester.name.split(' ')[0])}` : ''}
-            </div>
-            ${m.notes ? `<div style="font-size:11px;color:#C9D1D9;margin-top:6px;font-style:italic">${esc(m.notes)}</div>` : ''}
-            <div style="display:flex;gap:6px;margin-top:8px">
-              <button type="button" class="btn btn-sm" onclick="denyMeeting(${m.id})" style="font-size:11px;padding:4px 10px">Deny</button>
-              <button type="button" class="btn-primary" onclick="approveMeeting(${m.id})" style="font-size:11px;padding:4px 10px;background:#238636;border-color:#2EA043">Approve</button>
-            </div>
-          </div>
-        `;
-      }).join('')}
+      <div class="dashboard-card-title" style="color:#D29922">⚠ Pending Approvals · ${total}</div>
+      <div style="font-size:12px;color:#8B949E;margin-bottom:10px">Requests awaiting your approval</div>
+      ${meetingItems}
+      ${installItems}
     </div>
   `;
 }
