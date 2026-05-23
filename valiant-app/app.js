@@ -10020,6 +10020,24 @@ function _startOfWeek(d) {
   return r;
 }
 
+// Renders small initials badges for the people tied to an event (up to a
+// cap). Used in month view so ownership is glanceable without clicking.
+//   attendeeIds — array of member ids
+//   max         — how many badges before "+N"
+function _mcInitialsBadges(attendeeIds, max) {
+  max = max || 3;
+  const ids = (attendeeIds || []).filter(id => id != null);
+  if (ids.length === 0) return '';
+  const shown = ids.slice(0, max);
+  const extra = ids.length - shown.length;
+  const badges = shown.map(id => {
+    const m = getTeamMember(id);
+    if (!m) return '';
+    return `<span class="mcal-initials-badge" title="${esc(m.name)}">${esc(getInitials(m.name))}</span>`;
+  }).join('');
+  return `<span class="mcal-initials-wrap">${badges}${extra > 0 ? `<span class="mcal-initials-more">+${extra}</span>` : ''}</span>`;
+}
+
 // ── MONTH VIEW ──
 function renderMasterCalMonthView(ctx) {
   const anchor = getMasterCalAnchorDate();
@@ -10105,10 +10123,11 @@ function renderMasterCalMonthView(ctx) {
             // colored fill reads as one continuous bar.
             const borderTweak = (isMultiDay && !roundLeft) ? 'border-left:none;' : '';
             const continuationClass = isMultiDay ? ' mcal-month-event-span' : '';
+            const initials = showTitle ? _mcInitialsBadges(e.attendeeIds, 3) : '';
             return `
             <div class="mcal-month-event${continuationClass}${canDrag ? ' mcal-event-draggable' : ''}" style="${st.css};${radiusStyle};${borderTweak}" ${dragAttrs} onclick="event.stopPropagation();_mcTapEvent('${e.id}')" title="${esc(e.title)}">
               ${showTitle
-                ? `${e.startTime ? `<span class="mcal-month-event-time" style="color:${timeColor}">${esc(_fmt12h(e.startTime))}</span> ` : ''}${esc(e.title)}`
+                ? `<span class="mcal-month-event-label">${e.startTime ? `<span class="mcal-month-event-time" style="color:${timeColor}">${esc(_fmt12h(e.startTime))}</span> ` : ''}${esc(e.title)}</span>${initials}`
                 : '&nbsp;'}
             </div>
           `;
