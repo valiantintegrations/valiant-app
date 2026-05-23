@@ -5924,3 +5924,66 @@ td.today .cal-day-num {
   }
   .dash-dept-title { font-size: 13px; }
 }
+
+/* ════════════════════════════════════════════════════════════════════════
+   PROJECT MEETINGS LIST (Calendar Round 4)
+   ════════════════════════════════════════════════════════════════════════ */
+.proj-meeting-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px;
+  border-radius: 6px;
+  background: #0D1117;
+  border: 1px solid #1C2333;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+  transition: all 0.12s;
+  margin-bottom: 6px;
+}
+.proj-meeting-row:hover {
+  border-color: #30363D;
+  background: #161B22;
+}
+.proj-meeting-date {
+  flex-shrink: 0;
+  text-align: center;
+  min-width: 64px;
+}
+.proj-meeting-date-day {
+  font-size: 13px;
+  font-weight: 600;
+  color: #E6EDF3;
+}
+.proj-meeting-date-time {
+  font-size: 10px;
+  color: #8B949E;
+  margin-top: 1px;
+}
+.proj-meeting-info {
+  flex: 1;
+  min-width: 0;
+}
+.proj-meeting-title {
+  font-size: 13px;
+  font-weight: 500;
+  color: #E6EDF3;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.proj-meeting-meta {
+  font-size: 11px;
+  color: #8B949E;
+  margin-top: 2px;
+}
+.proj-meeting-status {
+  flex-shrink: 0;
+  font-size: 10px;
+  font-weight: 600;
+  padding: 3px 8px;
+  border-radius: 10px;
+  border: 1px solid;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
