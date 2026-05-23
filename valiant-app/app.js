@@ -7683,8 +7683,17 @@ function getMeetingsForDateForViewMode(dateStr) {
 function getCalendarDates(p) {
   // Always returns the best dates: booked if it exists, otherwise estimated.
   // Doesn't depend on state.timelineMode — calendar always shows current best date.
+  //
+  // Booked dates live in state.bookedDates. Estimated dates live in the
+  // estimatedInstallOverride system (set via the Install Window Picker) with a
+  // fallback to the Jetbuilt-imported p.jb_estimated_install. We read estimated
+  // via getEstimatedInstallRange so the Calendar tab matches every other surface
+  // (Operations Master Calendar, project page, etc.).
   const booked = state.bookedDates[p.id];
   if (booked?.start) return { start: booked.start, end: booked.end || null, source: 'booked' };
+  const est = getEstimatedInstallRange(p);
+  if (est?.start) return { start: est.start, end: est.end || null, source: 'estimated' };
+  // Legacy fallback — some older projects stored dates directly on the record
   if (p.start_date) return { start: p.start_date, end: p.end_date || null, source: 'estimated' };
   return { start: null, end: null, source: null };
 }
