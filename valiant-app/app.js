@@ -9231,7 +9231,8 @@ const MASTER_CAL_DEFAULT_FILTERS = {
   showPendingApprovals: true,
   hours: { start: 6, end: 20 }, // 6 AM – 8 PM (point #5 — togglable later)
   selectedMembers: null,        // null = all members; array of ids = filter
-  filtersExpanded: false        // collapsed by default (saves real estate)
+  filtersExpanded: false,       // collapsed by default (saves real estate)
+  dayDetailMode: 'list'         // 'list' | 'timeline' — Day view sub-toggle
 };
 
 function getMasterCalFilters() {
@@ -10344,6 +10345,125 @@ function renderMasterCalWeekView(ctx) {
 // ── DAY VIEW ──
 // Full-width hour grid for one day. Events stack into columns when overlapping.
 function renderMasterCalDayView(ctx) {
+  const anchor = getMasterCalAnchorDate();
+  const filters = getMasterCalFilters();
+  const mode = filters.dayDetailMode || 'list';
+  const dateLabel = anchor.toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric' });
+
+  const toggle = `
+    <div class="mcal-day-modetoggle">
+      <span class="mcal-day-modetoggle-date">${esc(dateLabel)}</span>
+      <div class="mcal-day-modetoggle-btns">
+        <button type="button" class="mcal-day-modebtn${mode === 'list' ? ' is-active' : ''}" onclick="setMasterCalFilters({dayDetailMode:'list'})">List</button>
+        <button type="button" class="mcal-day-modebtn${mode === 'timeline' ? ' is-active' : ''}" onclick="setMasterCalFilters({dayDetailMode:'timeline'})">Timeline</button>
+      </div>
+    </div>
+  `;
+
+  const body = mode === 'timeline'
+    ? renderMasterCalDayTimeline(ctx)
+    : renderMasterCalDayList(ctx);
+
+  return `${toggle}${body}`;
+}
+
+// LIST view — structured day detail. Installs are parent headers with room
+// for day-specific nested items (install tasks, when they exist). Meetings
+// and personal events list below.
+function renderMasterCalDayList(ctx) {
+  const anchor = getMasterCalAnchorDate();
+  const k = _ymd(anchor);
+  const events = getMasterCalendarEvents(k, k, ctx);
+
+  const installs = events.filter(e => e.type === 'install');
+  const meetings = events.filter(e => e.type === 'meeting')
+    .sort((a, b) => (a.startTime || '').localeCompare(b.startTime || ''));
+  const personal = events.filter(e => e.type === 'personal_event');
+
+  if (installs.length === 0 && meetings.length === 0 && personal.length === 0) {
+    return `
+      <div class="mcal-day-list">
+        <div style="padding:24px;text-align:center;color:#6E7681;font-size:13px;font-style:italic">
+          Nothing scheduled for this day
+        </div>
+      </div>
+    `;
+  }
+
+  // Installs as parent cards with a nested-tasks placeholder. Install tasks
+  // don't exist yet; the structure is here so they slot in later as children
+  // pinned to this day under their parent job.
+  const installCards = installs.map(e => {
+    const st = getEventStyle(e.displayColor || e.color, e.committed);
+    const proj = e.project;
+    const crew = (e.attendeeIds || [])
+      .map(id => (state.team.find(m => m.id === id) || {}).name)
+      .filter(Boolean)
+      .map(n => n.split(' ')[0])
+      .join(', ');
+    return `
+      <div class="mcal-daylist-job" style="border-left:4px solid ${e.displayColor || e.color}">
+        <div class="mcal-daylist-job-head" onclick="_mcTapEvent('${e.id}')">
+          <div class="mcal-daylist-job-title">${esc(e.title)}</div>
+          <span class="mcal-daylist-job-status" style="color:${e.displayColor || e.color}">${esc(e.statusLabel || '')}</span>
+        </div>
+        <div class="mcal-daylist-job-meta">
+          ${esc(fmtDateRange(e.startDate, e.endDate))}${crew ? ` · ${esc(crew)}` : ''}
+        </div>
+        <div class="mcal-daylist-tasks">
+          <div class="mcal-daylist-tasks-empty">No tasks scheduled for this day yet</div>
+        </div>
+      </div>
+    `;
+  }).join('');
+
+  const meetingRows = meetings.map(e => {
+    const time = e.startTime && e.endTime ? _fmt12hRange(e.startTime, e.endTime) : (e.startTime ? _fmt12h(e.startTime) : 'All day');
+    const c = e.displayColor || e.color;
+    return `
+      <div class="mcal-daylist-row" style="box-shadow:inset 4px 0 0 ${c}" onclick="_mcTapEvent('${e.id}')">
+        <div class="mcal-daylist-row-time">${esc(time)}</div>
+        <div class="mcal-daylist-row-body">
+          <div class="mcal-daylist-row-title">${esc(e.title)}${e.statusLabel === 'Pending' ? ' <span style="color:#D29922;font-size:10px">· Pending</span>' : ''}</div>
+        </div>
+      </div>
+    `;
+  }).join('');
+
+  const personalRows = personal.map(e => {
+    const c = e.displayColor || e.color;
+    const owner = getTeamMember(e.owner);
+    const time = e.startTime && e.endTime ? _fmt12hRange(e.startTime, e.endTime) : 'All day';
+    return `
+      <div class="mcal-daylist-row" style="box-shadow:inset 4px 0 0 ${c}" onclick="_mcTapEvent('${e.id}')">
+        <div class="mcal-daylist-row-time">${esc(time)}</div>
+        <div class="mcal-daylist-row-body">
+          <div class="mcal-daylist-row-title">${esc(e.title)}${owner ? ` <span style="color:#8B949E;font-size:10px">· ${esc(owner.name.split(' ')[0])}</span>` : ''}</div>
+        </div>
+      </div>
+    `;
+  }).join('');
+
+  return `
+    <div class="mcal-day-list">
+      ${installs.length > 0 ? `
+        <div class="mcal-daylist-section-label">Jobs</div>
+        ${installCards}
+      ` : ''}
+      ${meetings.length > 0 ? `
+        <div class="mcal-daylist-section-label">Meetings</div>
+        ${meetingRows}
+      ` : ''}
+      ${personal.length > 0 ? `
+        <div class="mcal-daylist-section-label">Personal</div>
+        ${personalRows}
+      ` : ''}
+    </div>
+  `;
+}
+
+// TIMELINE view — the hour-grid (6 AM–8 PM) with events placed by time.
+function renderMasterCalDayTimeline(ctx) {
   const anchor = getMasterCalAnchorDate();
   const k = _ymd(anchor);
   const filters = getMasterCalFilters();
