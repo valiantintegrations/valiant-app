@@ -9387,9 +9387,11 @@ function getMasterCalendarEvents(startDateStr, endDateStr, ctx) {
   // 3) Personal events
   if (filters.showPersonalEvents) {
     (state.personalEvents || []).forEach(pe => {
-      if (!pe || !pe.startDate) return;
-      const peEnd = pe.endDate || pe.startDate;
-      if (peEnd < startDateStr || pe.startDate > endDateStr) return;
+      if (!pe || !pe.date) return;
+      // Personal events are single-day (one `date` field). Normalize to the
+      // calendar's startDate/endDate shape using that one date for both.
+      const peDate = pe.date;
+      if (peDate < startDateStr || peDate > endDateStr) return;
       if (!memberAllowed(pe.memberId)) return;
       const isOwner = pe.memberId === memberId;
       const isPrivateCustom = pe.type === 'custom' && pe.isPrivate;
@@ -9402,8 +9404,8 @@ function getMasterCalendarEvents(startDateStr, endDateStr, ctx) {
         title: displayTitle,
         projectId: null,
         project: null,
-        startDate: pe.startDate,
-        endDate: peEnd,
+        startDate: peDate,
+        endDate: peDate,
         startTime: pe.startTime,
         endTime: pe.endTime,
         color: getPersonalEventColor(pe),
@@ -9450,7 +9452,7 @@ function _mcTapEvent(eventId) {
   if (eventId.startsWith('pe-')) {
     const peid = parseInt(eventId.slice(3), 10);
     const pe = (state.personalEvents || []).find(x => x.id === peid);
-    if (pe) openCalendarDayDetail(pe.startDate);
+    if (pe) openCalendarDayDetail(pe.date);
     return;
   }
 }
@@ -9652,6 +9654,38 @@ function _mcTouchEnd(event) {
   _mcDrag.eventId = null;
 }
 
+// ── Lightweight in-app confirm dialog ──
+// Native confirm() can be unreliable/blocked in embedded contexts, so drag
+// moves use this instead. Calls onYes() when the user confirms.
+function showMoveConfirm(message, onYes, opts) {
+  opts = opts || {};
+  document.getElementById('mc-confirm-dialog')?.remove();
+  const overlay = document.createElement('div');
+  overlay.id = 'mc-confirm-dialog';
+  overlay.className = 'modal-overlay';
+  overlay.style.zIndex = '10000';
+  const lines = String(message).split('\n').filter(Boolean)
+    .map(l => `<div style="font-size:13px;color:#C9D1D9;line-height:1.5">${esc(l)}</div>`).join('');
+  overlay.innerHTML = `
+    <div class="modal-container" style="max-width:380px">
+      <div style="padding:20px">
+        <div style="font-size:15px;font-weight:600;color:#E6EDF3;margin-bottom:12px">${esc(opts.title || 'Confirm move')}</div>
+        <div style="display:flex;flex-direction:column;gap:6px;margin-bottom:18px">${lines}</div>
+        <div style="display:flex;gap:8px;justify-content:flex-end">
+          <button class="btn" onclick="document.getElementById('mc-confirm-dialog')?.remove()">Cancel</button>
+          <button class="btn-primary" id="mc-confirm-yes" style="background:#238636;border-color:#2EA043">${esc(opts.confirmLabel || 'Confirm')}</button>
+        </div>
+      </div>
+    </div>
+  `;
+  overlay.onclick = (e) => { if (e.target === overlay) overlay.remove(); };
+  document.body.appendChild(overlay);
+  document.getElementById('mc-confirm-yes').onclick = () => {
+    overlay.remove();
+    onYes();
+  };
+}
+
 // ── Move proposal + confirm ──
 // Computes the new dates (preserving duration for multi-day installs), then
 // shows a confirm dialog. On confirm, applies directly or files a request.
@@ -9665,7 +9699,6 @@ function _mcProposeMove(eventId, newStartDate, perm) {
     const win = getInstallWindow(p);
     if (!win || !win.start) return;
     if (win.start === newStartDate) return; // no move
-    // Preserve duration
     const startD = new Date(win.start + 'T00:00:00');
     const endD = new Date((win.end || win.start) + 'T00:00:00');
     const durationDays = Math.round((endD - startD) / 86400000);
@@ -9673,27 +9706,27 @@ function _mcProposeMove(eventId, newStartDate, perm) {
     const newEnd = _ymd(_addDays(new Date(newStartDate + 'T00:00:00'), durationDays));
     const verb = perm === 'request' ? 'Request moving' : 'Move';
     const msg = `${verb} "${p.name}" install\nfrom ${fmtDateRange(win.start, win.end)}\nto ${fmtDateRange(newStart, newEnd)}?`;
-    if (!confirm(msg)) return;
-    if (perm === 'request') {
-      createInstallChangeRequest(rawId, {
-        start: newStart, end: newEnd,
-        excludeWeekends: (state.bookedDates?.[rawId]?.excludeWeekends) !== false,
-        weekendIncludes: state.bookedDates?.[rawId]?.weekendIncludes || []
-      });
-      showToast('Change requested — sent to the PM for approval', 'success');
-    } else {
-      // Direct edit — preserve which field (booked vs estimated) it lives in
-      if (win.source === 'booked') {
-        setBookedDates(rawId, newStart, newEnd, {
-          excludeWeekends: state.bookedDates?.[rawId]?.excludeWeekends !== false,
+    showMoveConfirm(msg, () => {
+      if (perm === 'request') {
+        createInstallChangeRequest(rawId, {
+          start: newStart, end: newEnd,
+          excludeWeekends: (state.bookedDates?.[rawId]?.excludeWeekends) !== false,
           weekendIncludes: state.bookedDates?.[rawId]?.weekendIncludes || []
         });
+        showToast('Change requested — sent to the PM for approval', 'success');
       } else {
-        setEstimatedInstallOverride(rawId, { start: newStart, end: newEnd });
+        if (win.source === 'booked') {
+          setBookedDates(rawId, newStart, newEnd, {
+            excludeWeekends: state.bookedDates?.[rawId]?.excludeWeekends !== false,
+            weekendIncludes: state.bookedDates?.[rawId]?.weekendIncludes || []
+          });
+        } else {
+          setEstimatedInstallOverride(rawId, { start: newStart, end: newEnd });
+        }
+        showToast('Install window moved', 'success');
       }
-      showToast('Install window moved', 'success');
-    }
-    renderCurrentPage();
+      renderCurrentPage();
+    }, { confirmLabel: perm === 'request' ? 'Request' : 'Move' });
     return;
   }
 
@@ -9701,45 +9734,37 @@ function _mcProposeMove(eventId, newStartDate, perm) {
     const m = (state.meetings || []).find(x => x.id === rawId);
     if (!m) return;
     if (m.date === newStartDate) return;
-    const msg = `Move "${m.title}"\nfrom ${fmtDate(m.date)} to ${fmtDate(newStartDate)}?\n(Time stays ${m.startTime ? _fmt12hRange(m.startTime, m.endTime) : 'the same'}.)`;
-    if (!confirm(msg)) return;
-    // Conflict check against attendees on the new date at the same time.
-    const conflictIds = _mcMeetingConflicts(m, newStartDate);
-    if (conflictIds.length > 0) {
-      // Route through approval — set pending and record approvals needed
-      m.date = newStartDate;
-      m.status = 'pending_approval';
-      _mcSetMeetingApprovalsNeeded(m, conflictIds);
-      save('vi_meetings', state.meetings);
-      showToast('Moved — attendees have a conflict, approval requested', 'info');
-    } else {
-      m.date = newStartDate;
-      if (m.status === 'pending_approval') m.status = 'confirmed';
-      save('vi_meetings', state.meetings);
-      showToast('Meeting moved', 'success');
-    }
-    renderCurrentPage();
+    const msg = `Move "${m.title}"\nfrom ${fmtDate(m.date)} to ${fmtDate(newStartDate)}?\n${m.startTime ? 'Time stays ' + _fmt12hRange(m.startTime, m.endTime) + '.' : ''}`;
+    showMoveConfirm(msg, () => {
+      const conflictIds = _mcMeetingConflicts(m, newStartDate);
+      if (conflictIds.length > 0) {
+        m.date = newStartDate;
+        m.status = 'pending_approval';
+        _mcSetMeetingApprovalsNeeded(m, conflictIds);
+        save('vi_meetings', state.meetings);
+        showToast('Moved — attendee conflict, approval requested', 'info');
+      } else {
+        m.date = newStartDate;
+        if (m.status === 'pending_approval') m.status = 'confirmed';
+        save('vi_meetings', state.meetings);
+        showToast('Meeting moved', 'success');
+      }
+      renderCurrentPage();
+    }, { confirmLabel: 'Move' });
     return;
   }
 
   if (type === 'personal_event') {
     const pe = (state.personalEvents || []).find(x => x.id === rawId);
     if (!pe) return;
-    const peEnd = pe.endDate || pe.startDate;
-    if (pe.startDate === newStartDate) return;
-    // Preserve duration
-    const sD = new Date(pe.startDate + 'T00:00:00');
-    const eD = new Date(peEnd + 'T00:00:00');
-    const durDays = Math.round((eD - sD) / 86400000);
-    const newStart = newStartDate;
-    const newEnd = _ymd(_addDays(new Date(newStartDate + 'T00:00:00'), durDays));
+    if (pe.date === newStartDate) return;
     const label = getPersonalEventDisplayLabel(pe) || 'event';
-    if (!confirm(`Move "${label}"\nfrom ${fmtDate(pe.startDate)} to ${fmtDate(newStart)}?`)) return;
-    pe.startDate = newStart;
-    pe.endDate = newEnd;
-    save('vi_personal_events', state.personalEvents);
-    showToast('Personal event moved', 'success');
-    renderCurrentPage();
+    const msg = `Move "${label}"\nfrom ${fmtDate(pe.date)} to ${fmtDate(newStartDate)}?`;
+    showMoveConfirm(msg, () => {
+      editPersonalEvent(rawId, { date: newStartDate });
+      showToast('Personal event moved', 'success');
+      renderCurrentPage();
+    }, { confirmLabel: 'Move' });
     return;
   }
 }
