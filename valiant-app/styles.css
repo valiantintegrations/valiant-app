@@ -5457,7 +5457,7 @@ td.today .cal-day-num {
 .mcal-month-cell {
   background: #0D1117;
   min-height: 100px;
-  padding: 6px;
+  padding: 6px 0;
   cursor: pointer;
   -webkit-tap-highlight-color: transparent;
   display: flex;
@@ -5474,6 +5474,7 @@ td.today .cal-day-num {
   font-size: 12px;
   color: #C9D1D9;
   margin-bottom: 4px;
+  padding: 0 6px;
 }
 .mcal-month-events {
   display: flex;
@@ -5489,6 +5490,14 @@ td.today .cal-day-num {
   overflow: hidden;
   text-overflow: ellipsis;
   cursor: pointer;
+  margin: 0 6px;
+}
+/* Spanning (multi-day) segments reach the full cell width so adjacent days
+   connect into one continuous bar. */
+.mcal-month-event-span {
+  margin: 0;
+  white-space: nowrap;
+  overflow: hidden;
 }
 .mcal-month-event:hover { filter: brightness(1.4); }
 .mcal-month-event-time {
