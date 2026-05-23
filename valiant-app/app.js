@@ -7505,20 +7505,35 @@ function renderCalendar(c) {
         const dateStr = `${year}-${String(month + 1).padStart(2, '0')}-${String(dayCount).padStart(2, '0')}`;
         const projectEvents = getEventsForDate(dateStr);
         const personalEvents = getPersonalEventsForDateForViewMode(dateStr);
-        const allEvents = [...projectEvents, ...personalEvents];
-        const totalCount = allEvents.length;
+        const meetingEvents = getMeetingsForDateForViewMode(dateStr);
+        const totalCount = projectEvents.length + personalEvents.length + meetingEvents.length;
         const visibleCount = 3;
+        // Fill the 3 visible slots in priority order: project installs, then
+        // meetings, then personal events. Each renderer slices against how many
+        // slots are still free so we never exceed `visibleCount` chips.
+        const projShown = projectEvents.slice(0, visibleCount);
+        const meetingSlots = Math.max(0, visibleCount - projShown.length);
+        const meetingShown = meetingEvents.slice(0, meetingSlots);
+        const personalSlots = Math.max(0, visibleCount - projShown.length - meetingShown.length);
+        const personalShown = personalEvents.slice(0, personalSlots);
 
         cells += `<td class="${isToday ? 'today' : ''}" onclick="openCalendarDayDetail('${dateStr}')" style="cursor:pointer">
           <span class="cal-day-num">${dayCount}</span>
-          ${projectEvents.slice(0, visibleCount).map(e => {
+          ${projShown.map(e => {
             const proj = state.projects.find(pp => pp.id === e.id);
             const notesPart = proj?.scheduling_notes ? `\n\nNotes: ${proj.scheduling_notes}` : '';
             const tooltip = `${e.name}${e.booked ? ' (Booked)' : ' (Estimated)'}${notesPart}`;
             const hasNotes = !!proj?.scheduling_notes;
             return `<div class="cal-event cal-event-${e.color}${hasNotes ? ' cal-event-has-notes' : ''}" onclick="event.stopPropagation();openProject(${e.id},'install')" title="${esc(tooltip)}">${hasNotes ? '📝 ' : ''}${esc(e.name)}</div>`;
           }).join('')}
-          ${personalEvents.slice(0, Math.max(0, visibleCount - projectEvents.length)).map(pe => {
+          ${meetingShown.map(m => {
+            const mColor = m.projectId != null ? getProjectColor(m.projectId) : '#A371F7';
+            const timeLabel = m.startTime ? _fmt12h(m.startTime) + ' ' : '';
+            const isPending = m.status === 'pending_approval';
+            const tooltip = `${m.title}${m.startTime && m.endTime ? ' · ' + _fmt12hRange(m.startTime, m.endTime) : ''}`;
+            return `<div class="cal-event" style="background:${mColor}1F;border-color:${isPending ? '#D29922' : mColor};color:${isPending ? '#D29922' : mColor}" onclick="event.stopPropagation();openMeetingDetail(${m.id})" title="${esc(tooltip)}">${timeLabel ? `<span style="font-weight:600">${esc(timeLabel)}</span>` : ''}${esc(m.title)}</div>`;
+          }).join('')}
+          ${personalShown.map(pe => {
             const owner = getTeamMember(pe.memberId);
             const viewerId = getActiveTeamMemberId();
             const viewerIsOwner = pe.memberId === viewerId;
@@ -7647,6 +7662,22 @@ function getPersonalEventsForDateForViewMode(dateStr) {
   const selected = state.calendarSelectedMembers || [];
   const effective = selected.length === 0 ? [viewerId] : selected;
   return all.filter(e => effective.includes(e.memberId));
+}
+
+// Returns meetings on a date, filtered by the same People-selection semantics
+// the Day Detail popup uses: show meetings where any selected member (or the
+// viewer, when nothing is selected) is an attendee. Denied meetings excluded.
+// Sorted by start time so timed meetings render in chronological order.
+function getMeetingsForDateForViewMode(dateStr) {
+  const viewerId = getActiveTeamMemberId();
+  const selected = state.calendarSelectedMembers || [];
+  const effective = selected.length === 0 ? [viewerId] : selected;
+  return (state.meetings || [])
+    .filter(m => {
+      if (m.date !== dateStr || m.status === 'denied') return false;
+      return effective.some(mid => (m.attendees || []).includes(mid));
+    })
+    .sort((a, b) => (a.startTime || '').localeCompare(b.startTime || ''));
 }
 
 function getCalendarDates(p) {
