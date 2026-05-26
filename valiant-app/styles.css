@@ -5739,13 +5739,25 @@ td.today .cal-day-num {
     text-align: center;
   }
   .mcal-month-cell {
-    min-height: 70px;
-    padding: 3px;
+    min-height: 64px;
+    padding: 3px 0;
+  }
+  .mcal-month-daynum {
+    font-size: 11px;
+    padding: 0 3px;
+    margin-bottom: 2px;
   }
   .mcal-month-event {
     font-size: 9px;
     padding: 1px 3px;
+    margin: 0 2px;
   }
+  /* Continuous multi-day bars still reach the cell edges on mobile */
+  .mcal-month-event-span { margin: 0; }
+  /* Hide initials badges on mobile month cells — too cramped, and the day
+     popup shows full ownership. Keeps abbreviations clean. */
+  .mcal-month-event .mcal-initials-wrap { display: none; }
+  .mcal-month-event-label { font-size: 9px; }
   .mcal-month-overflow {
     font-size: 9px;
     padding: 1px 3px;
@@ -5928,6 +5940,12 @@ td.today .cal-day-num {
 @media (max-width: 768px) {
   /* On mobile, stack title below tabs (it'd otherwise wrap awkwardly with the scroll strip) */
   .dash-mode-row { flex-direction: column; align-items: flex-start; gap: 8px; }
+  /* Bound the scrollable tab strip to the screen so IT scrolls, not the page */
+  .dash-mode-row .dash-mode-scroll {
+    width: 100%;
+    max-width: 100%;
+    flex: 0 0 auto;
+  }
   .dash-dept-inline {
     margin-left: 0;
   }
