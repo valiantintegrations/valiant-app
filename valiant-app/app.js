@@ -56,6 +56,8 @@ const PERMISSION_KEYS = [
   'install.view',
   'install.edit',
   'install.manage_crew',
+  // Calendar — logistics override
+  'calendar.edit_all_events',     // Move/edit ANYONE's calendar events (installs, meetings, personal) — for logistics managers
   // Purchasing / warehouse
   'purchasing.view',
   'purchasing.edit',
@@ -116,6 +118,7 @@ const DEFAULT_BUNDLES = {
       'projects.view_all','projects.edit','projects.change_stage',
       'projects.assign_team.install','projects.assign_team.warehouse',
       'install.view','install.edit','install.manage_crew',
+      'calendar.edit_all_events',
       'purchasing.view','warehouse.receive','warehouse.view_inventory',
       'vendors.view',
       'financials.view_project_totals',
@@ -1047,6 +1050,8 @@ function getInstallDateDisplay(project) {
 function canEditInstallWindow(projectId) {
   // Master Admin / system override
   if (currentUserHasPermission('admin.system')) return true;
+  // Logistics override — can edit anyone's install windows directly
+  if (currentUserHasPermission('calendar.edit_all_events')) return true;
   const viewerId = getActiveTeamMemberId();
   const a = getProjectAssignment(projectId);
   // PM lead of this project
@@ -9517,7 +9522,10 @@ function _mcParseEventId(eventId) {
 function _mcGetEventPermission(eventId) {
   const { type, rawId } = _mcParseEventId(eventId);
   const me = getActiveTeamMemberId();
+  // Logistics override — admin.system OR calendar.edit_all_events can move anything.
+  const canEditAll = currentUserHasPermission('admin.system') || currentUserHasPermission('calendar.edit_all_events');
   if (type === 'install') {
+    if (canEditAll) return 'edit';
     if (canEditInstallWindow(rawId)) return 'edit';
     if (canRequestInstallWindowChange(rawId)) return 'request';
     return null;
@@ -9525,14 +9533,14 @@ function _mcGetEventPermission(eventId) {
   if (type === 'meeting') {
     const m = (state.meetings || []).find(x => x.id === rawId);
     if (!m) return null;
-    if (currentUserHasPermission('admin.system')) return 'edit';
+    if (canEditAll) return 'edit';
     if ((m.attendees || []).includes(me)) return 'edit';
     return null;
   }
   if (type === 'personal_event') {
     const pe = (state.personalEvents || []).find(x => x.id === rawId);
     if (!pe) return null;
-    if (pe.memberId === me || currentUserHasPermission('admin.system')) return 'edit';
+    if (pe.memberId === me || canEditAll) return 'edit';
     return null;
   }
   return null;
@@ -10037,7 +10045,7 @@ function _startOfWeek(d) {
 //   max         — how many badges before "+N"
 function _mcInitialsBadges(attendeeIds, max) {
   max = max || 3;
-  const ids = (attendeeIds || []).filter(id => id != null);
+  const ids = [...new Set((attendeeIds || []).filter(id => id != null))];
   if (ids.length === 0) return '';
   const shown = ids.slice(0, max);
   const extra = ids.length - shown.length;
@@ -10104,7 +10112,7 @@ function renderMasterCalMonthView(ctx) {
            ondragover="_mcCellDragOver(event,'${k}')"
            ondragleave="_mcCellDragLeave(event)"
            ondrop="_mcCellDrop(event,'${k}')"
-           onclick="setMasterCalFilters({view:'day',date:'${k}'})">
+           onclick="_mcDayCellTap('${k}')">
         <div class="mcal-month-daynum">${d.getDate()}</div>
         <div class="mcal-month-events">
           ${dayEvents.map(e => {
@@ -10372,9 +10380,44 @@ function renderMasterCalDayView(ctx) {
 // LIST view — structured day detail. Installs are parent headers with room
 // for day-specific nested items (install tasks, when they exist). Meetings
 // and personal events list below.
-function renderMasterCalDayList(ctx) {
-  const anchor = getMasterCalAnchorDate();
-  const k = _ymd(anchor);
+// Tapping a day cell: on phones, open a detail popup overlay (keeps you in the
+// month); on larger screens, drill into the Day view as before.
+function _mcDayCellTap(dateStr) {
+  // Ignore taps that were really the end of a drag
+  if (_mcDrag.active) return;
+  const isMobile = window.matchMedia('(max-width: 768px)').matches;
+  if (isMobile) {
+    openMasterCalDayPopup(dateStr);
+  } else {
+    setMasterCalFilters({ view: 'day', date: dateStr });
+  }
+}
+
+function openMasterCalDayPopup(dateStr) {
+  document.getElementById('mcal-day-popup')?.remove();
+  const ctx = { memberId: getActiveTeamMemberId(), activeProjects: (state.projects || []).filter(p => p.stage !== 'lost' && p.stage !== 'archived') };
+  const dObj = new Date(dateStr + 'T00:00:00');
+  const dateLabel = dObj.toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric' });
+  const overlay = document.createElement('div');
+  overlay.id = 'mcal-day-popup';
+  overlay.className = 'modal-overlay';
+  overlay.onclick = (e) => { if (e.target === overlay) overlay.remove(); };
+  overlay.innerHTML = `
+    <div class="modal-container" style="max-width:480px;max-height:80vh;display:flex;flex-direction:column">
+      <div class="modal-header">
+        <div class="modal-title">${esc(dateLabel)}</div>
+        <button class="modal-close" onclick="document.getElementById('mcal-day-popup')?.remove()">&times;</button>
+      </div>
+      <div class="modal-body" style="overflow-y:auto">
+        ${renderMasterCalDayList(ctx, dateStr)}
+      </div>
+    </div>
+  `;
+  document.body.appendChild(overlay);
+}
+
+function renderMasterCalDayList(ctx, dateOverride) {
+  const k = dateOverride || _ymd(getMasterCalAnchorDate());
   const events = getMasterCalendarEvents(k, k, ctx);
 
   const installs = events.filter(e => e.type === 'install');
@@ -13065,7 +13108,7 @@ function renderBundleEditPermissions(bundleKey) {
   const labels = {
     admin: 'Admin', projects: 'Projects', design: 'Design', install: 'Install',
     purchasing: 'Purchasing', warehouse: 'Warehouse', vendors: 'Vendors',
-    financials: 'Financials', sales: 'Sales', client: 'Client'
+    financials: 'Financials', sales: 'Sales', client: 'Client', calendar: 'Calendar'
   };
   return Object.entries(groups).map(([g, perms]) => `
     <div style="margin-top:10px">
@@ -13209,7 +13252,7 @@ function renderPermissionList(memberId) {
   const labels = {
     admin: 'Admin', projects: 'Projects', design: 'Design', install: 'Install',
     purchasing: 'Purchasing', warehouse: 'Warehouse', vendors: 'Vendors',
-    financials: 'Financials', sales: 'Sales', client: 'Client'
+    financials: 'Financials', sales: 'Sales', client: 'Client', calendar: 'Calendar'
   };
   return Object.entries(groups).map(([g, perms]) => `
     <div style="margin-top:10px">
