@@ -371,6 +371,7 @@ const state = {
   meetingApprovals: JSON.parse(localStorage.getItem('vi_meeting_approvals') || '{}'),
   installChangeRequests: JSON.parse(localStorage.getItem('vi_install_change_requests') || '{}'),
   installTasks: JSON.parse(localStorage.getItem('vi_install_tasks') || '[]'),
+  installTaskTemplates: JSON.parse(localStorage.getItem('vi_install_task_templates') || '{}'),
   textSize: localStorage.getItem('vi_text_size') || 'normal',
   personalEvents: JSON.parse(localStorage.getItem('vi_personal_events') || '[]'),
   userLayouts: JSON.parse(localStorage.getItem('vi_user_layouts') || '{}'),
@@ -1171,26 +1172,69 @@ function getInstallChangesAwaitingMyApproval() {
 }
 
 // ════════════════════════════════════════════════════════════════════════════
-// INSTALL TASKS (foundation — model + project-page planning)
+// INSTALL TASKS — unified task + template system
 // ────────────────────────────────────────────────────────────────────────────
 // A task belongs to a job (projectId) OR shop work (shopWork:true). It may be
-// assigned to a system (scope tag) and carries either an assignee (work task)
-// or no assignee with a due date (milestone reminder). A main task can span
-// days (startDate..endDate); subtasks are pinned to specific days within it.
+// linked to a system (scope tag) and is either an assigned work task or a
+// milestone reminder (no assignee, due date). A master task's date range is
+// DERIVED from its subtasks' dates (not stored). Subtasks can be assigned to
+// multiple people and are pinned to a specific day.
 //
 // Shape: {
 //   id, projectId|null, shopWork:bool, system|null, title,
-//   assigneeId|null, isMilestone:bool, startDate, endDate, done:bool,
-//   subtasks: [ { id, title, date, assigneeId|null, done:bool } ],
-//   createdAt
+//   assigneeIds:[], isMilestone:bool, dueDate:string|null, done:bool,
+//   subtasks: [ { id, title, date, assigneeIds:[], notes, done } ],
+//   templateKey|null, createdAt
 // }
 // ════════════════════════════════════════════════════════════════════════════
 
 function _nextTaskId() {
   const all = state.installTasks || [];
   let max = 0;
-  all.forEach(t => { if (t.id > max) max = t.id; (t.subtasks || []).forEach(s => { if (s.id > max) max = s.id; }); });
+  all.forEach(t => {
+    if (t.id > max) max = t.id;
+    (t.subtasks || []).forEach(s => { if (s.id > max) max = s.id; });
+  });
   return max + 1;
+}
+
+// Migrate old task shape (single assignee, manual start/end) to new shape.
+// Called once on load — idempotent.
+function _migrateInstallTaskShape() {
+  const all = state.installTasks || [];
+  let changed = false;
+  all.forEach(t => {
+    if (!Array.isArray(t.assigneeIds)) {
+      t.assigneeIds = (t.assigneeId != null) ? [t.assigneeId] : [];
+      delete t.assigneeId;
+      changed = true;
+    }
+    if (t.isMilestone && !t.dueDate && t.startDate) { t.dueDate = t.startDate; changed = true; }
+    if ('startDate' in t || 'endDate' in t) {
+      if (t.isMilestone && !t.dueDate && t.startDate) t.dueDate = t.startDate;
+      delete t.startDate; delete t.endDate; changed = true;
+    }
+    (t.subtasks || []).forEach(s => {
+      if (!Array.isArray(s.assigneeIds)) {
+        s.assigneeIds = (s.assigneeId != null) ? [s.assigneeId] : [];
+        delete s.assigneeId;
+        changed = true;
+      }
+      if (typeof s.notes !== 'string') { s.notes = ''; changed = true; }
+    });
+  });
+  if (changed) save('vi_install_tasks', state.installTasks);
+
+  // Backfill crew membership from existing task assignments. Runs every load —
+  // cheap and idempotent. Ensures anyone assigned to a task or subtask is on
+  // the project crew (so they see it on their dashboard).
+  all.forEach(t => {
+    if (t.projectId == null) return;
+    const ids = new Set();
+    (t.assigneeIds || []).forEach(id => ids.add(id));
+    (t.subtasks || []).forEach(s => (s.assigneeIds || []).forEach(id => ids.add(id)));
+    if (ids.size) ensureOnProjectCrew(t.projectId, [...ids]);
+  });
 }
 
 function getTasksForProject(projectId) {
@@ -1203,24 +1247,59 @@ function getInstallTaskById(taskId) {
   return (state.installTasks || []).find(t => t.id === taskId) || null;
 }
 
-function addInstallTask({ projectId, shopWork, system, title, assigneeId, isMilestone, startDate, endDate }) {
+// A master task's effective date range — derived from its subtasks' dates.
+// Returns { start, end } or null if no subtask has a date. For milestones,
+// returns { start: dueDate, end: dueDate }.
+function getTaskDateRange(task) {
+  if (!task) return null;
+  if (task.isMilestone) {
+    return task.dueDate ? { start: task.dueDate, end: task.dueDate } : null;
+  }
+  const dates = (task.subtasks || []).map(s => s.date).filter(Boolean).sort();
+  if (dates.length === 0) return null;
+  return { start: dates[0], end: dates[dates.length - 1] };
+}
+
+// Auto-add a person (or list of people) to a project's install crew if not
+// already on it. Keeps task assignment and dashboard visibility consistent.
+function ensureOnProjectCrew(projectId, memberIds) {
+  if (projectId == null) return;
+  const ids = (Array.isArray(memberIds) ? memberIds : [memberIds]).filter(id => id != null);
+  if (ids.length === 0) return;
+  const a = getProjectAssignment(projectId);
+  const installList = [...(a.install || [])];
+  let changed = false;
+  ids.forEach(id => {
+    const onInstall = installList.some(x => x.id === id);
+    const onPm = (a.pm || []).some(x => x.id === id);
+    if (!onInstall && !onPm) {
+      installList.push({ id, lead: false });
+      changed = true;
+    }
+  });
+  if (changed) setProjectAssignment(projectId, 'install', installList);
+}
+
+function addInstallTask({ projectId, shopWork, system, title, assigneeIds, isMilestone, dueDate, templateKey }) {
   if (!state.installTasks) state.installTasks = [];
+  const ids = Array.isArray(assigneeIds) ? assigneeIds.filter(x => x != null) : [];
   const task = {
     id: _nextTaskId(),
     projectId: projectId != null ? projectId : null,
     shopWork: !!shopWork,
     system: system || null,
     title: title || 'Task',
-    assigneeId: isMilestone ? null : (assigneeId != null ? assigneeId : null),
+    assigneeIds: isMilestone ? [] : ids,
     isMilestone: !!isMilestone,
-    startDate: startDate || null,
-    endDate: endDate || startDate || null,
+    dueDate: isMilestone ? (dueDate || null) : null,
     done: false,
     subtasks: [],
+    templateKey: templateKey || null,
     createdAt: new Date().toISOString()
   };
   state.installTasks.push(task);
   save('vi_install_tasks', state.installTasks);
+  if (!isMilestone && projectId != null && ids.length) ensureOnProjectCrew(projectId, ids);
   return task;
 }
 
@@ -1228,8 +1307,11 @@ function updateInstallTask(taskId, patch) {
   const t = getInstallTaskById(taskId);
   if (!t) return;
   Object.assign(t, patch);
-  if (t.isMilestone) t.assigneeId = null;
+  if (t.isMilestone) t.assigneeIds = [];
   save('vi_install_tasks', state.installTasks);
+  if (!t.isMilestone && t.projectId != null && Array.isArray(t.assigneeIds) && t.assigneeIds.length) {
+    ensureOnProjectCrew(t.projectId, t.assigneeIds);
+  }
 }
 
 function deleteInstallTask(taskId) {
@@ -1244,18 +1326,21 @@ function toggleInstallTaskDone(taskId) {
   save('vi_install_tasks', state.installTasks);
 }
 
-function addSubtask(taskId, { title, date, assigneeId }) {
+function addSubtask(taskId, { title, date, assigneeIds, notes }) {
   const t = getInstallTaskById(taskId);
   if (!t) return;
   if (!t.subtasks) t.subtasks = [];
+  const ids = Array.isArray(assigneeIds) ? assigneeIds.filter(x => x != null) : [];
   t.subtasks.push({
     id: _nextTaskId(),
     title: title || 'Subtask',
     date: date || null,
-    assigneeId: assigneeId != null ? assigneeId : null,
+    assigneeIds: ids,
+    notes: notes || '',
     done: false
   });
   save('vi_install_tasks', state.installTasks);
+  if (t.projectId != null && ids.length) ensureOnProjectCrew(t.projectId, ids);
 }
 
 function updateSubtask(taskId, subtaskId, patch) {
@@ -1264,7 +1349,9 @@ function updateSubtask(taskId, subtaskId, patch) {
   const s = (t.subtasks || []).find(x => x.id === subtaskId);
   if (!s) return;
   Object.assign(s, patch);
+  if (!Array.isArray(s.assigneeIds)) s.assigneeIds = [];
   save('vi_install_tasks', state.installTasks);
+  if (t.projectId != null && s.assigneeIds.length) ensureOnProjectCrew(t.projectId, s.assigneeIds);
 }
 
 function deleteSubtask(taskId, subtaskId) {
@@ -1289,13 +1376,137 @@ function getInstallTasksForDate(dateStr, projectId) {
   (state.installTasks || []).forEach(t => {
     if (projectId != null && t.projectId !== projectId) return;
     (t.subtasks || []).forEach(s => { if (s.date === dateStr) out.push({ task: t, subtask: s }); });
-    // A main task with no subtasks but a date range covering this day
-    if ((!t.subtasks || t.subtasks.length === 0) && t.startDate) {
-      const end = t.endDate || t.startDate;
-      if (dateStr >= t.startDate && dateStr <= end) out.push({ task: t, subtask: null });
-    }
+    if (t.isMilestone && t.dueDate === dateStr) out.push({ task: t, subtask: null });
   });
   return out;
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+// INSTALL TASK TEMPLATES — tag → standard master task + subtasks
+// ────────────────────────────────────────────────────────────────────────────
+// state.installTaskTemplates is the editable per-tag template map. Migrated
+// once from the legacy TEMPLATES.install on first load, then editable via UI.
+//
+// Shape: {
+//   [systemKey]: {
+//     systemKey, label, subtasks: [ { title, notes } ]
+//   }
+// }
+// systemKey matches what detectSystems() emits ('led_wall', 'pa_install', etc.)
+// ════════════════════════════════════════════════════════════════════════════
+
+// Map from canonical scope-tag label (as on SCOPE_TAGS) to systemKey, so the
+// project's scope_tags can be looked up against templates.
+const SCOPE_TAG_TO_SYSTEM = {
+  'PA System': 'pa_install',
+  'LED Wall': 'led_wall',
+  'Key Lights': 'lighting',
+  'House Lights': 'lighting',
+  'Broadcast Video System': 'streaming',
+  'Streaming Audio System': 'streaming',
+  'Camera': 'camera',
+  'Control (Q-sys)': 'control',
+  'Control (AHM)': 'control',
+  'Control (Atlona)': 'control'
+  // tags without a default template (Distributed Audio, TVs, Projection,
+  // Conferencing, Mics, Acoustic Treatment, Drape, Network) just don't seed —
+  // user can add a custom template for them through the UI.
+};
+
+function _migrateInstallTaskTemplates() {
+  if (state.installTaskTemplates && Object.keys(state.installTaskTemplates).length) return;
+  // First-time seed of the editable template map from the legacy TEMPLATES.install
+  const seeded = {};
+  const src = (typeof TEMPLATES !== 'undefined' && TEMPLATES && TEMPLATES.install) ? TEMPLATES.install : {};
+  Object.keys(src).forEach(sysKey => {
+    const t = src[sysKey];
+    seeded[sysKey] = {
+      systemKey: sysKey,
+      label: t.name || sysKey,
+      subtasks: (t.items || []).map(item => ({ title: item, notes: '' }))
+    };
+  });
+  state.installTaskTemplates = seeded;
+  save('vi_install_task_templates', seeded);
+}
+
+function getInstallTaskTemplate(systemKey) {
+  return (state.installTaskTemplates || {})[systemKey] || null;
+}
+
+function getAllInstallTaskTemplates() {
+  return Object.values(state.installTaskTemplates || {}).sort((a, b) => a.label.localeCompare(b.label));
+}
+
+function upsertInstallTaskTemplate(systemKey, { label, subtasks }) {
+  if (!state.installTaskTemplates) state.installTaskTemplates = {};
+  state.installTaskTemplates[systemKey] = {
+    systemKey,
+    label: label || systemKey,
+    subtasks: (subtasks || []).map(s => ({ title: s.title || '', notes: s.notes || '' }))
+  };
+  save('vi_install_task_templates', state.installTaskTemplates);
+}
+
+function deleteInstallTaskTemplate(systemKey) {
+  if (!state.installTaskTemplates) return;
+  delete state.installTaskTemplates[systemKey];
+  save('vi_install_task_templates', state.installTaskTemplates);
+}
+
+// Which systemKeys does this project's scope cover? Reads from project.systems
+// (auto-detected) and project.scope_tags (explicit user selections, mapped
+// through SCOPE_TAG_TO_SYSTEM).
+function getProjectSystemKeys(project) {
+  const keys = new Set();
+  (project.systems || []).forEach(k => keys.add(k));
+  (project.scope_tags || []).forEach(tag => {
+    const k = SCOPE_TAG_TO_SYSTEM[tag];
+    if (k) keys.add(k);
+  });
+  return [...keys];
+}
+
+// Which systemKeys on this project already have a seeded master task? Used so
+// the seed button only seeds tags not already seeded (safe default).
+function getSeededSystemKeysForProject(projectId) {
+  const tasks = getTasksForProject(projectId);
+  return [...new Set(tasks.map(t => t.templateKey).filter(Boolean))];
+}
+
+// Seed standard install tasks for a project from its scope. By default only
+// seeds systems that haven't already been seeded (safe). overwrite=true wipes
+// any prior tasks with a templateKey and reseeds — destructive option.
+function seedTasksFromProjectScope(projectId, { overwrite } = {}) {
+  const p = state.projects.find(x => x.id === projectId);
+  if (!p) return { seeded: 0, skipped: 0 };
+  const systemKeys = getProjectSystemKeys(p);
+  if (overwrite) {
+    // remove existing template-seeded tasks (manual tasks with no templateKey are preserved)
+    state.installTasks = (state.installTasks || []).filter(t => !(t.projectId === projectId && t.templateKey));
+    save('vi_install_tasks', state.installTasks);
+  }
+  const alreadySeeded = new Set(getSeededSystemKeysForProject(projectId));
+  let seededCount = 0, skippedCount = 0;
+  systemKeys.forEach(sysKey => {
+    const tpl = getInstallTaskTemplate(sysKey);
+    if (!tpl) { skippedCount++; return; }
+    if (alreadySeeded.has(sysKey)) { skippedCount++; return; }
+    const master = addInstallTask({
+      projectId,
+      system: sysKey,
+      title: tpl.label,
+      assigneeIds: [],
+      isMilestone: false,
+      templateKey: sysKey
+    });
+    // Add each template subtask with no date / no assignees — user fills in
+    (tpl.subtasks || []).forEach(s => addSubtask(master.id, {
+      title: s.title, notes: s.notes || '', date: null, assigneeIds: []
+    }));
+    seededCount++;
+  });
+  return { seeded: seededCount, skipped: skippedCount };
 }
 
 // Opens the install window picker in REQUEST mode for an installer who can't
@@ -2332,26 +2543,44 @@ function getDerivedTasks(role) {
   }
 
   if (role === 'installer' || role === 'project_manager' || role === 'admin') {
-    activeProjects.filter(p => p.stage === 'contract').forEach(p => {
-      if (role !== 'admin' && !isAssignedTo(p.id, 'install', memberId)) return;
-      p.systems.forEach(sys => {
-        const template = TEMPLATES.install[sys];
-        if (!template) return;
-        const checkKey = `${p.id}_install_${sys}`;
-        const checks = state.checklists[checkKey] || {};
-        const incomplete = template.items.filter((_, i) => !checks[i]);
-        if (incomplete.length > 0) {
+    // Surface incomplete subtasks from the unified Install Tasks system. For
+    // installers/PMs, show subtasks where they're an assignee. For admins,
+    // show all open subtasks on contract-stage projects.
+    const contractProjectIds = new Set(activeProjects.filter(p => p.stage === 'contract').map(p => p.id));
+    (state.installTasks || []).forEach(t => {
+      if (t.projectId == null) return;
+      if (!contractProjectIds.has(t.projectId)) return;
+      const proj = activeProjects.find(p => p.id === t.projectId);
+      if (!proj) return;
+      (t.subtasks || []).forEach(s => {
+        if (s.done) return;
+        const youAssigned = Array.isArray(s.assigneeIds) && s.assigneeIds.includes(memberId);
+        if (role !== 'admin' && !youAssigned) return;
+        derived.push({
+          id: `derived_itask_${t.id}_${s.id}`,
+          text: `${t.title}: ${s.title}`,
+          projectId: t.projectId,
+          projectName: proj.name,
+          dueDate: s.date || '',
+          source: 'install',
+          done: false
+        });
+      });
+      // Milestone tasks the viewer is responsible for (or any milestone for admin)
+      if (t.isMilestone && !t.done) {
+        const responsible = Array.isArray(t.assigneeIds) && t.assigneeIds.includes(memberId);
+        if (role === 'admin' || responsible) {
           derived.push({
-            id: `derived_install_${p.id}_${sys}`,
-            text: `${template.name}: ${incomplete.length} item${incomplete.length !== 1 ? 's' : ''} remaining`,
-            projectId: p.id,
-            projectName: p.name,
-            dueDate: p.start_date || '',
+            id: `derived_milestone_${t.id}`,
+            text: `🚩 ${t.title}`,
+            projectId: t.projectId,
+            projectName: proj.name,
+            dueDate: t.dueDate || '',
             source: 'install',
             done: false
           });
         }
-      });
+      }
     });
   }
 
@@ -5777,74 +6006,125 @@ function renderProjectMeetingsSection(p) {
 
 // ── Project Install Tasks planning section ──
 function renderProjectTasksSection(p) {
-  const tasks = getTasksForProject(p.id).slice().sort((a, b) => (a.startDate || '').localeCompare(b.startDate || ''));
+  const tasks = getTasksForProject(p.id).slice().sort((a, b) => {
+    // Milestones first by date, then template tasks, then manual
+    if (a.isMilestone !== b.isMilestone) return a.isMilestone ? -1 : 1;
+    return (a.title || '').localeCompare(b.title || '');
+  });
+
+  const seededKeys = getSeededSystemKeysForProject(p.id);
+  const projectSystems = getProjectSystemKeys(p);
+  const seedable = projectSystems.filter(sk => !seededKeys.includes(sk) && getInstallTaskTemplate(sk));
+  const hasAnyTemplate = projectSystems.some(sk => getInstallTaskTemplate(sk));
+
+  function assigneeChips(ids) {
+    if (!ids || ids.length === 0) return '<span class="itask-unassigned">Unassigned</span>';
+    return ids.map(id => {
+      const m = getTeamMember(id);
+      if (!m) return '';
+      return `<span class="itask-assignee">${esc(m.name.split(' ')[0])}</span>`;
+    }).join('');
+  }
 
   function subtaskRow(t, s) {
-    const who = s.assigneeId != null ? getTeamMember(s.assigneeId) : null;
     return `
       <div class="itask-sub${s.done ? ' is-done' : ''}">
         <span class="itask-check" onclick="event.stopPropagation();toggleSubtaskDone(${t.id},${s.id});renderCurrentPage()">${s.done ? '✓' : ''}</span>
         <div class="itask-sub-body" onclick="openSubtaskDialog(${t.id},${s.id})">
-          <span class="itask-sub-title">${esc(s.title)}</span>
-          <span class="itask-sub-meta">${s.date ? esc(fmtDate(s.date)) : 'No date'}${who ? ` · ${esc(who.name.split(' ')[0])}` : ''}</span>
+          <div class="itask-sub-title">${esc(s.title)}</div>
+          <div class="itask-sub-meta">
+            ${s.date ? esc(fmtDate(s.date)) : '<span class="itask-nodate">No date</span>'}
+            <span class="itask-sub-assignees">${assigneeChips(s.assigneeIds)}</span>
+          </div>
+          ${s.notes ? `<div class="itask-sub-notes">${esc(s.notes)}</div>` : ''}
         </div>
-        <span class="itask-del" onclick="event.stopPropagation();if(confirm('Delete this subtask?')){deleteSubtask(${t.id},${s.id});renderCurrentPage();}">×</span>
+        <span class="itask-del" onclick="event.stopPropagation();if(confirm('Delete this step?')){deleteSubtask(${t.id},${s.id});renderCurrentPage();}">×</span>
       </div>
     `;
   }
 
   function taskCard(t) {
-    const assignee = t.assigneeId != null ? getTeamMember(t.assigneeId) : null;
     const sys = t.system ? `<span class="itask-sys">${esc(t.system)}</span>` : '';
-    const dateLabel = t.startDate
-      ? (t.endDate && t.endDate !== t.startDate ? fmtDateRange(t.startDate, t.endDate) : fmtDate(t.startDate))
-      : 'No date';
     const subDone = (t.subtasks || []).filter(s => s.done).length;
     const subTotal = (t.subtasks || []).length;
+    let dateLabel;
+    if (t.isMilestone) {
+      dateLabel = t.dueDate ? 'Due ' + fmtDate(t.dueDate) : 'No due date';
+    } else {
+      const range = getTaskDateRange(t);
+      dateLabel = range
+        ? (range.start === range.end ? fmtDate(range.start) : fmtDateRange(range.start, range.end))
+        : 'No dates set';
+    }
     return `
-      <div class="itask-card${t.done ? ' is-done' : ''}">
+      <div class="itask-card${t.done ? ' is-done' : ''}${t.isMilestone ? ' is-milestone' : ''}">
         <div class="itask-head">
           <span class="itask-check itask-check-main" onclick="event.stopPropagation();toggleInstallTaskDone(${t.id});renderCurrentPage()">${t.done ? '✓' : ''}</span>
           <div class="itask-head-body" onclick="openTaskDialog(${p.id},${t.id})">
-            <div class="itask-title">${t.isMilestone ? '🚩 ' : ''}${esc(t.title)} ${sys}</div>
+            <div class="itask-title">${t.isMilestone ? '🚩 ' : ''}${esc(t.title)} ${sys}${t.templateKey ? '<span class="itask-tplbadge">from template</span>' : ''}</div>
             <div class="itask-meta">
               ${esc(dateLabel)}
-              ${t.isMilestone ? ' · Milestone' : (assignee ? ` · ${esc(assignee.name.split(' ')[0])}` : ' · Unassigned')}
-              ${subTotal > 0 ? ` · ${subDone}/${subTotal} steps` : ''}
+              ${t.isMilestone ? '' : ` · ${subDone}/${subTotal} steps`}
             </div>
           </div>
-          <span class="itask-del" onclick="event.stopPropagation();if(confirm('Delete this task and its subtasks?')){deleteInstallTask(${t.id});renderCurrentPage();}">×</span>
+          <span class="itask-del" onclick="event.stopPropagation();if(confirm('Delete this task and all its steps?')){deleteInstallTask(${t.id});renderCurrentPage();}">×</span>
         </div>
-        ${subTotal > 0 ? `<div class="itask-subs">${t.subtasks.slice().sort((a,b)=>(a.date||'').localeCompare(b.date||'')).map(s => subtaskRow(t, s)).join('')}</div>` : ''}
+        ${subTotal > 0 ? `<div class="itask-subs">${t.subtasks.slice().sort((a,b)=>(a.date||'9999').localeCompare(b.date||'9999')).map(s => subtaskRow(t, s)).join('')}</div>` : ''}
         ${!t.isMilestone ? `<button class="itask-add-sub" onclick="openSubtaskDialog(${t.id},null)">+ Add day / step</button>` : ''}
       </div>
     `;
   }
 
+  // Seeding controls
+  const seedBtn = seedable.length > 0
+    ? `<button class="btn btn-sm" style="font-size:11px;padding:6px 12px;background:#0D1F3D;border-color:#1565C0;color:#58A6FF" onclick="_seedTasksFromScope(${p.id},false)">Seed ${seedable.length} from scope</button>`
+    : '';
+  const reseedBtn = (tasks.some(t => t.templateKey) && hasAnyTemplate)
+    ? `<button class="btn btn-sm" style="font-size:11px;padding:6px 12px;background:#1A0D0D;border-color:#DA3633;color:#F85149;margin-left:6px" onclick="if(confirm('Re-seed will delete all template-seeded tasks on this project (manual tasks preserved) and reseed from current templates. Continue?'))_seedTasksFromScope(${p.id},true)">Re-seed</button>`
+    : '';
+
   return `
     <div class="dashboard-card" style="margin-bottom:14px">
-      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;gap:8px;flex-wrap:wrap">
         <div style="font-size:11px;font-weight:600;color:#6E7681;text-transform:uppercase;letter-spacing:0.08em">Install Tasks</div>
-        <button class="btn btn-sm" style="font-size:11px;padding:6px 12px" onclick="openTaskDialog(${p.id},null)">+ Add Task</button>
+        <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap">
+          ${seedBtn}${reseedBtn}
+          <button class="btn btn-sm" style="font-size:11px;padding:6px 12px" onclick="openTaskDialog(${p.id},null)">+ Add Task</button>
+        </div>
       </div>
       ${tasks.length === 0
-        ? `<div style="font-size:12px;color:#6E7681;font-style:italic;padding:4px 0">No install tasks yet. Add a task to break the job into work items by system and day.</div>`
+        ? `<div style="font-size:12px;color:#6E7681;font-style:italic;padding:4px 0">
+            No install tasks yet. ${seedable.length > 0
+              ? `Click <strong>Seed from scope</strong> to create standard tasks for ${seedable.map(k => getInstallTaskTemplate(k).label).join(', ')}, or add a custom task.`
+              : 'Add a custom task, or set this project\'s scope tags to seed standard tasks from templates.'}
+          </div>`
         : tasks.map(taskCard).join('')}
     </div>
   `;
 }
 
-// Task create/edit dialog
+function _seedTasksFromScope(projectId, overwrite) {
+  const result = seedTasksFromProjectScope(projectId, { overwrite });
+  if (result.seeded === 0 && result.skipped === 0) {
+    showToast('No scope systems on this project to seed from', 'info');
+  } else if (result.seeded === 0) {
+    showToast('Nothing to seed — all matching systems already seeded', 'info');
+  } else {
+    showToast(`Seeded ${result.seeded} task${result.seeded === 1 ? '' : 's'} from scope`, 'success');
+  }
+  renderCurrentPage();
+}
+
+// Task create/edit dialog — handles work tasks (multi-assignee) and milestones
 function openTaskDialog(projectId, taskId) {
   const existing = taskId != null ? getInstallTaskById(taskId) : null;
   const p = state.projects.find(x => x.id === projectId);
-  // Systems available = project scope tags, fallback to all SCOPE_TAGS
   const projTags = (p && Array.isArray(p.scope_tags) && p.scope_tags.length) ? p.scope_tags : SCOPE_TAGS;
   const crew = getProjectAssignment(projectId);
   const crewIds = [...new Set([...(crew.install || []).map(x => x.id), ...(crew.pm || []).map(x => x.id)])];
   const crewMembers = crewIds.map(id => getTeamMember(id)).filter(Boolean);
-  const allMembers = state.team || [];
-  const assignPool = crewMembers.length ? crewMembers : allMembers;
+  const assignPool = crewMembers.length ? crewMembers : (state.team || []);
+  const selectedAssignees = existing && Array.isArray(existing.assigneeIds) ? existing.assigneeIds : [];
 
   document.getElementById('task-dialog')?.remove();
   const overlay = document.createElement('div');
@@ -5853,7 +6133,7 @@ function openTaskDialog(projectId, taskId) {
   overlay.onclick = (e) => { if (e.target === overlay) overlay.remove(); };
   const isMile = existing ? existing.isMilestone : false;
   overlay.innerHTML = `
-    <div class="modal-container" style="max-width:460px">
+    <div class="modal-container" style="max-width:480px">
       <div class="modal-header">
         <div class="modal-title">${existing ? 'Edit Task' : 'New Install Task'}</div>
         <button class="modal-close" onclick="document.getElementById('task-dialog')?.remove()">&times;</button>
@@ -5861,10 +6141,10 @@ function openTaskDialog(projectId, taskId) {
       <div class="modal-body" style="display:flex;flex-direction:column;gap:14px">
         <div>
           <label class="form-label">Task title</label>
-          <input id="task-title" class="form-input" type="text" value="${existing ? esc(existing.title) : ''}" placeholder="e.g. Sound System install">
+          <input id="task-title" class="form-input" type="text" value="${existing ? esc(existing.title) : ''}" placeholder="e.g. Install PA System">
         </div>
         <div>
-          <label class="form-label">System</label>
+          <label class="form-label">System (optional)</label>
           <select id="task-system" class="form-input">
             <option value="">— None —</option>
             ${projTags.map(tag => `<option value="${esc(tag)}" ${existing && existing.system === tag ? 'selected' : ''}>${esc(tag)}</option>`).join('')}
@@ -5876,23 +6156,23 @@ function openTaskDialog(projectId, taskId) {
             Milestone (project reminder, no assignee)
           </label>
         </div>
-        <div id="task-assignee-wrap" style="${isMile ? 'display:none' : ''}">
-          <label class="form-label">Assignee <span style="color:#F85149">*</span></label>
-          <select id="task-assignee" class="form-input">
-            <option value="">— Select —</option>
-            ${assignPool.map(m => `<option value="${m.id}" ${existing && existing.assigneeId === m.id ? 'selected' : ''}>${esc(m.name)}</option>`).join('')}
-          </select>
-        </div>
-        <div style="display:flex;gap:10px">
-          <div style="flex:1">
-            <label class="form-label">${isMile ? 'Due date' : 'Start date'}</label>
-            <input id="task-start" class="form-input" type="date" value="${existing && existing.startDate ? existing.startDate : ''}">
+        <div id="task-assignees-wrap" style="${isMile ? 'display:none' : ''}">
+          <label class="form-label">Assignees (optional for the master task — subtasks carry the actual assignments)</label>
+          <div class="itask-assignee-pick">
+            ${assignPool.map(m => `
+              <label class="itask-assignee-chip">
+                <input type="checkbox" class="task-assignee-cb" value="${m.id}" ${selectedAssignees.includes(m.id) ? 'checked' : ''}>
+                <span>${esc(m.name)}</span>
+              </label>
+            `).join('')}
           </div>
-          <div style="flex:1${isMile ? ';display:none' : ''}" id="task-end-wrap">
-            <label class="form-label">End date</label>
-            <input id="task-end" class="form-input" type="date" value="${existing && existing.endDate ? existing.endDate : ''}">
-          </div>
+          <div style="font-size:11px;color:#6E7681;margin-top:6px">Anyone assigned will be auto-added to this project's install crew.</div>
         </div>
+        <div id="task-duedate-wrap" style="${isMile ? '' : 'display:none'}">
+          <label class="form-label">Due date</label>
+          <input id="task-duedate" class="form-input" type="date" value="${existing && existing.dueDate ? existing.dueDate : ''}">
+        </div>
+        ${!isMile && existing ? `<div style="font-size:11px;color:#6E7681;font-style:italic">Date range is derived from this task's subtasks/steps.</div>` : ''}
         <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:4px">
           <button class="btn" onclick="document.getElementById('task-dialog')?.remove()">Cancel</button>
           <button class="btn-primary" onclick="_saveTaskDialog(${projectId},${taskId != null ? taskId : 'null'})">${existing ? 'Save' : 'Add Task'}</button>
@@ -5905,33 +6185,34 @@ function openTaskDialog(projectId, taskId) {
 
 function _taskDialogToggleMilestone() {
   const isMile = document.getElementById('task-milestone').checked;
-  document.getElementById('task-assignee-wrap').style.display = isMile ? 'none' : '';
-  document.getElementById('task-end-wrap').style.display = isMile ? 'none' : '';
+  document.getElementById('task-assignees-wrap').style.display = isMile ? 'none' : '';
+  document.getElementById('task-duedate-wrap').style.display = isMile ? '' : 'none';
 }
 
 function _saveTaskDialog(projectId, taskId) {
   const title = document.getElementById('task-title').value.trim();
   const system = document.getElementById('task-system').value || null;
   const isMilestone = document.getElementById('task-milestone').checked;
-  const assigneeId = isMilestone ? null : (document.getElementById('task-assignee').value ? parseInt(document.getElementById('task-assignee').value, 10) : null);
-  const startDate = document.getElementById('task-start').value || null;
-  const endDate = isMilestone ? startDate : (document.getElementById('task-end').value || startDate);
+  const assigneeIds = isMilestone
+    ? []
+    : Array.from(document.querySelectorAll('.task-assignee-cb:checked')).map(cb => parseInt(cb.value, 10));
+  const dueDate = isMilestone ? (document.getElementById('task-duedate').value || null) : null;
 
   if (!title) { showToast('Task needs a title', 'info'); return; }
-  if (!isMilestone && assigneeId == null) { showToast('Assign the task, or mark it a milestone', 'info'); return; }
+  if (isMilestone && !dueDate) { showToast('Milestone needs a due date', 'info'); return; }
 
   if (taskId != null) {
-    updateInstallTask(taskId, { title, system, isMilestone, assigneeId, startDate, endDate });
+    updateInstallTask(taskId, { title, system, isMilestone, assigneeIds, dueDate });
     showToast('Task updated', 'success');
   } else {
-    addInstallTask({ projectId, system, title, assigneeId, isMilestone, startDate, endDate });
+    addInstallTask({ projectId, system, title, assigneeIds, isMilestone, dueDate });
     showToast('Task added', 'success');
   }
   document.getElementById('task-dialog')?.remove();
   renderCurrentPage();
 }
 
-// Subtask create/edit dialog
+// Subtask create/edit dialog — multi-assignee, with notes/detail field
 function openSubtaskDialog(taskId, subtaskId) {
   const t = getInstallTaskById(taskId);
   if (!t) return;
@@ -5941,6 +6222,7 @@ function openSubtaskDialog(taskId, subtaskId) {
   const crewIds = [...new Set([...(crew.install || []).map(x => x.id), ...(crew.pm || []).map(x => x.id)])];
   const pool = crewIds.map(id => getTeamMember(id)).filter(Boolean);
   const assignPool = pool.length ? pool : (state.team || []);
+  const selectedIds = existing && Array.isArray(existing.assigneeIds) ? existing.assigneeIds : [];
 
   document.getElementById('subtask-dialog')?.remove();
   const overlay = document.createElement('div');
@@ -5949,26 +6231,35 @@ function openSubtaskDialog(taskId, subtaskId) {
   overlay.style.zIndex = '10001';
   overlay.onclick = (e) => { if (e.target === overlay) overlay.remove(); };
   overlay.innerHTML = `
-    <div class="modal-container" style="max-width:420px">
+    <div class="modal-container" style="max-width:460px;max-height:85vh;display:flex;flex-direction:column">
       <div class="modal-header">
         <div class="modal-title">${existing ? 'Edit Step' : 'Add Day / Step'}</div>
         <button class="modal-close" onclick="document.getElementById('subtask-dialog')?.remove()">&times;</button>
       </div>
-      <div class="modal-body" style="display:flex;flex-direction:column;gap:14px">
+      <div class="modal-body" style="display:flex;flex-direction:column;gap:14px;overflow-y:auto">
         <div>
           <label class="form-label">What happens this day</label>
           <input id="sub-title" class="form-input" type="text" value="${existing ? esc(existing.title) : ''}" placeholder="e.g. Pull cable, Hang speakers">
         </div>
         <div>
           <label class="form-label">Day</label>
-          <input id="sub-date" class="form-input" type="date" value="${existing && existing.date ? existing.date : (t.startDate || '')}">
+          <input id="sub-date" class="form-input" type="date" value="${existing && existing.date ? existing.date : ''}">
         </div>
         <div>
-          <label class="form-label">Assignee</label>
-          <select id="sub-assignee" class="form-input">
-            <option value="">— Same as task —</option>
-            ${assignPool.map(m => `<option value="${m.id}" ${existing && existing.assigneeId === m.id ? 'selected' : ''}>${esc(m.name)}</option>`).join('')}
-          </select>
+          <label class="form-label">Assignees</label>
+          <div class="itask-assignee-pick">
+            ${assignPool.map(m => `
+              <label class="itask-assignee-chip">
+                <input type="checkbox" class="sub-assignee-cb" value="${m.id}" ${selectedIds.includes(m.id) ? 'checked' : ''}>
+                <span>${esc(m.name)}</span>
+              </label>
+            `).join('')}
+          </div>
+          <div style="font-size:11px;color:#6E7681;margin-top:6px">Multiple people can be on the same step. Anyone assigned is auto-added to the project crew.</div>
+        </div>
+        <div>
+          <label class="form-label">Detail / steps within this</label>
+          <textarea id="sub-notes" class="form-input" rows="5" placeholder="e.g. layout on ground, attach shackles, rig bumper, check angles, functional test PA">${existing ? esc(existing.notes || '') : ''}</textarea>
         </div>
         <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:4px">
           <button class="btn" onclick="document.getElementById('subtask-dialog')?.remove()">Cancel</button>
@@ -5983,12 +6274,13 @@ function openSubtaskDialog(taskId, subtaskId) {
 function _saveSubtaskDialog(taskId, subtaskId) {
   const title = document.getElementById('sub-title').value.trim();
   const date = document.getElementById('sub-date').value || null;
-  const assigneeId = document.getElementById('sub-assignee').value ? parseInt(document.getElementById('sub-assignee').value, 10) : null;
+  const assigneeIds = Array.from(document.querySelectorAll('.sub-assignee-cb:checked')).map(cb => parseInt(cb.value, 10));
+  const notes = document.getElementById('sub-notes').value.trim();
   if (!title) { showToast('Step needs a title', 'info'); return; }
   if (subtaskId != null) {
-    updateSubtask(taskId, subtaskId, { title, date, assigneeId });
+    updateSubtask(taskId, subtaskId, { title, date, assigneeIds, notes });
   } else {
-    addSubtask(taskId, { title, date, assigneeId });
+    addSubtask(taskId, { title, date, assigneeIds, notes });
   }
   document.getElementById('subtask-dialog')?.remove();
   renderCurrentPage();
@@ -6196,9 +6488,34 @@ function renderChecklistTab(container, project, phase) {
   // logistical detail like "out of building by 4pm Wed" set during install window pick.
   const schedNotesHTML = (phase === 'install') ? renderSchedulingNotesCard(project) : '';
 
+  // Install checklists were retired — the new unified Install Tasks system on
+  // the Overview tab replaces them. Show a redirect notice on the Install tab.
+  if (phase === 'install') {
+    const tasks = getTasksForProject(project.id);
+    const seededKeys = getSeededSystemKeysForProject(project.id);
+    const projectSystems = getProjectSystemKeys(project);
+    const seedable = projectSystems.filter(sk => !seededKeys.includes(sk) && getInstallTaskTemplate(sk));
+    container.innerHTML = schedNotesHTML + subtasksHTML + `
+      <div class="dashboard-card" style="margin-bottom:14px">
+        <div class="dashboard-card-title">Install Tasks</div>
+        <div style="font-size:13px;color:#C9D1D9;line-height:1.5;margin-bottom:10px">
+          Install checklists have moved to the unified <strong>Install Tasks</strong> system on the project Overview tab.
+          Tasks are organized by system, broken into day-pinned steps, and can be assigned to multiple people.
+        </div>
+        ${tasks.length > 0
+          ? `<div style="font-size:12px;color:#8B949E;margin-bottom:10px">This project has ${tasks.length} task${tasks.length === 1 ? '' : 's'} (${tasks.filter(t => t.templateKey).length} from templates).</div>`
+          : seedable.length > 0
+            ? `<div style="font-size:12px;color:#D29922;margin-bottom:10px">⚠ Standard tasks haven't been seeded yet for: ${seedable.map(k => getInstallTaskTemplate(k).label).join(', ')}</div>`
+            : ''}
+        <button class="btn-primary" style="font-size:12px;padding:8px 14px" onclick="state.projectTab='overview';renderCurrentPage();setTimeout(()=>{const el=document.querySelector('.dashboard-card-title');if(el)el.scrollIntoView({behavior:'smooth',block:'start'})},50)">Open Install Tasks on Overview</button>
+      </div>
+    `;
+    return;
+  }
+
   const systems = project.systems.filter(s => TEMPLATES[phase]?.[s]);
   if (systems.length === 0) {
-    container.innerHTML = schedNotesHTML + subtasksHTML + `<div class="empty-state"><span class="empty-icon">${phase === 'design' ? '📐' : '🔧'}</span>No ${phase} checklists — scope tags haven't been detected for this project.<br><br><span style="font-size:11px;color:#6E7681">Checklists auto-generate from scope tags: LED Wall, PA/Audio, Lighting, Control, Streaming, Camera</span></div>`;
+    container.innerHTML = schedNotesHTML + subtasksHTML + `<div class="empty-state"><span class="empty-icon">📐</span>No design checklists — scope tags haven't been detected for this project.<br><br><span style="font-size:11px;color:#6E7681">Checklists auto-generate from scope tags: LED Wall, PA/Audio, Lighting, Control, Streaming, Camera</span></div>`;
     return;
   }
   container.innerHTML = schedNotesHTML + subtasksHTML + systems.map(sys => {
@@ -13213,6 +13530,7 @@ function renderAdmin(c) {
     const pending = getPendingSuggestions().length;
     tabs.push({ key: 'templates', label: 'Template Suggestions', badge: pending });
   }
+  if (canReviewTemplates || isMasterAdmin) tabs.push({ key: 'tasktemplates', label: 'Install Task Templates' });
   let adminTab = state.adminTab || tabs[0]?.key || 'users';
   // Guard: fall back if user can't see selected tab
   if (!tabs.find(t => t.key === adminTab)) adminTab = tabs[0]?.key;
@@ -13238,6 +13556,7 @@ function renderAdmin(c) {
       ${adminTab === 'users' ? renderAdminUsers(activeMemberId, canEditAnyUser, canAssignPerms, isMasterAdmin)
         : adminTab === 'bundles' ? renderAdminBundles(isMasterAdmin)
         : adminTab === 'templates' ? renderAdminTemplateSuggestions()
+        : adminTab === 'tasktemplates' ? renderAdminTaskTemplates()
         : ''}
     </div>
   `;
@@ -13313,6 +13632,137 @@ function renderAdminTemplateSuggestions() {
       </div>
     ` : ''}
   `;
+}
+
+// ── Install Task Template management (Admin) ──
+function renderAdminTaskTemplates() {
+  const templates = getAllInstallTaskTemplates();
+  const usedKeys = new Set(templates.map(t => t.systemKey));
+  // Suggest systemKey options the user might want to add a template for
+  const knownSystems = ['led_wall', 'pa_install', 'lighting', 'control', 'streaming', 'camera'];
+  const missingKeys = knownSystems.filter(k => !usedKeys.has(k));
+
+  return `
+    <div class="alert alert-info" style="margin-bottom:14px;font-size:12px">
+      <svg width="14" height="14" viewBox="0 0 16 16" fill="none"><circle cx="8" cy="8" r="6" stroke="currentColor" stroke-width="1.2"/><path d="M8 5v3M8 10v.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
+      <span>Each template defines a master install task and its default subtasks for a system. When you press <strong>Seed from scope</strong> on a project, the system creates these tasks from any matching scope tags. Editing a template only affects future seedings — existing project tasks are untouched.</span>
+    </div>
+
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
+      <div style="font-size:13px;color:#C9D1D9">${templates.length} template${templates.length === 1 ? '' : 's'}</div>
+      <button class="btn-primary" style="font-size:12px;padding:6px 12px" onclick="openTaskTemplateDialog(null)">+ New Template</button>
+    </div>
+
+    ${templates.length === 0 ? `
+      <div style="font-size:12px;color:#6E7681;font-style:italic;padding:14px;background:#0D1117;border:1px solid #1C2333;border-radius:6px;text-align:center">No templates yet. Add one to start seeding standard tasks from scope.</div>
+    ` : `
+      <div style="display:flex;flex-direction:column;gap:8px">
+        ${templates.map(t => `
+          <div style="padding:12px 14px;background:#0D1117;border:1px solid #1C2333;border-radius:6px;cursor:pointer" onclick="openTaskTemplateDialog('${esc(t.systemKey)}')">
+            <div style="display:flex;align-items:center;justify-content:space-between;gap:12px">
+              <div style="flex:1;min-width:0">
+                <div style="font-size:14px;font-weight:600;color:#E6EDF3">${esc(t.label)}</div>
+                <div style="font-size:11px;color:#8B949E;margin-top:2px">key: <code style="color:#58A6FF">${esc(t.systemKey)}</code> · ${(t.subtasks || []).length} subtask${(t.subtasks || []).length === 1 ? '' : 's'}</div>
+              </div>
+              <span style="font-size:18px;color:#6E7681">›</span>
+            </div>
+          </div>
+        `).join('')}
+      </div>
+    `}
+
+    ${missingKeys.length > 0 ? `
+      <div style="margin-top:14px;font-size:11px;color:#6E7681">Common keys not yet defined: ${missingKeys.map(k => `<code style="color:#58A6FF">${esc(k)}</code>`).join(', ')}</div>
+    ` : ''}
+  `;
+}
+
+function openTaskTemplateDialog(systemKey) {
+  const existing = systemKey ? getInstallTaskTemplate(systemKey) : null;
+  document.getElementById('tasktpl-dialog')?.remove();
+  const overlay = document.createElement('div');
+  overlay.id = 'tasktpl-dialog';
+  overlay.className = 'modal-overlay';
+  overlay.onclick = (e) => { if (e.target === overlay) overlay.remove(); };
+  // Working copy held on the dialog for additions/removals before save
+  window._tasktplEdit = existing
+    ? { systemKey: existing.systemKey, label: existing.label, subtasks: existing.subtasks.map(s => ({ title: s.title, notes: s.notes || '' })) }
+    : { systemKey: '', label: '', subtasks: [] };
+  overlay.innerHTML = _renderTaskTemplateDialogContent();
+  document.body.appendChild(overlay);
+}
+
+function _renderTaskTemplateDialogContent() {
+  const w = window._tasktplEdit || { systemKey: '', label: '', subtasks: [] };
+  const isExisting = !!getInstallTaskTemplate(w.systemKey);
+  return `
+    <div class="modal-container" style="max-width:560px;max-height:88vh;display:flex;flex-direction:column">
+      <div class="modal-header">
+        <div class="modal-title">${isExisting ? 'Edit Template' : 'New Install Task Template'}</div>
+        <button class="modal-close" onclick="document.getElementById('tasktpl-dialog')?.remove()">&times;</button>
+      </div>
+      <div class="modal-body" style="display:flex;flex-direction:column;gap:14px;overflow-y:auto">
+        <div>
+          <label class="form-label">System key (matches scope tag mapping)</label>
+          <input id="tpl-key" class="form-input" type="text" value="${esc(w.systemKey)}" placeholder="e.g. pa_install, led_wall" ${isExisting ? 'readonly' : ''} oninput="window._tasktplEdit.systemKey=this.value.trim()">
+          <div style="font-size:10px;color:#6E7681;margin-top:4px">Use a short snake_case key. Existing scope tags map: PA System→pa_install, LED Wall→led_wall, Key/House Lights→lighting, Control (*)→control, Broadcast/Streaming→streaming, Camera→camera.</div>
+        </div>
+        <div>
+          <label class="form-label">Master task label</label>
+          <input id="tpl-label" class="form-input" type="text" value="${esc(w.label)}" placeholder="e.g. PA System Install" oninput="window._tasktplEdit.label=this.value">
+        </div>
+        <div>
+          <label class="form-label">Default subtasks (created when seeding)</label>
+          <div style="display:flex;flex-direction:column;gap:6px">
+            ${w.subtasks.map((s, i) => `
+              <div style="display:flex;align-items:center;gap:8px;padding:6px 8px;background:#0D1117;border:1px solid #1C2333;border-radius:5px">
+                <span style="font-size:11px;color:#6E7681;width:18px;text-align:right">${i + 1}.</span>
+                <input class="form-input tpl-sub-title" type="text" value="${esc(s.title)}" style="flex:1;font-size:12px;padding:4px 6px" oninput="window._tasktplEdit.subtasks[${i}].title=this.value">
+                <span style="cursor:pointer;color:#6E7681;font-size:16px;padding:0 4px" onclick="window._tasktplEdit.subtasks.splice(${i},1);document.getElementById('tasktpl-dialog').querySelector('.modal-container').outerHTML=_renderTaskTemplateDialogContent()">×</span>
+              </div>
+            `).join('')}
+          </div>
+          <button class="btn btn-sm" style="margin-top:8px;font-size:11px;padding:5px 10px" onclick="window._tasktplEdit.subtasks.push({title:'',notes:''});document.getElementById('tasktpl-dialog').querySelector('.modal-container').outerHTML=_renderTaskTemplateDialogContent()">+ Add subtask</button>
+        </div>
+        <div style="display:flex;gap:8px;justify-content:space-between;align-items:center;margin-top:4px">
+          <div>
+            ${isExisting ? `<button class="btn" style="color:#F85149;border-color:#5A2424" onclick="if(confirm('Delete this template? Existing project tasks are NOT affected.'))_deleteTaskTemplate('${esc(w.systemKey)}')">Delete</button>` : ''}
+          </div>
+          <div style="display:flex;gap:8px">
+            <button class="btn" onclick="document.getElementById('tasktpl-dialog')?.remove()">Cancel</button>
+            <button class="btn-primary" onclick="_saveTaskTemplateDialog()">${isExisting ? 'Save' : 'Add Template'}</button>
+          </div>
+        </div>
+      </div>
+    </div>
+  `;
+}
+
+function _saveTaskTemplateDialog() {
+  const w = window._tasktplEdit;
+  if (!w.systemKey || !/^[a-z][a-z0-9_]*$/.test(w.systemKey)) {
+    showToast('System key must be lowercase letters/numbers/underscores (e.g. pa_install)', 'info');
+    return;
+  }
+  if (!w.label || !w.label.trim()) {
+    showToast('Template needs a label', 'info');
+    return;
+  }
+  // Strip empty subtasks
+  const cleaned = (w.subtasks || []).filter(s => s.title && s.title.trim());
+  upsertInstallTaskTemplate(w.systemKey, { label: w.label.trim(), subtasks: cleaned });
+  document.getElementById('tasktpl-dialog')?.remove();
+  window._tasktplEdit = null;
+  showToast('Template saved', 'success');
+  renderCurrentPage();
+}
+
+function _deleteTaskTemplate(systemKey) {
+  deleteInstallTaskTemplate(systemKey);
+  document.getElementById('tasktpl-dialog')?.remove();
+  window._tasktplEdit = null;
+  showToast('Template deleted', 'info');
+  renderCurrentPage();
 }
 
 function canManageUser(targetMemberId) {
@@ -14427,6 +14877,8 @@ async function init() {
     }
   } catch(e) { console.warn('Cache load failed:', e); }
   applyTextSize(state.textSize);
+  _migrateInstallTaskShape();
+  _migrateInstallTaskTemplates();
   try {
     renderCurrentPage();
   } catch (e) {
