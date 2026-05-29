@@ -370,6 +370,7 @@ const state = {
   meetings: JSON.parse(localStorage.getItem('vi_meetings') || '[]'),
   meetingApprovals: JSON.parse(localStorage.getItem('vi_meeting_approvals') || '{}'),
   installChangeRequests: JSON.parse(localStorage.getItem('vi_install_change_requests') || '{}'),
+  installTasks: JSON.parse(localStorage.getItem('vi_install_tasks') || '[]'),
   textSize: localStorage.getItem('vi_text_size') || 'normal',
   personalEvents: JSON.parse(localStorage.getItem('vi_personal_events') || '[]'),
   userLayouts: JSON.parse(localStorage.getItem('vi_user_layouts') || '{}'),
@@ -1164,6 +1165,134 @@ function getInstallChangesAwaitingMyApproval() {
     if (canApproveInstallChange(pid)) {
       const req = state.installChangeRequests[pidStr];
       if (req) out.push(req);
+    }
+  });
+  return out;
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+// INSTALL TASKS (foundation — model + project-page planning)
+// ────────────────────────────────────────────────────────────────────────────
+// A task belongs to a job (projectId) OR shop work (shopWork:true). It may be
+// assigned to a system (scope tag) and carries either an assignee (work task)
+// or no assignee with a due date (milestone reminder). A main task can span
+// days (startDate..endDate); subtasks are pinned to specific days within it.
+//
+// Shape: {
+//   id, projectId|null, shopWork:bool, system|null, title,
+//   assigneeId|null, isMilestone:bool, startDate, endDate, done:bool,
+//   subtasks: [ { id, title, date, assigneeId|null, done:bool } ],
+//   createdAt
+// }
+// ════════════════════════════════════════════════════════════════════════════
+
+function _nextTaskId() {
+  const all = state.installTasks || [];
+  let max = 0;
+  all.forEach(t => { if (t.id > max) max = t.id; (t.subtasks || []).forEach(s => { if (s.id > max) max = s.id; }); });
+  return max + 1;
+}
+
+function getTasksForProject(projectId) {
+  return (state.installTasks || []).filter(t => t.projectId === projectId);
+}
+function getShopWorkTasks() {
+  return (state.installTasks || []).filter(t => t.shopWork);
+}
+function getInstallTaskById(taskId) {
+  return (state.installTasks || []).find(t => t.id === taskId) || null;
+}
+
+function addInstallTask({ projectId, shopWork, system, title, assigneeId, isMilestone, startDate, endDate }) {
+  if (!state.installTasks) state.installTasks = [];
+  const task = {
+    id: _nextTaskId(),
+    projectId: projectId != null ? projectId : null,
+    shopWork: !!shopWork,
+    system: system || null,
+    title: title || 'Task',
+    assigneeId: isMilestone ? null : (assigneeId != null ? assigneeId : null),
+    isMilestone: !!isMilestone,
+    startDate: startDate || null,
+    endDate: endDate || startDate || null,
+    done: false,
+    subtasks: [],
+    createdAt: new Date().toISOString()
+  };
+  state.installTasks.push(task);
+  save('vi_install_tasks', state.installTasks);
+  return task;
+}
+
+function updateInstallTask(taskId, patch) {
+  const t = getInstallTaskById(taskId);
+  if (!t) return;
+  Object.assign(t, patch);
+  if (t.isMilestone) t.assigneeId = null;
+  save('vi_install_tasks', state.installTasks);
+}
+
+function deleteInstallTask(taskId) {
+  state.installTasks = (state.installTasks || []).filter(t => t.id !== taskId);
+  save('vi_install_tasks', state.installTasks);
+}
+
+function toggleInstallTaskDone(taskId) {
+  const t = getInstallTaskById(taskId);
+  if (!t) return;
+  t.done = !t.done;
+  save('vi_install_tasks', state.installTasks);
+}
+
+function addSubtask(taskId, { title, date, assigneeId }) {
+  const t = getInstallTaskById(taskId);
+  if (!t) return;
+  if (!t.subtasks) t.subtasks = [];
+  t.subtasks.push({
+    id: _nextTaskId(),
+    title: title || 'Subtask',
+    date: date || null,
+    assigneeId: assigneeId != null ? assigneeId : null,
+    done: false
+  });
+  save('vi_install_tasks', state.installTasks);
+}
+
+function updateSubtask(taskId, subtaskId, patch) {
+  const t = getInstallTaskById(taskId);
+  if (!t) return;
+  const s = (t.subtasks || []).find(x => x.id === subtaskId);
+  if (!s) return;
+  Object.assign(s, patch);
+  save('vi_install_tasks', state.installTasks);
+}
+
+function deleteSubtask(taskId, subtaskId) {
+  const t = getInstallTaskById(taskId);
+  if (!t) return;
+  t.subtasks = (t.subtasks || []).filter(x => x.id !== subtaskId);
+  save('vi_install_tasks', state.installTasks);
+}
+
+function toggleSubtaskDone(taskId, subtaskId) {
+  const t = getInstallTaskById(taskId);
+  if (!t) return;
+  const s = (t.subtasks || []).find(x => x.id === subtaskId);
+  if (!s) return;
+  s.done = !s.done;
+  save('vi_install_tasks', state.installTasks);
+}
+
+// Tasks (and subtasks) that fall on a given date — used by calendar surfacing.
+function getInstallTasksForDate(dateStr, projectId) {
+  const out = [];
+  (state.installTasks || []).forEach(t => {
+    if (projectId != null && t.projectId !== projectId) return;
+    (t.subtasks || []).forEach(s => { if (s.date === dateStr) out.push({ task: t, subtask: s }); });
+    // A main task with no subtasks but a date range covering this day
+    if ((!t.subtasks || t.subtasks.length === 0) && t.startDate) {
+      const end = t.endDate || t.startDate;
+      if (dateStr >= t.startDate && dateStr <= end) out.push({ task: t, subtask: null });
     }
   });
   return out;
@@ -5583,6 +5712,8 @@ function renderProjectOverviewHTML(p) {
     })()}
 
     ${renderProjectMeetingsSection(p)}
+
+    ${renderProjectTasksSection(p)}
   `;
 }
 
@@ -5642,6 +5773,225 @@ function renderProjectMeetingsSection(p) {
       `}
     </div>
   `;
+}
+
+// ── Project Install Tasks planning section ──
+function renderProjectTasksSection(p) {
+  const tasks = getTasksForProject(p.id).slice().sort((a, b) => (a.startDate || '').localeCompare(b.startDate || ''));
+
+  function subtaskRow(t, s) {
+    const who = s.assigneeId != null ? getTeamMember(s.assigneeId) : null;
+    return `
+      <div class="itask-sub${s.done ? ' is-done' : ''}">
+        <span class="itask-check" onclick="event.stopPropagation();toggleSubtaskDone(${t.id},${s.id});renderCurrentPage()">${s.done ? '✓' : ''}</span>
+        <div class="itask-sub-body" onclick="openSubtaskDialog(${t.id},${s.id})">
+          <span class="itask-sub-title">${esc(s.title)}</span>
+          <span class="itask-sub-meta">${s.date ? esc(fmtDate(s.date)) : 'No date'}${who ? ` · ${esc(who.name.split(' ')[0])}` : ''}</span>
+        </div>
+        <span class="itask-del" onclick="event.stopPropagation();if(confirm('Delete this subtask?')){deleteSubtask(${t.id},${s.id});renderCurrentPage();}">×</span>
+      </div>
+    `;
+  }
+
+  function taskCard(t) {
+    const assignee = t.assigneeId != null ? getTeamMember(t.assigneeId) : null;
+    const sys = t.system ? `<span class="itask-sys">${esc(t.system)}</span>` : '';
+    const dateLabel = t.startDate
+      ? (t.endDate && t.endDate !== t.startDate ? fmtDateRange(t.startDate, t.endDate) : fmtDate(t.startDate))
+      : 'No date';
+    const subDone = (t.subtasks || []).filter(s => s.done).length;
+    const subTotal = (t.subtasks || []).length;
+    return `
+      <div class="itask-card${t.done ? ' is-done' : ''}">
+        <div class="itask-head">
+          <span class="itask-check itask-check-main" onclick="event.stopPropagation();toggleInstallTaskDone(${t.id});renderCurrentPage()">${t.done ? '✓' : ''}</span>
+          <div class="itask-head-body" onclick="openTaskDialog(${p.id},${t.id})">
+            <div class="itask-title">${t.isMilestone ? '🚩 ' : ''}${esc(t.title)} ${sys}</div>
+            <div class="itask-meta">
+              ${esc(dateLabel)}
+              ${t.isMilestone ? ' · Milestone' : (assignee ? ` · ${esc(assignee.name.split(' ')[0])}` : ' · Unassigned')}
+              ${subTotal > 0 ? ` · ${subDone}/${subTotal} steps` : ''}
+            </div>
+          </div>
+          <span class="itask-del" onclick="event.stopPropagation();if(confirm('Delete this task and its subtasks?')){deleteInstallTask(${t.id});renderCurrentPage();}">×</span>
+        </div>
+        ${subTotal > 0 ? `<div class="itask-subs">${t.subtasks.slice().sort((a,b)=>(a.date||'').localeCompare(b.date||'')).map(s => subtaskRow(t, s)).join('')}</div>` : ''}
+        ${!t.isMilestone ? `<button class="itask-add-sub" onclick="openSubtaskDialog(${t.id},null)">+ Add day / step</button>` : ''}
+      </div>
+    `;
+  }
+
+  return `
+    <div class="dashboard-card" style="margin-bottom:14px">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px">
+        <div style="font-size:11px;font-weight:600;color:#6E7681;text-transform:uppercase;letter-spacing:0.08em">Install Tasks</div>
+        <button class="btn btn-sm" style="font-size:11px;padding:6px 12px" onclick="openTaskDialog(${p.id},null)">+ Add Task</button>
+      </div>
+      ${tasks.length === 0
+        ? `<div style="font-size:12px;color:#6E7681;font-style:italic;padding:4px 0">No install tasks yet. Add a task to break the job into work items by system and day.</div>`
+        : tasks.map(taskCard).join('')}
+    </div>
+  `;
+}
+
+// Task create/edit dialog
+function openTaskDialog(projectId, taskId) {
+  const existing = taskId != null ? getInstallTaskById(taskId) : null;
+  const p = state.projects.find(x => x.id === projectId);
+  // Systems available = project scope tags, fallback to all SCOPE_TAGS
+  const projTags = (p && Array.isArray(p.scope_tags) && p.scope_tags.length) ? p.scope_tags : SCOPE_TAGS;
+  const crew = getProjectAssignment(projectId);
+  const crewIds = [...new Set([...(crew.install || []).map(x => x.id), ...(crew.pm || []).map(x => x.id)])];
+  const crewMembers = crewIds.map(id => getTeamMember(id)).filter(Boolean);
+  const allMembers = state.team || [];
+  const assignPool = crewMembers.length ? crewMembers : allMembers;
+
+  document.getElementById('task-dialog')?.remove();
+  const overlay = document.createElement('div');
+  overlay.id = 'task-dialog';
+  overlay.className = 'modal-overlay';
+  overlay.onclick = (e) => { if (e.target === overlay) overlay.remove(); };
+  const isMile = existing ? existing.isMilestone : false;
+  overlay.innerHTML = `
+    <div class="modal-container" style="max-width:460px">
+      <div class="modal-header">
+        <div class="modal-title">${existing ? 'Edit Task' : 'New Install Task'}</div>
+        <button class="modal-close" onclick="document.getElementById('task-dialog')?.remove()">&times;</button>
+      </div>
+      <div class="modal-body" style="display:flex;flex-direction:column;gap:14px">
+        <div>
+          <label class="form-label">Task title</label>
+          <input id="task-title" class="form-input" type="text" value="${existing ? esc(existing.title) : ''}" placeholder="e.g. Sound System install">
+        </div>
+        <div>
+          <label class="form-label">System</label>
+          <select id="task-system" class="form-input">
+            <option value="">— None —</option>
+            ${projTags.map(tag => `<option value="${esc(tag)}" ${existing && existing.system === tag ? 'selected' : ''}>${esc(tag)}</option>`).join('')}
+          </select>
+        </div>
+        <div style="display:flex;gap:10px;align-items:center">
+          <label style="display:flex;align-items:center;gap:6px;font-size:13px;color:#C9D1D9;cursor:pointer">
+            <input type="checkbox" id="task-milestone" ${isMile ? 'checked' : ''} onchange="_taskDialogToggleMilestone()">
+            Milestone (project reminder, no assignee)
+          </label>
+        </div>
+        <div id="task-assignee-wrap" style="${isMile ? 'display:none' : ''}">
+          <label class="form-label">Assignee <span style="color:#F85149">*</span></label>
+          <select id="task-assignee" class="form-input">
+            <option value="">— Select —</option>
+            ${assignPool.map(m => `<option value="${m.id}" ${existing && existing.assigneeId === m.id ? 'selected' : ''}>${esc(m.name)}</option>`).join('')}
+          </select>
+        </div>
+        <div style="display:flex;gap:10px">
+          <div style="flex:1">
+            <label class="form-label">${isMile ? 'Due date' : 'Start date'}</label>
+            <input id="task-start" class="form-input" type="date" value="${existing && existing.startDate ? existing.startDate : ''}">
+          </div>
+          <div style="flex:1${isMile ? ';display:none' : ''}" id="task-end-wrap">
+            <label class="form-label">End date</label>
+            <input id="task-end" class="form-input" type="date" value="${existing && existing.endDate ? existing.endDate : ''}">
+          </div>
+        </div>
+        <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:4px">
+          <button class="btn" onclick="document.getElementById('task-dialog')?.remove()">Cancel</button>
+          <button class="btn-primary" onclick="_saveTaskDialog(${projectId},${taskId != null ? taskId : 'null'})">${existing ? 'Save' : 'Add Task'}</button>
+        </div>
+      </div>
+    </div>
+  `;
+  document.body.appendChild(overlay);
+}
+
+function _taskDialogToggleMilestone() {
+  const isMile = document.getElementById('task-milestone').checked;
+  document.getElementById('task-assignee-wrap').style.display = isMile ? 'none' : '';
+  document.getElementById('task-end-wrap').style.display = isMile ? 'none' : '';
+}
+
+function _saveTaskDialog(projectId, taskId) {
+  const title = document.getElementById('task-title').value.trim();
+  const system = document.getElementById('task-system').value || null;
+  const isMilestone = document.getElementById('task-milestone').checked;
+  const assigneeId = isMilestone ? null : (document.getElementById('task-assignee').value ? parseInt(document.getElementById('task-assignee').value, 10) : null);
+  const startDate = document.getElementById('task-start').value || null;
+  const endDate = isMilestone ? startDate : (document.getElementById('task-end').value || startDate);
+
+  if (!title) { showToast('Task needs a title', 'info'); return; }
+  if (!isMilestone && assigneeId == null) { showToast('Assign the task, or mark it a milestone', 'info'); return; }
+
+  if (taskId != null) {
+    updateInstallTask(taskId, { title, system, isMilestone, assigneeId, startDate, endDate });
+    showToast('Task updated', 'success');
+  } else {
+    addInstallTask({ projectId, system, title, assigneeId, isMilestone, startDate, endDate });
+    showToast('Task added', 'success');
+  }
+  document.getElementById('task-dialog')?.remove();
+  renderCurrentPage();
+}
+
+// Subtask create/edit dialog
+function openSubtaskDialog(taskId, subtaskId) {
+  const t = getInstallTaskById(taskId);
+  if (!t) return;
+  const existing = subtaskId != null ? (t.subtasks || []).find(s => s.id === subtaskId) : null;
+  const projId = t.projectId;
+  const crew = projId != null ? getProjectAssignment(projId) : { install: [], pm: [] };
+  const crewIds = [...new Set([...(crew.install || []).map(x => x.id), ...(crew.pm || []).map(x => x.id)])];
+  const pool = crewIds.map(id => getTeamMember(id)).filter(Boolean);
+  const assignPool = pool.length ? pool : (state.team || []);
+
+  document.getElementById('subtask-dialog')?.remove();
+  const overlay = document.createElement('div');
+  overlay.id = 'subtask-dialog';
+  overlay.className = 'modal-overlay';
+  overlay.style.zIndex = '10001';
+  overlay.onclick = (e) => { if (e.target === overlay) overlay.remove(); };
+  overlay.innerHTML = `
+    <div class="modal-container" style="max-width:420px">
+      <div class="modal-header">
+        <div class="modal-title">${existing ? 'Edit Step' : 'Add Day / Step'}</div>
+        <button class="modal-close" onclick="document.getElementById('subtask-dialog')?.remove()">&times;</button>
+      </div>
+      <div class="modal-body" style="display:flex;flex-direction:column;gap:14px">
+        <div>
+          <label class="form-label">What happens this day</label>
+          <input id="sub-title" class="form-input" type="text" value="${existing ? esc(existing.title) : ''}" placeholder="e.g. Pull cable, Hang speakers">
+        </div>
+        <div>
+          <label class="form-label">Day</label>
+          <input id="sub-date" class="form-input" type="date" value="${existing && existing.date ? existing.date : (t.startDate || '')}">
+        </div>
+        <div>
+          <label class="form-label">Assignee</label>
+          <select id="sub-assignee" class="form-input">
+            <option value="">— Same as task —</option>
+            ${assignPool.map(m => `<option value="${m.id}" ${existing && existing.assigneeId === m.id ? 'selected' : ''}>${esc(m.name)}</option>`).join('')}
+          </select>
+        </div>
+        <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:4px">
+          <button class="btn" onclick="document.getElementById('subtask-dialog')?.remove()">Cancel</button>
+          <button class="btn-primary" onclick="_saveSubtaskDialog(${taskId},${subtaskId != null ? subtaskId : 'null'})">${existing ? 'Save' : 'Add'}</button>
+        </div>
+      </div>
+    </div>
+  `;
+  document.body.appendChild(overlay);
+}
+
+function _saveSubtaskDialog(taskId, subtaskId) {
+  const title = document.getElementById('sub-title').value.trim();
+  const date = document.getElementById('sub-date').value || null;
+  const assigneeId = document.getElementById('sub-assignee').value ? parseInt(document.getElementById('sub-assignee').value, 10) : null;
+  if (!title) { showToast('Step needs a title', 'info'); return; }
+  if (subtaskId != null) {
+    updateSubtask(taskId, subtaskId, { title, date, assigneeId });
+  } else {
+    addSubtask(taskId, { title, date, assigneeId });
+  }
+  document.getElementById('subtask-dialog')?.remove();
+  renderCurrentPage();
 }
 
 // ── Project Team Assignment dialog (Pass 3B) ──
