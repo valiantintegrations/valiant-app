@@ -5942,11 +5942,54 @@ function renderProjectOverviewHTML(p) {
 
     ${renderProjectMeetingsSection(p)}
 
-    ${renderProjectTasksSection(p)}
+    ${renderProjectScopeSection(p)}
   `;
 }
 
 // Per-project meetings list (Calendar Round 4). Lives on the Overview tab.
+// Project Scope editor — minimal version that lets you toggle which scope
+// tags apply. Scope tags drive Install Task seeding. The full scope/Quote
+// Builder is a future build (see Dev Status long-range vision); this is the
+// minimum needed for tags to flow into install tasks.
+function renderProjectScopeSection(p) {
+  const current = Array.isArray(p.scope_tags) ? p.scope_tags : [];
+  const detected = Array.isArray(p.systems) ? p.systems : [];
+  return `
+    <div class="dashboard-card" style="margin-bottom:14px">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px">
+        <div style="font-size:11px;font-weight:600;color:#6E7681;text-transform:uppercase;letter-spacing:0.08em">Project Scope</div>
+        <div style="font-size:10px;color:#6E7681">${current.length} selected</div>
+      </div>
+      <div style="font-size:12px;color:#8B949E;margin-bottom:10px">Scope tags drive what install task templates can seed on this project's Install tab. Toggle the systems being delivered.</div>
+      <div class="scope-chip-row">
+        ${SCOPE_TAGS.map(tag => {
+          const selected = current.includes(tag);
+          return `<label class="scope-chip${selected ? ' is-selected' : ''}">
+            <input type="checkbox" ${selected ? 'checked' : ''} onchange="_toggleProjectScopeTag(${p.id},'${esc(tag).replace(/'/g, "\\'")}',this.checked)">
+            <span>${esc(tag)}</span>
+          </label>`;
+        }).join('')}
+      </div>
+      ${detected.length > 0 ? `
+        <div style="font-size:11px;color:#6E7681;margin-top:10px">Auto-detected from scope text: ${detected.join(', ')}</div>
+      ` : ''}
+    </div>
+  `;
+}
+
+function _toggleProjectScopeTag(projectId, tag, on) {
+  const p = state.projects.find(x => x.id === projectId);
+  if (!p) return;
+  if (!Array.isArray(p.scope_tags)) p.scope_tags = [];
+  if (on) {
+    if (!p.scope_tags.includes(tag)) p.scope_tags.push(tag);
+  } else {
+    p.scope_tags = p.scope_tags.filter(t => t !== tag);
+  }
+  save('vi_projects', state.projects);
+  renderCurrentPage();
+}
+
 function renderProjectMeetingsSection(p) {
   const meetings = getMeetingsForProject(p.id)
     .slice()
@@ -6121,9 +6164,14 @@ function openTaskDialog(projectId, taskId) {
   const p = state.projects.find(x => x.id === projectId);
   const projTags = (p && Array.isArray(p.scope_tags) && p.scope_tags.length) ? p.scope_tags : SCOPE_TAGS;
   const crew = getProjectAssignment(projectId);
-  const crewIds = [...new Set([...(crew.install || []).map(x => x.id), ...(crew.pm || []).map(x => x.id)])];
-  const crewMembers = crewIds.map(id => getTeamMember(id)).filter(Boolean);
-  const assignPool = crewMembers.length ? crewMembers : (state.team || []);
+  const crewIds = new Set([...(crew.install || []).map(x => x.id), ...(crew.pm || []).map(x => x.id)]);
+  // Show ALL team members, but sort crew-first so the active crew is visible up front.
+  const assignPool = [...(state.team || [])].sort((a, b) => {
+    const aOn = crewIds.has(a.id) ? 0 : 1;
+    const bOn = crewIds.has(b.id) ? 0 : 1;
+    if (aOn !== bOn) return aOn - bOn;
+    return a.name.localeCompare(b.name);
+  });
   const selectedAssignees = existing && Array.isArray(existing.assigneeIds) ? existing.assigneeIds : [];
 
   document.getElementById('task-dialog')?.remove();
@@ -6162,7 +6210,7 @@ function openTaskDialog(projectId, taskId) {
             ${assignPool.map(m => `
               <label class="itask-assignee-chip">
                 <input type="checkbox" class="task-assignee-cb" value="${m.id}" ${selectedAssignees.includes(m.id) ? 'checked' : ''}>
-                <span>${esc(m.name)}</span>
+                <span>${esc(m.name)}${crewIds.has(m.id) ? '' : ' <span style="font-size:9px;color:#D29922">(not on crew)</span>'}</span>
               </label>
             `).join('')}
           </div>
@@ -6212,77 +6260,208 @@ function _saveTaskDialog(projectId, taskId) {
   renderCurrentPage();
 }
 
-// Subtask create/edit dialog — multi-assignee, with notes/detail field
+// Subtask dialog — supports two modes:
+//   Edit (subtaskId != null): a single subtask is edited in place.
+//   Add (subtaskId == null): a multi-row editor where you can stack several
+//     subtasks at once, each with its own date and assignees. Each row becomes
+//     a separate subtask under the parent task.
+// Assignee picker shows every team member, with a "(crew)" mark next to those
+// already on this project's crew. Picking someone not on the crew auto-adds
+// them on save — a note in the dialog tells the user so they're not surprised.
 function openSubtaskDialog(taskId, subtaskId) {
   const t = getInstallTaskById(taskId);
   if (!t) return;
   const existing = subtaskId != null ? (t.subtasks || []).find(s => s.id === subtaskId) : null;
   const projId = t.projectId;
   const crew = projId != null ? getProjectAssignment(projId) : { install: [], pm: [] };
-  const crewIds = [...new Set([...(crew.install || []).map(x => x.id), ...(crew.pm || []).map(x => x.id)])];
-  const pool = crewIds.map(id => getTeamMember(id)).filter(Boolean);
-  const assignPool = pool.length ? pool : (state.team || []);
-  const selectedIds = existing && Array.isArray(existing.assigneeIds) ? existing.assigneeIds : [];
+  const crewIds = new Set([...(crew.install || []).map(x => x.id), ...(crew.pm || []).map(x => x.id)]);
+  const pool = state.team || [];
+  // Sort: crew members first, then everyone else
+  const sortedPool = [...pool].sort((a, b) => {
+    const aOn = crewIds.has(a.id) ? 0 : 1;
+    const bOn = crewIds.has(b.id) ? 0 : 1;
+    if (aOn !== bOn) return aOn - bOn;
+    return a.name.localeCompare(b.name);
+  });
+
+  // Initial rows: editing → one row pre-filled; adding → one blank row
+  window._subDialogState = existing
+    ? {
+        mode: 'edit',
+        taskId,
+        subtaskId,
+        rows: [{
+          title: existing.title || '',
+          date: existing.date || '',
+          assigneeIds: Array.isArray(existing.assigneeIds) ? [...existing.assigneeIds] : [],
+          notes: existing.notes || ''
+        }],
+        pool: sortedPool,
+        crewIds: [...crewIds]
+      }
+    : {
+        mode: 'add',
+        taskId,
+        subtaskId: null,
+        rows: [{ title: '', date: '', assigneeIds: [], notes: '' }],
+        pool: sortedPool,
+        crewIds: [...crewIds]
+      };
 
   document.getElementById('subtask-dialog')?.remove();
   const overlay = document.createElement('div');
   overlay.id = 'subtask-dialog';
   overlay.className = 'modal-overlay';
   overlay.style.zIndex = '10001';
-  overlay.onclick = (e) => { if (e.target === overlay) overlay.remove(); };
-  overlay.innerHTML = `
-    <div class="modal-container" style="max-width:460px;max-height:85vh;display:flex;flex-direction:column">
+  overlay.onclick = (e) => { if (e.target === overlay) { overlay.remove(); window._subDialogState = null; } };
+  overlay.innerHTML = _renderSubDialogContent();
+  document.body.appendChild(overlay);
+}
+
+function _renderSubDialogContent() {
+  const s = window._subDialogState;
+  if (!s) return '';
+  const t = getInstallTaskById(s.taskId);
+  const taskTitle = t ? t.title : 'task';
+  const isEdit = s.mode === 'edit';
+
+  function rowHTML(row, i) {
+    const offCrew = (row.assigneeIds || []).filter(id => !s.crewIds.includes(id));
+    return `
+      <div class="sub-row" data-row="${i}">
+        <div class="sub-row-head">
+          <div style="flex:1;min-width:0">
+            <input type="text" class="form-input sub-row-title" value="${esc(row.title)}" placeholder="e.g. Hang speakers"
+              oninput="window._subDialogState.rows[${i}].title=this.value">
+          </div>
+          ${s.rows.length > 1 ? `<button class="sub-row-remove" onclick="_subRemoveRow(${i})">×</button>` : ''}
+        </div>
+        <div class="sub-row-fields">
+          <div>
+            <label class="form-label form-label-sm">Day</label>
+            <input type="date" class="form-input sub-row-date" value="${esc(row.date || '')}"
+              onchange="window._subDialogState.rows[${i}].date=this.value">
+          </div>
+          <div>
+            <label class="form-label form-label-sm">Assignees</label>
+            <div class="itask-assignee-pick">
+              ${s.pool.map(m => `
+                <label class="itask-assignee-chip">
+                  <input type="checkbox" value="${m.id}" ${(row.assigneeIds || []).includes(m.id) ? 'checked' : ''}
+                    onchange="_subToggleAssignee(${i},${m.id},this.checked)">
+                  <span>${esc(m.name)}${s.crewIds.includes(m.id) ? '' : ' <span style="font-size:9px;color:#D29922">(not on crew)</span>'}</span>
+                </label>
+              `).join('')}
+            </div>
+            ${offCrew.length > 0 ? `<div style="font-size:10px;color:#D29922;margin-top:4px">⚠ ${offCrew.length} assignee${offCrew.length === 1 ? '' : 's'} will be added to the project crew on save.</div>` : ''}
+          </div>
+          <div>
+            <label class="form-label form-label-sm">Detail / inner steps (optional)</label>
+            <textarea class="form-input sub-row-notes" rows="2" placeholder="e.g. layout on ground, check angles, functional test"
+              oninput="window._subDialogState.rows[${i}].notes=this.value">${esc(row.notes || '')}</textarea>
+          </div>
+        </div>
+      </div>
+    `;
+  }
+
+  return `
+    <div class="modal-container" style="max-width:560px;max-height:88vh;display:flex;flex-direction:column">
       <div class="modal-header">
-        <div class="modal-title">${existing ? 'Edit Step' : 'Add Day / Step'}</div>
-        <button class="modal-close" onclick="document.getElementById('subtask-dialog')?.remove()">&times;</button>
+        <div class="modal-title">${isEdit ? 'Edit Step' : 'Add Steps to ' + esc(taskTitle)}</div>
+        <button class="modal-close" onclick="document.getElementById('subtask-dialog')?.remove();window._subDialogState=null">&times;</button>
       </div>
       <div class="modal-body" style="display:flex;flex-direction:column;gap:14px;overflow-y:auto">
-        <div>
-          <label class="form-label">What happens this day</label>
-          <input id="sub-title" class="form-input" type="text" value="${existing ? esc(existing.title) : ''}" placeholder="e.g. Pull cable, Hang speakers">
+        ${!isEdit ? `<div style="font-size:12px;color:#8B949E">Add one or more steps under <strong style="color:#C9D1D9">${esc(taskTitle)}</strong>. Each row becomes its own subtask — separately checkable, on its own day, with its own assignees.</div>` : ''}
+        <div id="sub-rows" style="display:flex;flex-direction:column;gap:14px">
+          ${s.rows.map((r, i) => rowHTML(r, i)).join('')}
         </div>
-        <div>
-          <label class="form-label">Day</label>
-          <input id="sub-date" class="form-input" type="date" value="${existing && existing.date ? existing.date : ''}">
-        </div>
-        <div>
-          <label class="form-label">Assignees</label>
-          <div class="itask-assignee-pick">
-            ${assignPool.map(m => `
-              <label class="itask-assignee-chip">
-                <input type="checkbox" class="sub-assignee-cb" value="${m.id}" ${selectedIds.includes(m.id) ? 'checked' : ''}>
-                <span>${esc(m.name)}</span>
-              </label>
-            `).join('')}
-          </div>
-          <div style="font-size:11px;color:#6E7681;margin-top:6px">Multiple people can be on the same step. Anyone assigned is auto-added to the project crew.</div>
-        </div>
-        <div>
-          <label class="form-label">Detail / steps within this</label>
-          <textarea id="sub-notes" class="form-input" rows="5" placeholder="e.g. layout on ground, attach shackles, rig bumper, check angles, functional test PA">${existing ? esc(existing.notes || '') : ''}</textarea>
-        </div>
+        ${!isEdit ? `<button class="btn btn-sm" style="font-size:11px;padding:6px 12px;align-self:flex-start" onclick="_subAddRow()">+ Add another step</button>` : ''}
         <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:4px">
-          <button class="btn" onclick="document.getElementById('subtask-dialog')?.remove()">Cancel</button>
-          <button class="btn-primary" onclick="_saveSubtaskDialog(${taskId},${subtaskId != null ? subtaskId : 'null'})">${existing ? 'Save' : 'Add'}</button>
+          <button class="btn" onclick="document.getElementById('subtask-dialog')?.remove();window._subDialogState=null">Cancel</button>
+          <button class="btn-primary" onclick="_saveSubtaskDialog()">${isEdit ? 'Save' : 'Add ' + s.rows.length + ' step' + (s.rows.length === 1 ? '' : 's')}</button>
         </div>
       </div>
     </div>
   `;
-  document.body.appendChild(overlay);
 }
 
-function _saveSubtaskDialog(taskId, subtaskId) {
-  const title = document.getElementById('sub-title').value.trim();
-  const date = document.getElementById('sub-date').value || null;
-  const assigneeIds = Array.from(document.querySelectorAll('.sub-assignee-cb:checked')).map(cb => parseInt(cb.value, 10));
-  const notes = document.getElementById('sub-notes').value.trim();
-  if (!title) { showToast('Step needs a title', 'info'); return; }
-  if (subtaskId != null) {
-    updateSubtask(taskId, subtaskId, { title, date, assigneeIds, notes });
-  } else {
-    addSubtask(taskId, { title, date, assigneeIds, notes });
+function _subAddRow() {
+  if (!window._subDialogState) return;
+  window._subDialogState.rows.push({ title: '', date: '', assigneeIds: [], notes: '' });
+  _rerenderSubDialog();
+}
+
+function _subRemoveRow(i) {
+  if (!window._subDialogState) return;
+  window._subDialogState.rows.splice(i, 1);
+  if (window._subDialogState.rows.length === 0) {
+    window._subDialogState.rows.push({ title: '', date: '', assigneeIds: [], notes: '' });
   }
+  _rerenderSubDialog();
+}
+
+function _subToggleAssignee(rowIdx, memberId, on) {
+  if (!window._subDialogState) return;
+  const row = window._subDialogState.rows[rowIdx];
+  if (!row) return;
+  row.assigneeIds = (row.assigneeIds || []).filter(id => id !== memberId);
+  if (on) row.assigneeIds.push(memberId);
+  // No re-render — checkbox state already reflects truth; just update the
+  // "off-crew" note. Cheaper to re-render the whole dialog though, and avoids
+  // losing focus tracking issues.
+  _rerenderSubDialog();
+}
+
+function _rerenderSubDialog() {
+  const overlay = document.getElementById('subtask-dialog');
+  if (!overlay) return;
+  // Preserve scroll position of the modal body
+  const body = overlay.querySelector('.modal-body');
+  const scrollTop = body ? body.scrollTop : 0;
+  overlay.innerHTML = _renderSubDialogContent();
+  const newBody = overlay.querySelector('.modal-body');
+  if (newBody) newBody.scrollTop = scrollTop;
+}
+
+function _saveSubtaskDialog() {
+  const s = window._subDialogState;
+  if (!s) return;
+  const t = getInstallTaskById(s.taskId);
+  if (!t) return;
+
+  // Strip rows with no title (treat as cancelled/empty rows)
+  const valid = (s.rows || []).filter(r => r.title && r.title.trim());
+  if (valid.length === 0) {
+    showToast('Each step needs a title', 'info');
+    return;
+  }
+
+  if (s.mode === 'edit' && s.subtaskId != null) {
+    // Edit: single row, write back to the existing subtask
+    const r = valid[0];
+    updateSubtask(s.taskId, s.subtaskId, {
+      title: r.title.trim(),
+      date: r.date || null,
+      assigneeIds: [...(r.assigneeIds || [])],
+      notes: (r.notes || '').trim()
+    });
+    showToast('Step updated', 'success');
+  } else {
+    // Add: each valid row becomes its own subtask
+    valid.forEach(r => {
+      addSubtask(s.taskId, {
+        title: r.title.trim(),
+        date: r.date || null,
+        assigneeIds: [...(r.assigneeIds || [])],
+        notes: (r.notes || '').trim()
+      });
+    });
+    showToast(`Added ${valid.length} step${valid.length === 1 ? '' : 's'}`, 'success');
+  }
+
   document.getElementById('subtask-dialog')?.remove();
+  window._subDialogState = null;
   renderCurrentPage();
 }
 
@@ -6488,28 +6667,9 @@ function renderChecklistTab(container, project, phase) {
   // logistical detail like "out of building by 4pm Wed" set during install window pick.
   const schedNotesHTML = (phase === 'install') ? renderSchedulingNotesCard(project) : '';
 
-  // Install checklists were retired — the new unified Install Tasks system on
-  // the Overview tab replaces them. Show a redirect notice on the Install tab.
+  // Install tab — unified Install Tasks system (replaces the old per-system checklist)
   if (phase === 'install') {
-    const tasks = getTasksForProject(project.id);
-    const seededKeys = getSeededSystemKeysForProject(project.id);
-    const projectSystems = getProjectSystemKeys(project);
-    const seedable = projectSystems.filter(sk => !seededKeys.includes(sk) && getInstallTaskTemplate(sk));
-    container.innerHTML = schedNotesHTML + subtasksHTML + `
-      <div class="dashboard-card" style="margin-bottom:14px">
-        <div class="dashboard-card-title">Install Tasks</div>
-        <div style="font-size:13px;color:#C9D1D9;line-height:1.5;margin-bottom:10px">
-          Install checklists have moved to the unified <strong>Install Tasks</strong> system on the project Overview tab.
-          Tasks are organized by system, broken into day-pinned steps, and can be assigned to multiple people.
-        </div>
-        ${tasks.length > 0
-          ? `<div style="font-size:12px;color:#8B949E;margin-bottom:10px">This project has ${tasks.length} task${tasks.length === 1 ? '' : 's'} (${tasks.filter(t => t.templateKey).length} from templates).</div>`
-          : seedable.length > 0
-            ? `<div style="font-size:12px;color:#D29922;margin-bottom:10px">⚠ Standard tasks haven't been seeded yet for: ${seedable.map(k => getInstallTaskTemplate(k).label).join(', ')}</div>`
-            : ''}
-        <button class="btn-primary" style="font-size:12px;padding:8px 14px" onclick="state.projectTab='overview';renderCurrentPage();setTimeout(()=>{const el=document.querySelector('.dashboard-card-title');if(el)el.scrollIntoView({behavior:'smooth',block:'start'})},50)">Open Install Tasks on Overview</button>
-      </div>
-    `;
+    container.innerHTML = schedNotesHTML + subtasksHTML + renderProjectTasksSection(project);
     return;
   }
 
