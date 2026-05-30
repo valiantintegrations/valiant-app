@@ -6415,3 +6415,54 @@ html.text-large body {
   margin-bottom: 3px;
   display: block;
 }
+
+/* Day picker popup for subtask dates */
+.dp-dow {
+  display: grid;
+  grid-template-columns: repeat(7, 1fr);
+  gap: 1px;
+  font-size: 10px;
+  color: #6E7681;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+.dp-dow > div { text-align: center; padding: 4px 0; }
+.dp-grid {
+  display: grid;
+  grid-template-columns: repeat(7, minmax(0, 1fr));
+  gap: 1px;
+  background: #1C2333;
+  border: 1px solid #1C2333;
+  border-radius: 6px;
+  overflow: hidden;
+}
+.dp-cell {
+  background: #0D1117;
+  min-height: 48px;
+  padding: 4px;
+  cursor: pointer;
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  -webkit-tap-highlight-color: transparent;
+}
+.dp-cell:hover { background: #161B22; }
+.dp-cell.is-other { opacity: 0.35; }
+.dp-cell.is-today { background: #0D1F3D; }
+.dp-cell.is-today .dp-daynum { color: #58A6FF; font-weight: 700; }
+.dp-cell.is-selected { background: #1A2F1E; outline: 1.5px solid #3FB950; outline-offset: -2px; }
+.dp-daynum { font-size: 11px; color: #C9D1D9; line-height: 1; margin-bottom: 4px; }
+.dp-dots { display: flex; gap: 2px; flex-wrap: wrap; }
+.dp-dot {
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: #6E7681;
+  vertical-align: middle;
+}
+.dp-dot-install { background: #3FB950; }
+.dp-dot-meeting { background: #A371F7; }
+.dp-dot-task { background: #58A6FF; }
+.dp-dot-personal { background: #D29922; }
+.sub-row-date-btn { width: 100%; }
