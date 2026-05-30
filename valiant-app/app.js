@@ -6332,15 +6332,18 @@ function _renderSubDialogContent() {
         <div class="sub-row-head">
           <div style="flex:1;min-width:0">
             <input type="text" class="form-input sub-row-title" value="${esc(row.title)}" placeholder="e.g. Hang speakers"
-              oninput="window._subDialogState.rows[${i}].title=this.value">
+              oninput="window._subDialogState.rows[${i}].title=this.value;_refreshSaveButtonLabel()">
           </div>
           ${s.rows.length > 1 ? `<button class="sub-row-remove" onclick="_subRemoveRow(${i})">×</button>` : ''}
         </div>
         <div class="sub-row-fields">
           <div>
             <label class="form-label form-label-sm">Day</label>
-            <input type="date" class="form-input sub-row-date" value="${esc(row.date || '')}"
-              onchange="window._subDialogState.rows[${i}].date=this.value">
+            <button type="button" class="form-input sub-row-date-btn" style="text-align:left;cursor:pointer"
+              onclick="_openSubDayPicker(${i})">
+              <span class="sub-row-date-label">${row.date ? esc(fmtDate(row.date)) : '— Pick a day —'}</span>
+            </button>
+            <input type="hidden" class="sub-row-date" value="${esc(row.date || '')}">
           </div>
           <div>
             <label class="form-label form-label-sm">Assignees</label>
@@ -6353,7 +6356,7 @@ function _renderSubDialogContent() {
                 </label>
               `).join('')}
             </div>
-            ${offCrew.length > 0 ? `<div style="font-size:10px;color:#D29922;margin-top:4px">⚠ ${offCrew.length} assignee${offCrew.length === 1 ? '' : 's'} will be added to the project crew on save.</div>` : ''}
+            ${offCrew.length > 0 ? `<div class="sub-row-offcrew-note" style="font-size:10px;color:#D29922;margin-top:4px">⚠ ${offCrew.length} assignee${offCrew.length === 1 ? '' : 's'} will be added to the project crew on save.</div>` : `<div class="sub-row-offcrew-note" style="font-size:10px;color:#D29922;margin-top:4px;display:none"></div>`}
           </div>
           <div>
             <label class="form-label form-label-sm">Detail / inner steps (optional)</label>
@@ -6379,7 +6382,7 @@ function _renderSubDialogContent() {
         ${!isEdit ? `<button class="btn btn-sm" style="font-size:11px;padding:6px 12px;align-self:flex-start" onclick="_subAddRow()">+ Add another step</button>` : ''}
         <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:4px">
           <button class="btn" onclick="document.getElementById('subtask-dialog')?.remove();window._subDialogState=null">Cancel</button>
-          <button class="btn-primary" onclick="_saveSubtaskDialog()">${isEdit ? 'Save' : 'Add ' + s.rows.length + ' step' + (s.rows.length === 1 ? '' : 's')}</button>
+          <button class="btn-primary" id="sub-save-btn" onclick="_saveSubtaskDialog()">${isEdit ? 'Save' : 'Add ' + s.rows.length + ' step' + (s.rows.length === 1 ? '' : 's')}</button>
         </div>
       </div>
     </div>
@@ -6407,10 +6410,46 @@ function _subToggleAssignee(rowIdx, memberId, on) {
   if (!row) return;
   row.assigneeIds = (row.assigneeIds || []).filter(id => id !== memberId);
   if (on) row.assigneeIds.push(memberId);
-  // No re-render — checkbox state already reflects truth; just update the
-  // "off-crew" note. Cheaper to re-render the whole dialog though, and avoids
-  // losing focus tracking issues.
-  _rerenderSubDialog();
+  // Update only the chip's parent label style + the "off-crew" note —
+  // do NOT re-render the whole dialog (rerendering kills focus on the title
+  // input and was suspected of breaking the Save button binding).
+  _refreshOffCrewNoteForRow(rowIdx);
+}
+
+// Recalc the small "X assignees will be added" warning under a row's
+// assignee picker, without touching the rest of the dialog.
+function _refreshOffCrewNoteForRow(rowIdx) {
+  const s = window._subDialogState;
+  if (!s) return;
+  const row = s.rows[rowIdx];
+  if (!row) return;
+  const rowEl = document.querySelector(`.sub-row[data-row="${rowIdx}"]`);
+  if (!rowEl) return;
+  const note = rowEl.querySelector('.sub-row-offcrew-note');
+  const offCrew = (row.assigneeIds || []).filter(id => !s.crewIds.includes(id));
+  if (note) {
+    if (offCrew.length > 0) {
+      note.textContent = `⚠ ${offCrew.length} assignee${offCrew.length === 1 ? '' : 's'} will be added to the project crew on save.`;
+      note.style.display = '';
+    } else {
+      note.style.display = 'none';
+    }
+  }
+  // Also refresh the Save button label since the count of valid rows
+  // is what powers it.
+  _refreshSaveButtonLabel();
+}
+
+function _refreshSaveButtonLabel() {
+  const s = window._subDialogState;
+  if (!s) return;
+  const btn = document.getElementById('sub-save-btn');
+  if (!btn) return;
+  if (s.mode === 'edit') { btn.textContent = 'Save'; return; }
+  // Read titles live from DOM (DOM is the source of truth for whether a row counts)
+  const titles = Array.from(document.querySelectorAll('.sub-row-title')).map(el => (el.value || '').trim());
+  const count = titles.filter(Boolean).length;
+  btn.textContent = `Add ${count} step${count === 1 ? '' : 's'}`;
 }
 
 function _rerenderSubDialog() {
@@ -6430,39 +6469,228 @@ function _saveSubtaskDialog() {
   const t = getInstallTaskById(s.taskId);
   if (!t) return;
 
-  // Strip rows with no title (treat as cancelled/empty rows)
-  const valid = (s.rows || []).filter(r => r.title && r.title.trim());
+  // Read row values directly from the DOM — DOM is authoritative. This is
+  // robust against any state-sync issues with inline oninput handlers.
+  const rowEls = document.querySelectorAll('.sub-row');
+  const rows = Array.from(rowEls).map((rowEl, i) => {
+    const titleEl = rowEl.querySelector('.sub-row-title');
+    const dateEl = rowEl.querySelector('.sub-row-date');
+    const notesEl = rowEl.querySelector('.sub-row-notes');
+    const assigneeIds = Array.from(rowEl.querySelectorAll('input[type="checkbox"]:checked'))
+      .map(cb => parseInt(cb.value, 10))
+      .filter(n => !isNaN(n));
+    return {
+      title: titleEl ? (titleEl.value || '').trim() : '',
+      date: dateEl ? (dateEl.value || null) : null,
+      assigneeIds,
+      notes: notesEl ? (notesEl.value || '').trim() : ''
+    };
+  });
+
+  const valid = rows.filter(r => r.title);
   if (valid.length === 0) {
     showToast('Each step needs a title', 'info');
     return;
   }
 
   if (s.mode === 'edit' && s.subtaskId != null) {
-    // Edit: single row, write back to the existing subtask
     const r = valid[0];
-    updateSubtask(s.taskId, s.subtaskId, {
-      title: r.title.trim(),
-      date: r.date || null,
-      assigneeIds: [...(r.assigneeIds || [])],
-      notes: (r.notes || '').trim()
-    });
+    updateSubtask(s.taskId, s.subtaskId, r);
     showToast('Step updated', 'success');
   } else {
-    // Add: each valid row becomes its own subtask
-    valid.forEach(r => {
-      addSubtask(s.taskId, {
-        title: r.title.trim(),
-        date: r.date || null,
-        assigneeIds: [...(r.assigneeIds || [])],
-        notes: (r.notes || '').trim()
-      });
-    });
+    valid.forEach(r => addSubtask(s.taskId, r));
     showToast(`Added ${valid.length} step${valid.length === 1 ? '' : 's'}`, 'success');
   }
 
   document.getElementById('subtask-dialog')?.remove();
   window._subDialogState = null;
   renderCurrentPage();
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+// SUBTASK DAY PICKER — calendar popup showing everything on each day
+// ────────────────────────────────────────────────────────────────────────────
+// Opens when you click the "Day" field on a subtask row. Renders a month grid
+// where each day shows a count of all events on that day: install windows
+// (booked + estimated), meetings, personal events, and other install task
+// subtasks. Clicking a day commits it back to the subtask row + closes.
+// ════════════════════════════════════════════════════════════════════════════
+
+function _openSubDayPicker(rowIdx) {
+  if (!window._subDialogState) return;
+  window._dayPickerState = {
+    rowIdx,
+    anchor: (() => {
+      const row = window._subDialogState.rows[rowIdx];
+      if (row && row.date) return new Date(row.date + 'T00:00:00');
+      return new Date();
+    })()
+  };
+  document.getElementById('day-picker')?.remove();
+  const overlay = document.createElement('div');
+  overlay.id = 'day-picker';
+  overlay.className = 'modal-overlay';
+  overlay.style.zIndex = '10002';
+  overlay.onclick = (e) => { if (e.target === overlay) { overlay.remove(); window._dayPickerState = null; } };
+  overlay.innerHTML = _renderSubDayPickerContent();
+  document.body.appendChild(overlay);
+}
+
+// Returns a map { 'YYYY-MM-DD': { installs, meetings, personal, tasks, total } }
+// for every day in the [startStr, endStr] range. Counts everything regardless
+// of who it belongs to — this is the "see what's already on the calendar"
+// view, no filters.
+function _getAllEventCountsForRange(startStr, endStr) {
+  const out = {};
+  function bump(dateStr, kind) {
+    if (!dateStr) return;
+    if (dateStr < startStr || dateStr > endStr) return;
+    if (!out[dateStr]) out[dateStr] = { installs: 0, meetings: 0, personal: 0, tasks: 0, total: 0 };
+    out[dateStr][kind]++;
+    out[dateStr].total++;
+  }
+  // Install windows — every project, booked or estimated
+  (state.projects || []).forEach(p => {
+    const win = getInstallWindow(p);
+    if (!win || !win.start || !win.end) return;
+    // Walk every day in the range
+    let cur = new Date(win.start + 'T00:00:00');
+    const last = new Date(win.end + 'T00:00:00');
+    let guard = 0;
+    while (cur <= last && guard < 400) {
+      bump(_ymd(cur), 'installs');
+      cur.setDate(cur.getDate() + 1);
+      guard++;
+    }
+  });
+  // Meetings
+  (state.meetings || []).forEach(m => {
+    if (m && m.date) bump(m.date, 'meetings');
+  });
+  // Personal events
+  (state.personalEvents || []).forEach(pe => {
+    if (pe && pe.date) bump(pe.date, 'personal');
+  });
+  // Install task subtasks
+  (state.installTasks || []).forEach(t => {
+    (t.subtasks || []).forEach(s => {
+      if (s && s.date) bump(s.date, 'tasks');
+    });
+    if (t.isMilestone && t.dueDate) bump(t.dueDate, 'tasks');
+  });
+  return out;
+}
+
+function _renderSubDayPickerContent() {
+  const ps = window._dayPickerState;
+  if (!ps) return '';
+  const anchor = ps.anchor;
+  const year = anchor.getFullYear();
+  const month = anchor.getMonth();
+  const monthStart = new Date(year, month, 1);
+  const monthEnd = new Date(year, month + 1, 0);
+  // Grid start: previous Sunday
+  const gridStart = new Date(monthStart);
+  gridStart.setDate(gridStart.getDate() - gridStart.getDay());
+  // 6 weeks * 7 days = 42 cells
+  const gridEnd = new Date(gridStart);
+  gridEnd.setDate(gridEnd.getDate() + 41);
+
+  const counts = _getAllEventCountsForRange(_ymd(gridStart), _ymd(gridEnd));
+  const todayStr = _ymd(new Date());
+
+  // The currently-selected date from the row, if any (highlight it)
+  const selectedDate = (() => {
+    const ds = window._subDialogState;
+    if (!ds) return null;
+    const row = ds.rows[ps.rowIdx];
+    return row && row.date ? row.date : null;
+  })();
+
+  const monthLabel = monthStart.toLocaleDateString('en-US', { month: 'long', year: 'numeric' });
+
+  const cells = [];
+  let cur = new Date(gridStart);
+  for (let i = 0; i < 42; i++) {
+    const k = _ymd(cur);
+    const inMonth = cur.getMonth() === month;
+    const isToday = k === todayStr;
+    const isSelected = k === selectedDate;
+    const c = counts[k];
+    let dots = '';
+    if (c) {
+      if (c.installs) dots += `<span class="dp-dot dp-dot-install" title="${c.installs} install"></span>`;
+      if (c.meetings) dots += `<span class="dp-dot dp-dot-meeting" title="${c.meetings} meeting${c.meetings === 1 ? '' : 's'}"></span>`;
+      if (c.tasks) dots += `<span class="dp-dot dp-dot-task" title="${c.tasks} task${c.tasks === 1 ? '' : 's'}"></span>`;
+      if (c.personal) dots += `<span class="dp-dot dp-dot-personal" title="${c.personal} personal"></span>`;
+    }
+    cells.push(`
+      <div class="dp-cell${inMonth ? '' : ' is-other'}${isToday ? ' is-today' : ''}${isSelected ? ' is-selected' : ''}"
+        onclick="_dayPickerCommit('${k}')">
+        <div class="dp-daynum">${cur.getDate()}</div>
+        <div class="dp-dots">${dots}</div>
+      </div>
+    `);
+    cur.setDate(cur.getDate() + 1);
+  }
+
+  return `
+    <div class="modal-container" style="max-width:420px;display:flex;flex-direction:column">
+      <div class="modal-header">
+        <div class="modal-title">Pick a day</div>
+        <button class="modal-close" onclick="document.getElementById('day-picker')?.remove();window._dayPickerState=null">&times;</button>
+      </div>
+      <div class="modal-body" style="display:flex;flex-direction:column;gap:10px">
+        <div style="display:flex;align-items:center;justify-content:space-between;gap:8px">
+          <button class="btn btn-sm" style="padding:5px 10px" onclick="_dayPickerNav(-1)">‹</button>
+          <div style="font-size:13px;font-weight:600;color:#E6EDF3">${monthLabel}</div>
+          <button class="btn btn-sm" style="padding:5px 10px" onclick="_dayPickerNav(1)">›</button>
+        </div>
+        <div class="dp-dow">
+          ${['S','M','T','W','T','F','S'].map(d => `<div>${d}</div>`).join('')}
+        </div>
+        <div class="dp-grid">${cells.join('')}</div>
+        <div style="display:flex;gap:10px;font-size:10px;color:#8B949E;flex-wrap:wrap;padding-top:4px">
+          <span><span class="dp-dot dp-dot-install"></span> Install</span>
+          <span><span class="dp-dot dp-dot-meeting"></span> Meeting</span>
+          <span><span class="dp-dot dp-dot-task"></span> Task</span>
+          <span><span class="dp-dot dp-dot-personal"></span> Personal</span>
+        </div>
+        ${selectedDate ? `
+          <div style="display:flex;justify-content:flex-end;padding-top:4px">
+            <button class="btn btn-sm" style="font-size:11px;color:#F85149" onclick="_dayPickerCommit('')">Clear date</button>
+          </div>
+        ` : ''}
+      </div>
+    </div>
+  `;
+}
+
+function _dayPickerNav(delta) {
+  const ps = window._dayPickerState;
+  if (!ps) return;
+  ps.anchor = new Date(ps.anchor.getFullYear(), ps.anchor.getMonth() + delta, 1);
+  const overlay = document.getElementById('day-picker');
+  if (overlay) overlay.innerHTML = _renderSubDayPickerContent();
+}
+
+function _dayPickerCommit(dateStr) {
+  const ps = window._dayPickerState;
+  const ds = window._subDialogState;
+  if (!ps || !ds) return;
+  const row = ds.rows[ps.rowIdx];
+  if (!row) return;
+  row.date = dateStr || '';
+  // Update the row's button label + hidden input live, no full re-render
+  const rowEl = document.querySelector(`.sub-row[data-row="${ps.rowIdx}"]`);
+  if (rowEl) {
+    const lbl = rowEl.querySelector('.sub-row-date-label');
+    const hidden = rowEl.querySelector('.sub-row-date');
+    if (lbl) lbl.textContent = dateStr ? fmtDate(dateStr) : '— Pick a day —';
+    if (hidden) hidden.value = dateStr;
+  }
+  document.getElementById('day-picker')?.remove();
+  window._dayPickerState = null;
 }
 
 // ── Project Team Assignment dialog (Pass 3B) ──
