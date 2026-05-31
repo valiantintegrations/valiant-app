@@ -6018,20 +6018,17 @@ function renderProjectScopeSection(p) {
   const detected = Array.isArray(p.systems) ? p.systems : [];
   return `
     <div class="dashboard-card" style="margin-bottom:14px">
-      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;gap:8px;flex-wrap:wrap">
         <div style="font-size:11px;font-weight:600;color:#6E7681;text-transform:uppercase;letter-spacing:0.08em">Project Scope</div>
-        <div style="font-size:10px;color:#6E7681">${current.length} selected</div>
+        <button class="btn btn-sm" style="font-size:11px;padding:6px 12px" onclick="openScopeTagsDialog(${p.id})">${current.length === 0 ? '+ Add scope tags' : 'Edit scope tags'}</button>
       </div>
-      <div style="font-size:12px;color:#8B949E;margin-bottom:10px">Scope tags drive what install task templates can seed on this project's Install tab. Toggle the systems being delivered.</div>
-      <div class="scope-chip-row">
-        ${SCOPE_TAGS.map(tag => {
-          const selected = current.includes(tag);
-          return `<label class="scope-chip${selected ? ' is-selected' : ''}">
-            <input type="checkbox" ${selected ? 'checked' : ''} onchange="_toggleProjectScopeTag(${p.id},'${esc(tag).replace(/'/g, "\\'")}',this.checked)">
-            <span>${esc(tag)}</span>
-          </label>`;
-        }).join('')}
-      </div>
+      ${current.length === 0 ? `
+        <div style="font-size:12px;color:#6E7681;font-style:italic">No scope tags yet. Tag the systems this project covers so install task templates can seed from them.</div>
+      ` : `
+        <div class="scope-chip-row">
+          ${current.map(tag => `<span class="scope-chip is-selected" style="cursor:default">${esc(tag)}</span>`).join('')}
+        </div>
+      `}
       ${detected.length > 0 ? `
         <div style="font-size:11px;color:#6E7681;margin-top:10px">Auto-detected from scope text: ${detected.join(', ')}</div>
       ` : ''}
@@ -6039,6 +6036,69 @@ function renderProjectScopeSection(p) {
   `;
 }
 
+function openScopeTagsDialog(projectId) {
+  const p = state.projects.find(x => x.id === projectId);
+  if (!p) return;
+  const current = new Set(Array.isArray(p.scope_tags) ? p.scope_tags : []);
+  // Working copy on window so checkbox onchange updates it without re-rendering
+  window._scopeDialogPid = projectId;
+  window._scopeDialogSelected = new Set(current);
+
+  document.getElementById('scope-tags-dialog')?.remove();
+  const overlay = document.createElement('div');
+  overlay.id = 'scope-tags-dialog';
+  overlay.className = 'modal-overlay';
+  overlay.onclick = (e) => { if (e.target === overlay) { overlay.remove(); window._scopeDialogSelected = null; } };
+  overlay.innerHTML = `
+    <div class="modal-container" style="max-width:520px;max-height:85vh;display:flex;flex-direction:column">
+      <div class="modal-header">
+        <div class="modal-title">Edit Scope Tags</div>
+        <button class="modal-close" onclick="document.getElementById('scope-tags-dialog')?.remove();window._scopeDialogSelected=null">&times;</button>
+      </div>
+      <div class="modal-body" style="display:flex;flex-direction:column;gap:14px;overflow-y:auto">
+        <div style="font-size:12px;color:#8B949E">Select the systems this project covers. These tags drive what install task templates can seed on the Install tab.</div>
+        <div class="scope-chip-row">
+          ${SCOPE_TAGS.map(tag => {
+            const selected = current.has(tag);
+            return `<label class="scope-chip${selected ? ' is-selected' : ''}">
+              <input type="checkbox" ${selected ? 'checked' : ''} onchange="_scopeDialogToggle('${esc(tag).replace(/'/g, "\\'")}',this.checked);this.closest('.scope-chip').classList.toggle('is-selected',this.checked)">
+              <span>${esc(tag)}</span>
+            </label>`;
+          }).join('')}
+        </div>
+        <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:4px">
+          <button class="btn" onclick="document.getElementById('scope-tags-dialog')?.remove();window._scopeDialogSelected=null">Cancel</button>
+          <button class="btn-primary" onclick="_saveScopeTagsDialog()">Save</button>
+        </div>
+      </div>
+    </div>
+  `;
+  document.body.appendChild(overlay);
+}
+
+function _scopeDialogToggle(tag, on) {
+  if (!window._scopeDialogSelected) return;
+  if (on) window._scopeDialogSelected.add(tag);
+  else window._scopeDialogSelected.delete(tag);
+}
+
+function _saveScopeTagsDialog() {
+  const pid = window._scopeDialogPid;
+  const selected = window._scopeDialogSelected;
+  if (pid == null || !selected) return;
+  const p = state.projects.find(x => x.id === pid);
+  if (!p) return;
+  // Preserve SCOPE_TAGS order so display is stable
+  p.scope_tags = SCOPE_TAGS.filter(t => selected.has(t));
+  save('vi_projects', state.projects);
+  document.getElementById('scope-tags-dialog')?.remove();
+  window._scopeDialogSelected = null;
+  window._scopeDialogPid = null;
+  showToast('Scope tags saved', 'success');
+  renderCurrentPage();
+}
+
+// Kept for any legacy callsites — no-op shim, the dialog replaces it.
 function _toggleProjectScopeTag(projectId, tag, on) {
   const p = state.projects.find(x => x.id === projectId);
   if (!p) return;
@@ -8968,11 +9028,14 @@ function renderCalendar(c) {
           }).join('')}
           ${taskShown.map(({ task, subtask }) => {
             const c = getProjectColor(task.projectId);
+            const proj = state.projects.find(pp => pp.id === task.projectId);
+            const projName = proj ? proj.name : '';
             const isMile = !subtask && task.isMilestone;
-            const title = subtask ? subtask.title : task.title;
-            const tooltip = `${task.title}${subtask ? ' · ' + subtask.title : ''}`;
+            const stepLabel = subtask ? subtask.title : task.title;
+            const fullText = projName ? `${projName} · ${stepLabel}` : stepLabel;
+            const tooltip = `${projName}${projName ? ' · ' : ''}${task.title}${subtask ? ' · ' + subtask.title : ''}`;
             // Outline style — tasks are planning, not the install window itself
-            return `<div class="cal-event" style="background:transparent;border:1px solid ${c};color:${c}" onclick="event.stopPropagation();openProject(${task.projectId})" title="${esc(tooltip)}">${isMile ? '🚩 ' : '◷ '}${esc(title)}</div>`;
+            return `<div class="cal-event" style="background:transparent;border:1px solid ${c};color:${c}" onclick="event.stopPropagation();openProject(${task.projectId})" title="${esc(tooltip)}">${isMile ? '🚩 ' : '◷ '}${esc(fullText)}</div>`;
           }).join('')}
           ${totalCountWithTasks > visibleCount ? `<div class="cal-event-overflow">+${totalCountWithTasks - visibleCount} more</div>` : ''}
         </td>`;
@@ -10767,7 +10830,7 @@ function getMasterCalendarEvents(startDateStr, endDateStr, ctx) {
       events.push({
         type: 'install_task',
         id: `itask-${t.id}`,
-        title: t.title + (t.isMilestone ? ' (milestone)' : ''),
+        title: `${proj.name} · ${t.title}${t.isMilestone ? ' (milestone)' : ''}`,
         projectId: t.projectId,
         project: proj,
         startDate: _mcNormalizeDate(range.start),
