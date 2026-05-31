@@ -6070,14 +6070,25 @@ function renderProjectTasksSection(p) {
   }
 
   function subtaskRow(t, s) {
+    const photoGated = s.photoRequired && !s.photo;
+    const checkClickHandler = photoGated
+      ? `event.stopPropagation();showToast('Upload a completion photo first','info')`
+      : `event.stopPropagation();toggleSubtaskDone(${t.id},${s.id});renderCurrentPage()`;
+    const checkClasses = `itask-check${photoGated ? ' is-gated' : ''}`;
+    const photoBadge = s.photoRequired
+      ? (s.photo
+          ? `<span class="itask-photo-badge has-photo" title="Photo attached">📷</span>`
+          : `<button class="itask-photo-btn" onclick="event.stopPropagation();_uploadSubtaskPhoto(${t.id},${s.id})" title="Upload completion photo">📷 Upload photo</button>`)
+      : '';
     return `
-      <div class="itask-sub${s.done ? ' is-done' : ''}">
-        <span class="itask-check" onclick="event.stopPropagation();toggleSubtaskDone(${t.id},${s.id});renderCurrentPage()">${s.done ? '✓' : ''}</span>
+      <div class="itask-sub${s.done ? ' is-done' : ''}${s.photoRequired ? ' has-photo-req' : ''}">
+        <span class="${checkClasses}" onclick="${checkClickHandler}">${s.done ? '✓' : ''}</span>
         <div class="itask-sub-body" onclick="openSubtaskDialog(${t.id},${s.id})">
           <div class="itask-sub-title">${esc(s.title)}</div>
           <div class="itask-sub-meta">
-            ${s.date ? esc(fmtDate(s.date)) : '<span class="itask-nodate">No date</span>'}
+            ${s.date ? esc(fmtDateLocal(s.date)) : '<span class="itask-nodate">No date</span>'}
             <span class="itask-sub-assignees">${assigneeChips(s.assigneeIds)}</span>
+            ${photoBadge}
           </div>
           ${s.notes ? `<div class="itask-sub-notes">${esc(s.notes)}</div>` : ''}
         </div>
@@ -6092,11 +6103,11 @@ function renderProjectTasksSection(p) {
     const subTotal = (t.subtasks || []).length;
     let dateLabel;
     if (t.isMilestone) {
-      dateLabel = t.dueDate ? 'Due ' + fmtDate(t.dueDate) : 'No due date';
+      dateLabel = t.dueDate ? 'Due ' + fmtDateLocal(t.dueDate) : 'No due date';
     } else {
       const range = getTaskDateRange(t);
       dateLabel = range
-        ? (range.start === range.end ? fmtDate(range.start) : fmtDateRange(range.start, range.end))
+        ? (range.start === range.end ? fmtDateLocal(range.start) : `${fmtDateLocal(range.start)} – ${fmtDateLocal(range.end)}`)
         : 'No dates set';
     }
     return `
@@ -6294,7 +6305,8 @@ function openSubtaskDialog(taskId, subtaskId) {
           title: existing.title || '',
           date: existing.date || '',
           assigneeIds: Array.isArray(existing.assigneeIds) ? [...existing.assigneeIds] : [],
-          notes: existing.notes || ''
+          notes: existing.notes || '',
+          photoRequired: !!existing.photoRequired
         }],
         pool: sortedPool,
         crewIds: [...crewIds]
@@ -6303,7 +6315,7 @@ function openSubtaskDialog(taskId, subtaskId) {
         mode: 'add',
         taskId,
         subtaskId: null,
-        rows: [{ title: '', date: '', assigneeIds: [], notes: '' }],
+        rows: [{ title: '', date: '', assigneeIds: [], notes: '', photoRequired: false }],
         pool: sortedPool,
         crewIds: [...crewIds]
       };
@@ -6316,6 +6328,7 @@ function openSubtaskDialog(taskId, subtaskId) {
   overlay.onclick = (e) => { if (e.target === overlay) { overlay.remove(); window._subDialogState = null; } };
   overlay.innerHTML = _renderSubDialogContent();
   document.body.appendChild(overlay);
+  _bindSubDialogListeners();
 }
 
 function _renderSubDialogContent() {
@@ -6341,7 +6354,7 @@ function _renderSubDialogContent() {
             <label class="form-label form-label-sm">Day</label>
             <button type="button" class="form-input sub-row-date-btn" style="text-align:left;cursor:pointer"
               onclick="_openSubDayPicker(${i})">
-              <span class="sub-row-date-label">${row.date ? esc(fmtDate(row.date)) : '— Pick a day —'}</span>
+              <span class="sub-row-date-label">${row.date ? esc(fmtDateLocal(row.date)) : '— Pick a day —'}</span>
             </button>
             <input type="hidden" class="sub-row-date" value="${esc(row.date || '')}">
           </div>
@@ -6362,6 +6375,13 @@ function _renderSubDialogContent() {
             <label class="form-label form-label-sm">Detail / inner steps (optional)</label>
             <textarea class="form-input sub-row-notes" rows="2" placeholder="e.g. layout on ground, check angles, functional test"
               oninput="window._subDialogState.rows[${i}].notes=this.value">${esc(row.notes || '')}</textarea>
+          </div>
+          <div>
+            <label style="display:flex;align-items:center;gap:8px;font-size:12px;color:#C9D1D9;cursor:pointer">
+              <input type="checkbox" class="sub-row-photoreq" ${row.photoRequired ? 'checked' : ''}
+                onchange="window._subDialogState.rows[${i}].photoRequired=this.checked">
+              <span>📷 Require completion photo to check off</span>
+            </label>
           </div>
         </div>
       </div>
@@ -6391,8 +6411,19 @@ function _renderSubDialogContent() {
 
 function _subAddRow() {
   if (!window._subDialogState) return;
-  window._subDialogState.rows.push({ title: '', date: '', assigneeIds: [], notes: '' });
+  window._subDialogState.rows.push({ title: '', date: '', assigneeIds: [], notes: '', photoRequired: false });
   _rerenderSubDialog();
+}
+
+// Photo upload — STUB. The UI and the "can't check off without a photo" gate
+// are real today; the actual file storage waits on the backend (see Dev Status
+// "Long-Range Vision — Installer Field Experience" + photo upload note).
+// When the backend lands, replace this stub with a real upload that writes
+// the photo and sets s.photo to a real reference.
+function _uploadSubtaskPhoto(taskId, subtaskId) {
+  showToast('Photo upload activates when the backend is connected. The check-off gate is already in place.', 'info');
+  // Optional dev-mode shortcut to test the gate release: hold Shift while clicking.
+  // (We don't implement that here; keeping the stub purely informational.)
 }
 
 function _subRemoveRow(i) {
@@ -6461,6 +6492,22 @@ function _rerenderSubDialog() {
   overlay.innerHTML = _renderSubDialogContent();
   const newBody = overlay.querySelector('.modal-body');
   if (newBody) newBody.scrollTop = scrollTop;
+  _bindSubDialogListeners();
+}
+
+// Belt-and-suspenders: attach real event listeners to the dialog's key buttons
+// AFTER innerHTML is set. Inline onclick handlers should already work, but
+// reports of "click does nothing" point to this being needed for robustness.
+// Idempotent — replaces any previous binding by cloning + replacing.
+function _bindSubDialogListeners() {
+  const overlay = document.getElementById('subtask-dialog');
+  if (!overlay) return;
+  const save = overlay.querySelector('#sub-save-btn');
+  if (save) {
+    const fresh = save.cloneNode(true);
+    save.parentNode.replaceChild(fresh, save);
+    fresh.addEventListener('click', (e) => { e.preventDefault(); _saveSubtaskDialog(); });
+  }
 }
 
 function _saveSubtaskDialog() {
@@ -6476,14 +6523,17 @@ function _saveSubtaskDialog() {
     const titleEl = rowEl.querySelector('.sub-row-title');
     const dateEl = rowEl.querySelector('.sub-row-date');
     const notesEl = rowEl.querySelector('.sub-row-notes');
-    const assigneeIds = Array.from(rowEl.querySelectorAll('input[type="checkbox"]:checked'))
+    const photoReqEl = rowEl.querySelector('.sub-row-photoreq');
+    // Assignees: only the assignee chips (not the photo-required checkbox)
+    const assigneeIds = Array.from(rowEl.querySelectorAll('.itask-assignee-chip input[type="checkbox"]:checked'))
       .map(cb => parseInt(cb.value, 10))
       .filter(n => !isNaN(n));
     return {
       title: titleEl ? (titleEl.value || '').trim() : '',
       date: dateEl ? (dateEl.value || null) : null,
       assigneeIds,
-      notes: notesEl ? (notesEl.value || '').trim() : ''
+      notes: notesEl ? (notesEl.value || '').trim() : '',
+      photoRequired: photoReqEl ? !!photoReqEl.checked : false
     };
   });
 
@@ -6542,41 +6592,55 @@ function _openSubDayPicker(rowIdx) {
 // view, no filters.
 function _getAllEventCountsForRange(startStr, endStr) {
   const out = {};
-  function bump(dateStr, kind) {
+  function bump(dateStr, kind, label) {
     if (!dateStr) return;
     if (dateStr < startStr || dateStr > endStr) return;
-    if (!out[dateStr]) out[dateStr] = { installs: 0, meetings: 0, personal: 0, tasks: 0, total: 0 };
+    if (!out[dateStr]) out[dateStr] = { installs: 0, meetings: 0, personal: 0, tasks: 0, total: 0, labels: [] };
     out[dateStr][kind]++;
     out[dateStr].total++;
+    if (label) out[dateStr].labels.push({ kind, label });
   }
   // Install windows — every project, booked or estimated
   (state.projects || []).forEach(p => {
     const win = getInstallWindow(p);
     if (!win || !win.start || !win.end) return;
-    // Walk every day in the range
     let cur = new Date(win.start + 'T00:00:00');
     const last = new Date(win.end + 'T00:00:00');
     let guard = 0;
+    const pname = p.name || `Project ${p.id}`;
     while (cur <= last && guard < 400) {
-      bump(_ymd(cur), 'installs');
+      // Only label the start day to avoid 7 copies for a week-long window
+      const isStart = _ymd(cur) === win.start;
+      bump(_ymd(cur), 'installs', isStart ? `Install: ${pname}` : '');
       cur.setDate(cur.getDate() + 1);
       guard++;
     }
   });
   // Meetings
   (state.meetings || []).forEach(m => {
-    if (m && m.date) bump(m.date, 'meetings');
+    if (m && m.date) {
+      const t = m.title || (m.type ? m.type.replace(/_/g, ' ') : 'Meeting');
+      const time = m.startTime ? `${m.startTime} ` : '';
+      bump(m.date, 'meetings', `Meeting: ${time}${t}`);
+    }
   });
   // Personal events
   (state.personalEvents || []).forEach(pe => {
-    if (pe && pe.date) bump(pe.date, 'personal');
+    if (pe && pe.date) {
+      const member = pe.memberId != null ? getTeamMember(pe.memberId) : null;
+      const who = member ? member.name.split(' ')[0] : 'Someone';
+      const t = pe.title || pe.type || 'Personal';
+      bump(pe.date, 'personal', `${who}: ${t}`);
+    }
   });
   // Install task subtasks
   (state.installTasks || []).forEach(t => {
+    const proj = t.projectId != null ? (state.projects || []).find(p => p.id === t.projectId) : null;
+    const projName = proj ? proj.name : (t.shopWork ? 'Shop' : 'Task');
     (t.subtasks || []).forEach(s => {
-      if (s && s.date) bump(s.date, 'tasks');
+      if (s && s.date) bump(s.date, 'tasks', `Task: ${s.title} (${projName})`);
     });
-    if (t.isMilestone && t.dueDate) bump(t.dueDate, 'tasks');
+    if (t.isMilestone && t.dueDate) bump(t.dueDate, 'tasks', `🚩 ${t.title} (${projName})`);
   });
   return out;
 }
@@ -6611,22 +6675,35 @@ function _renderSubDayPickerContent() {
 
   const cells = [];
   let cur = new Date(gridStart);
+  // Days already used by other rows in this in-progress dialog — highlight them
+  // so the user can see the pattern they're building across this batch.
+  const batchDays = new Set();
+  const editingRowIdx = ps.rowIdx;
+  const ds = window._subDialogState;
+  if (ds) {
+    ds.rows.forEach((r, i) => { if (i !== editingRowIdx && r.date) batchDays.add(r.date); });
+  }
+
   for (let i = 0; i < 42; i++) {
     const k = _ymd(cur);
     const inMonth = cur.getMonth() === month;
     const isToday = k === todayStr;
     const isSelected = k === selectedDate;
+    const isInBatch = batchDays.has(k);
     const c = counts[k];
     let dots = '';
     if (c) {
-      if (c.installs) dots += `<span class="dp-dot dp-dot-install" title="${c.installs} install"></span>`;
-      if (c.meetings) dots += `<span class="dp-dot dp-dot-meeting" title="${c.meetings} meeting${c.meetings === 1 ? '' : 's'}"></span>`;
-      if (c.tasks) dots += `<span class="dp-dot dp-dot-task" title="${c.tasks} task${c.tasks === 1 ? '' : 's'}"></span>`;
-      if (c.personal) dots += `<span class="dp-dot dp-dot-personal" title="${c.personal} personal"></span>`;
+      if (c.installs) dots += `<span class="dp-dot dp-dot-install"></span>`;
+      if (c.meetings) dots += `<span class="dp-dot dp-dot-meeting"></span>`;
+      if (c.tasks) dots += `<span class="dp-dot dp-dot-task"></span>`;
+      if (c.personal) dots += `<span class="dp-dot dp-dot-personal"></span>`;
     }
     cells.push(`
-      <div class="dp-cell${inMonth ? '' : ' is-other'}${isToday ? ' is-today' : ''}${isSelected ? ' is-selected' : ''}"
-        onclick="_dayPickerCommit('${k}')">
+      <div class="dp-cell${inMonth ? '' : ' is-other'}${isToday ? ' is-today' : ''}${isSelected ? ' is-selected' : ''}${isInBatch ? ' is-in-batch' : ''}"
+        data-date="${k}"
+        onclick="_dayPickerCommit('${k}')"
+        onmouseenter="_dayPickerHover(event,'${k}')"
+        onmouseleave="_dayPickerHoverEnd()">
         <div class="dp-daynum">${cur.getDate()}</div>
         <div class="dp-dots">${dots}</div>
       </div>
@@ -6640,7 +6717,7 @@ function _renderSubDayPickerContent() {
         <div class="modal-title">Pick a day</div>
         <button class="modal-close" onclick="document.getElementById('day-picker')?.remove();window._dayPickerState=null">&times;</button>
       </div>
-      <div class="modal-body" style="display:flex;flex-direction:column;gap:10px">
+      <div class="modal-body" style="display:flex;flex-direction:column;gap:10px;position:relative">
         <div style="display:flex;align-items:center;justify-content:space-between;gap:8px">
           <button class="btn btn-sm" style="padding:5px 10px" onclick="_dayPickerNav(-1)">‹</button>
           <div style="font-size:13px;font-weight:600;color:#E6EDF3">${monthLabel}</div>
@@ -6650,11 +6727,13 @@ function _renderSubDayPickerContent() {
           ${['S','M','T','W','T','F','S'].map(d => `<div>${d}</div>`).join('')}
         </div>
         <div class="dp-grid">${cells.join('')}</div>
-        <div style="display:flex;gap:10px;font-size:10px;color:#8B949E;flex-wrap:wrap;padding-top:4px">
+        <div id="dp-tooltip" class="dp-tooltip" style="display:none"></div>
+        <div style="display:flex;gap:10px;font-size:10px;color:#8B949E;flex-wrap:wrap;padding-top:4px;align-items:center">
           <span><span class="dp-dot dp-dot-install"></span> Install</span>
           <span><span class="dp-dot dp-dot-meeting"></span> Meeting</span>
           <span><span class="dp-dot dp-dot-task"></span> Task</span>
           <span><span class="dp-dot dp-dot-personal"></span> Personal</span>
+          ${batchDays.size > 0 ? `<span style="margin-left:auto"><span class="dp-batch-marker"></span> In this batch</span>` : ''}
         </div>
         ${selectedDate ? `
           <div style="display:flex;justify-content:flex-end;padding-top:4px">
@@ -6674,6 +6753,44 @@ function _dayPickerNav(delta) {
   if (overlay) overlay.innerHTML = _renderSubDayPickerContent();
 }
 
+// Hover tooltip — shows event labels on the day under the cursor.
+function _dayPickerHover(e, dateStr) {
+  const overlay = document.getElementById('day-picker');
+  if (!overlay) return;
+  const tip = overlay.querySelector('#dp-tooltip');
+  if (!tip) return;
+  // Get fresh counts (cheap enough for one day)
+  const counts = _getAllEventCountsForRange(dateStr, dateStr);
+  const day = counts[dateStr];
+  // Friendly date header
+  const niceDate = fmtDateLocal(dateStr);
+  if (!day || day.total === 0) {
+    tip.innerHTML = `<div class="dp-tooltip-title">${esc(niceDate)}</div><div class="dp-tooltip-empty">Nothing scheduled</div>`;
+  } else {
+    const labelHTML = (day.labels || []).map(l => `<div class="dp-tooltip-row dp-tooltip-${l.kind}">${esc(l.label)}</div>`).join('');
+    tip.innerHTML = `<div class="dp-tooltip-title">${esc(niceDate)}</div>${labelHTML || '<div class="dp-tooltip-empty">(no detail)</div>'}`;
+  }
+  // Position relative to the modal-body
+  const cell = e.currentTarget;
+  const body = overlay.querySelector('.modal-body');
+  if (cell && body) {
+    const cellRect = cell.getBoundingClientRect();
+    const bodyRect = body.getBoundingClientRect();
+    const left = cellRect.left - bodyRect.left + (cellRect.width / 2);
+    const top = cellRect.bottom - bodyRect.top + 4;
+    tip.style.left = Math.max(8, Math.min(left, bodyRect.width - 220)) + 'px';
+    tip.style.top = top + 'px';
+  }
+  tip.style.display = 'block';
+}
+
+function _dayPickerHoverEnd() {
+  const overlay = document.getElementById('day-picker');
+  if (!overlay) return;
+  const tip = overlay.querySelector('#dp-tooltip');
+  if (tip) tip.style.display = 'none';
+}
+
 function _dayPickerCommit(dateStr) {
   const ps = window._dayPickerState;
   const ds = window._subDialogState;
@@ -6686,7 +6803,7 @@ function _dayPickerCommit(dateStr) {
   if (rowEl) {
     const lbl = rowEl.querySelector('.sub-row-date-label');
     const hidden = rowEl.querySelector('.sub-row-date');
-    if (lbl) lbl.textContent = dateStr ? fmtDate(dateStr) : '— Pick a day —';
+    if (lbl) lbl.textContent = dateStr ? fmtDateLocal(dateStr) : '— Pick a day —';
     if (hidden) hidden.value = dateStr;
   }
   document.getElementById('day-picker')?.remove();
@@ -10511,6 +10628,61 @@ function getMasterCalendarEvents(startDateStr, endDateStr, ctx) {
     });
   }
 
+  // 4) Install task masters — but only when the parent project has NO install
+  //    window covering the task's derived date range (avoids stacking a
+  //    duplicate bar on top of the install window). Subtasks always render in
+  //    the day-detail List view, nested under their parent project.
+  //    Milestones with no due date are skipped. Filter respects showInstalls
+  //    since these are install work.
+  if (filters.showInstalls) {
+    (state.installTasks || []).forEach(t => {
+      if (t.projectId == null) return;
+      // Collect all attendees across master + subtasks for member filtering
+      const allAttendees = new Set();
+      (t.assigneeIds || []).forEach(id => allAttendees.add(id));
+      (t.subtasks || []).forEach(s => (s.assigneeIds || []).forEach(id => allAttendees.add(id)));
+      if (!anyAttendeeAllowed([...allAttendees])) return;
+
+      const proj = state.projects.find(p => p.id === t.projectId);
+      if (!proj) return;
+
+      let range;
+      if (t.isMilestone) {
+        if (!t.dueDate) return;
+        range = { start: t.dueDate, end: t.dueDate };
+      } else {
+        range = getTaskDateRange(t);
+        if (!range) return; // no dated subtasks → nothing to surface
+      }
+      // Skip if outside view range
+      if (range.end < startDateStr || range.start > endDateStr) return;
+
+      // Skip when project install window already covers this range — the
+      // window bar IS the bar; subtasks appear under it in day-detail.
+      const win = getInstallWindow(proj);
+      if (win && win.start <= range.start && win.end >= range.end) return;
+
+      events.push({
+        type: 'install_task',
+        id: `itask-${t.id}`,
+        title: t.title + (t.isMilestone ? ' (milestone)' : ''),
+        projectId: t.projectId,
+        project: proj,
+        startDate: _mcNormalizeDate(range.start),
+        endDate: _mcNormalizeDate(range.end),
+        startTime: null,
+        endTime: null,
+        color: t.isMilestone ? '#D29922' : '#58A6FF',
+        displayColor: getProjectColor(t.projectId),
+        committed: false, // tasks render with outline style (planning)
+        attendeeIds: [...allAttendees],
+        statusLabel: t.isMilestone ? 'Milestone' : 'Tasks',
+        raw: t,
+        isMilestone: !!t.isMilestone
+      });
+    });
+  }
+
   return events;
 }
 
@@ -11080,6 +11252,24 @@ function _ymd(d) {
   return `${y}-${m}-${day}`;
 }
 
+// Parse a 'YYYY-MM-DD' string into a local-midnight Date (NOT UTC). The native
+// Date constructor parses 'YYYY-MM-DD' as UTC midnight, which then renders as
+// the previous day in any timezone west of UTC — the off-by-one trap. Use this
+// helper for any date-string-to-Date conversion when you want LOCAL semantics.
+function _parseLocalYmd(s) {
+  if (!s) return null;
+  const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(s);
+  if (!m) return null;
+  return new Date(parseInt(m[1], 10), parseInt(m[2], 10) - 1, parseInt(m[3], 10));
+}
+
+// Format a YYYY-MM-DD string safely as a local date (no timezone shift).
+function fmtDateLocal(s) {
+  const d = _parseLocalYmd(s);
+  if (!d) return '—';
+  return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
+}
+
 function _addDays(d, n) {
   const r = new Date(d);
   r.setDate(r.getDate() + n);
@@ -11476,11 +11666,29 @@ function renderMasterCalDayList(ctx, dateOverride) {
   const events = getMasterCalendarEvents(k, k, ctx);
 
   const installs = events.filter(e => e.type === 'install');
+  const installTasks = events.filter(e => e.type === 'install_task');
   const meetings = events.filter(e => e.type === 'meeting')
     .sort((a, b) => (a.startTime || '').localeCompare(b.startTime || ''));
   const personal = events.filter(e => e.type === 'personal_event');
 
-  if (installs.length === 0 && meetings.length === 0 && personal.length === 0) {
+  // For each install on this day, collect any subtasks belonging to any task
+  // on that project that land on today. Subtasks appear nested under the job.
+  const tasksByProject = {};
+  (state.installTasks || []).forEach(t => {
+    if (t.projectId == null) return;
+    (t.subtasks || []).forEach(s => {
+      if (s.date === k) {
+        if (!tasksByProject[t.projectId]) tasksByProject[t.projectId] = [];
+        tasksByProject[t.projectId].push({ task: t, subtask: s });
+      }
+    });
+    if (t.isMilestone && t.dueDate === k) {
+      if (!tasksByProject[t.projectId]) tasksByProject[t.projectId] = [];
+      tasksByProject[t.projectId].push({ task: t, subtask: null });
+    }
+  });
+
+  if (installs.length === 0 && installTasks.length === 0 && meetings.length === 0 && personal.length === 0) {
     return `
       <div class="mcal-day-list">
         <div style="padding:24px;text-align:center;color:#6E7681;font-size:13px;font-style:italic">
@@ -11490,17 +11698,45 @@ function renderMasterCalDayList(ctx, dateOverride) {
     `;
   }
 
-  // Installs as parent cards with a nested-tasks placeholder. Install tasks
-  // don't exist yet; the structure is here so they slot in later as children
-  // pinned to this day under their parent job.
+  function subtaskItem(t, s) {
+    const proj = t.projectId != null ? state.projects.find(p => p.id === t.projectId) : null;
+    const assignees = (s ? s.assigneeIds : t.assigneeIds) || [];
+    const names = assignees
+      .map(id => (getTeamMember(id) || {}).name)
+      .filter(Boolean)
+      .map(n => n.split(' ')[0])
+      .join(', ');
+    const isMile = !s && t.isMilestone;
+    const done = s ? s.done : t.done;
+    const title = s ? s.title : t.title;
+    const photoBadge = s && s.photoRequired
+      ? (s.photo ? ' <span class="mcal-task-photo">📷</span>' : ' <span class="mcal-task-photo-req" title="Photo required">📷 req</span>')
+      : '';
+    return `
+      <div class="mcal-daylist-task${done ? ' is-done' : ''}" onclick="${proj ? `openProject(${proj.id})` : 'void(0)'}">
+        <span class="mcal-task-check">${done ? '✓' : '○'}</span>
+        <div class="mcal-task-body">
+          <div class="mcal-task-title">${isMile ? '🚩 ' : ''}<strong>${esc(t.title)}</strong>${s ? ': ' + esc(s.title) : ''}${photoBadge}</div>
+          ${names ? `<div class="mcal-task-meta">${esc(names)}</div>` : ''}
+        </div>
+      </div>
+    `;
+  }
+
+  // Installs as parent cards, with this-day subtasks nested under them.
   const installCards = installs.map(e => {
-    const st = getEventStyle(e.displayColor || e.color, e.committed);
     const proj = e.project;
     const crew = (e.attendeeIds || [])
       .map(id => (state.team.find(m => m.id === id) || {}).name)
       .filter(Boolean)
       .map(n => n.split(' ')[0])
       .join(', ');
+    const childTasks = tasksByProject[e.projectId] || [];
+    const tasksHTML = childTasks.length
+      ? childTasks.map(({ task, subtask }) => subtaskItem(task, subtask)).join('')
+      : '<div class="mcal-daylist-tasks-empty">No tasks scheduled for this day</div>';
+    // Mark these tasks as "handled" so they don't render again standalone
+    delete tasksByProject[e.projectId];
     return `
       <div class="mcal-daylist-job" style="border-left:4px solid ${e.displayColor || e.color}">
         <div class="mcal-daylist-job-head" onclick="_mcTapEvent('${e.id}')">
@@ -11510,9 +11746,48 @@ function renderMasterCalDayList(ctx, dateOverride) {
         <div class="mcal-daylist-job-meta">
           ${esc(fmtDateRange(e.startDate, e.endDate))}${crew ? ` · ${esc(crew)}` : ''}
         </div>
-        <div class="mcal-daylist-tasks">
-          <div class="mcal-daylist-tasks-empty">No tasks scheduled for this day yet</div>
+        <div class="mcal-daylist-tasks">${tasksHTML}</div>
+      </div>
+    `;
+  }).join('');
+
+  // Standalone install_task bars (no covering install window) — show as their
+  // own parent cards with this day's subtasks/milestone under them.
+  const standaloneTaskCards = installTasks.map(e => {
+    const proj = e.project;
+    const childTasks = tasksByProject[e.projectId] || [];
+    const tasksHTML = childTasks.length
+      ? childTasks.map(({ task, subtask }) => subtaskItem(task, subtask)).join('')
+      : '<div class="mcal-daylist-tasks-empty">No tasks scheduled for this day</div>';
+    delete tasksByProject[e.projectId];
+    return `
+      <div class="mcal-daylist-job" style="border-left:4px solid ${e.displayColor || e.color};border-left-style:dashed">
+        <div class="mcal-daylist-job-head" onclick="openProject(${e.projectId})">
+          <div class="mcal-daylist-job-title">${esc(proj ? proj.name : e.title)}</div>
+          <span class="mcal-daylist-job-status" style="color:${e.displayColor || e.color}">${e.isMilestone ? 'Milestone' : 'Planning'}</span>
         </div>
+        <div class="mcal-daylist-job-meta">${esc(fmtDateRange(e.startDate, e.endDate))}</div>
+        <div class="mcal-daylist-tasks">${tasksHTML}</div>
+      </div>
+    `;
+  }).join('');
+
+  // Any leftover tasks (projects with this-day subtasks but no install window
+  // and no standalone bar — usually means tasks added without a window). Render
+  // each as a small standalone group under its project name.
+  const orphanCards = Object.keys(tasksByProject).map(pidStr => {
+    const pid = parseInt(pidStr, 10);
+    const proj = state.projects.find(p => p.id === pid);
+    if (!proj) return '';
+    const c = getProjectColor(pid);
+    const items = tasksByProject[pid].map(({ task, subtask }) => subtaskItem(task, subtask)).join('');
+    return `
+      <div class="mcal-daylist-job" style="border-left:4px solid ${c};border-left-style:dashed">
+        <div class="mcal-daylist-job-head" onclick="openProject(${pid})">
+          <div class="mcal-daylist-job-title">${esc(proj.name)}</div>
+          <span class="mcal-daylist-job-status" style="color:${c}">Tasks</span>
+        </div>
+        <div class="mcal-daylist-tasks">${items}</div>
       </div>
     `;
   }).join('');
@@ -11546,9 +11821,9 @@ function renderMasterCalDayList(ctx, dateOverride) {
 
   return `
     <div class="mcal-day-list">
-      ${installs.length > 0 ? `
+      ${(installs.length > 0 || installTasks.length > 0 || orphanCards) ? `
         <div class="mcal-daylist-section-label">Jobs</div>
-        ${installCards}
+        ${installCards}${standaloneTaskCards}${orphanCards}
       ` : ''}
       ${meetings.length > 0 ? `
         <div class="mcal-daylist-section-label">Meetings</div>
