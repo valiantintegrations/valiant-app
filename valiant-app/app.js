@@ -9029,13 +9029,16 @@ function renderCalendar(c) {
           ${taskShown.map(({ task, subtask }) => {
             const c = getProjectColor(task.projectId);
             const proj = state.projects.find(pp => pp.id === task.projectId);
+            const clientName = proj ? (proj.client_name || '') : '';
             const projName = proj ? proj.name : '';
             const isMile = !subtask && task.isMilestone;
             const stepLabel = subtask ? subtask.title : task.title;
-            const fullText = projName ? `${projName} · ${stepLabel}` : stepLabel;
-            const tooltip = `${projName}${projName ? ' · ' : ''}${task.title}${subtask ? ' · ' + subtask.title : ''}`;
-            // Outline style — tasks are planning, not the install window itself
-            return `<div class="cal-event" style="background:transparent;border:1px solid ${c};color:${c}" onclick="event.stopPropagation();openProject(${task.projectId})" title="${esc(tooltip)}">${isMile ? '🚩 ' : '◷ '}${esc(fullText)}</div>`;
+            // Chip shows client + step (clients are what the team identifies work by).
+            // Project name moves to the hover tooltip.
+            const chipText = clientName ? `${clientName} · ${stepLabel}` : stepLabel;
+            const tooltipParts = [clientName, projName, task.title, subtask ? subtask.title : null].filter(Boolean);
+            const tooltip = tooltipParts.join(' · ');
+            return `<div class="cal-event" style="background:transparent;border:1px solid ${c};color:${c}" onclick="event.stopPropagation();openProject(${task.projectId})" title="${esc(tooltip)}">${isMile ? '🚩 ' : '◷ '}${esc(chipText)}</div>`;
           }).join('')}
           ${totalCountWithTasks > visibleCount ? `<div class="cal-event-overflow">+${totalCountWithTasks - visibleCount} more</div>` : ''}
         </td>`;
@@ -10830,7 +10833,7 @@ function getMasterCalendarEvents(startDateStr, endDateStr, ctx) {
       events.push({
         type: 'install_task',
         id: `itask-${t.id}`,
-        title: `${proj.name} · ${t.title}${t.isMilestone ? ' (milestone)' : ''}`,
+        title: `${proj.client_name || proj.name} · ${t.title}${t.isMilestone ? ' (milestone)' : ''}`,
         projectId: t.projectId,
         project: proj,
         startDate: _mcNormalizeDate(range.start),
