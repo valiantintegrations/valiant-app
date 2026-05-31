@@ -6501,18 +6501,36 @@ function _rerenderSubDialog() {
 // Idempotent — replaces any previous binding by cloning + replacing.
 function _bindSubDialogListeners() {
   const overlay = document.getElementById('subtask-dialog');
-  if (!overlay) return;
+  if (!overlay) { console.log('[subtask] no overlay found for bind'); return; }
   const save = overlay.querySelector('#sub-save-btn');
-  if (save) {
-    const fresh = save.cloneNode(true);
-    save.parentNode.replaceChild(fresh, save);
-    fresh.addEventListener('click', (e) => { e.preventDefault(); _saveSubtaskDialog(); });
-  }
+  if (!save) { console.log('[subtask] no save button found'); return; }
+  // Strip inline onclick (was the inline approach; we use addEventListener now)
+  save.removeAttribute('onclick');
+  // Make sure the button isn't disabled or having pointer-events suppressed
+  save.disabled = false;
+  save.style.pointerEvents = 'auto';
+  // Bind via addEventListener — replace the node first to clear any prior listeners
+  const fresh = save.cloneNode(true);
+  fresh.removeAttribute('onclick');
+  save.parentNode.replaceChild(fresh, save);
+  fresh.addEventListener('click', function(e) {
+    console.log('[subtask] save button clicked');
+    e.preventDefault();
+    e.stopPropagation();
+    try {
+      _saveSubtaskDialog();
+    } catch (err) {
+      console.error('[subtask] save error:', err);
+      showToast('Save failed: ' + (err && err.message ? err.message : 'unknown error'), 'info');
+    }
+  });
+  console.log('[subtask] save button bound');
 }
 
 function _saveSubtaskDialog() {
+  console.log('[subtask] _saveSubtaskDialog called');
   const s = window._subDialogState;
-  if (!s) return;
+  if (!s) { console.log('[subtask] no dialog state'); return; }
   const t = getInstallTaskById(s.taskId);
   if (!t) return;
 
@@ -6536,8 +6554,10 @@ function _saveSubtaskDialog() {
       photoRequired: photoReqEl ? !!photoReqEl.checked : false
     };
   });
+  console.log('[subtask] rows read:', rows);
 
   const valid = rows.filter(r => r.title);
+  console.log('[subtask] valid rows:', valid.length, 'mode:', s.mode);
   if (valid.length === 0) {
     showToast('Each step needs a title', 'info');
     return;
@@ -6554,6 +6574,7 @@ function _saveSubtaskDialog() {
 
   document.getElementById('subtask-dialog')?.remove();
   window._subDialogState = null;
+  console.log('[subtask] save complete, re-rendering');
   renderCurrentPage();
 }
 
