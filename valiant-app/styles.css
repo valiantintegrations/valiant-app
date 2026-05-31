@@ -6596,3 +6596,29 @@ html.text-large body {
   border: 1px solid #5A4A1A;
   margin-left: 3px;
 }
+
+/* Subtask assignee chip v2 — colored initials badge + first name */
+.itask-assignee-chipv2 {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin-right: 6px;
+  margin-bottom: 2px;
+  font-size: 11px;
+  color: #C9D1D9;
+}
+.itask-assignee-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  border: 1px solid;
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+}
+.itask-assignee-name {
+  font-size: 11px;
+}
