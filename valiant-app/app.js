@@ -1200,6 +1200,68 @@ function _nextTaskId() {
 
 // Migrate old task shape (single assignee, manual start/end) to new shape.
 // Called once on load — idempotent.
+// One-time migration: install-phase sub-tasks (old simple flat to-do system
+// under state.subtasks[projectId]['install']) become Install Tasks (new system).
+// Each becomes a master task with no subtasks. Marked migrated=true and
+// removed from state.subtasks to prevent duplication. Idempotent.
+function _migrateInstallSubtasksToTasks() {
+  const src = state.subtasks || {};
+  let migratedAny = false;
+  Object.keys(src).forEach(pidStr => {
+    const pid = parseInt(pidStr, 10);
+    if (isNaN(pid)) return;
+    const bucket = src[pidStr] || {};
+    const oldList = bucket.install || [];
+    if (oldList.length === 0) return;
+    oldList.forEach(old => {
+      // Skip already-migrated (shouldn't happen since we delete them, but defensive)
+      if (old._migrated) return;
+      const assignees = (old.assignee_id != null) ? [old.assignee_id] : [];
+      // Map to install task: if it has a due_date, treat as milestone; otherwise as a
+      // work task with one subtask carrying its own date (or no date if none).
+      const isMilestone = !!old.due_date && assignees.length === 0;
+      if (isMilestone) {
+        addInstallTask({
+          projectId: pid,
+          system: null,
+          title: old.text || 'Task',
+          assigneeIds: [],
+          isMilestone: true,
+          dueDate: old.due_date
+        });
+      } else {
+        const master = addInstallTask({
+          projectId: pid,
+          system: null,
+          title: old.text || 'Task',
+          assigneeIds: assignees,
+          isMilestone: false
+        });
+        if (old.status === 'done') {
+          master.done = true;
+        }
+        // If it had a due date, model as a single dated subtask
+        if (old.due_date) {
+          addInstallSubtask(master.id, {
+            title: old.text || 'Task',
+            date: old.due_date,
+            assigneeIds: assignees,
+            notes: ''
+          });
+        }
+      }
+      migratedAny = true;
+    });
+    // Clear the install bucket — design stays
+    delete bucket.install;
+  });
+  if (migratedAny) {
+    save('vi_subtasks', state.subtasks);
+    save('vi_install_tasks', state.installTasks);
+  }
+}
+
+
 function _migrateInstallTaskShape() {
   const all = state.installTasks || [];
   let changed = false;
@@ -6065,7 +6127,13 @@ function renderProjectTasksSection(p) {
     return ids.map(id => {
       const m = getTeamMember(id);
       if (!m) return '';
-      return `<span class="itask-assignee">${esc(m.name.split(' ')[0])}</span>`;
+      const memberColor = (DASHBOARD_ACCESS.find(d => d.key === m.primaryRole) || {}).color || '#6E7681';
+      const initials = m.initials || (m.name || '').slice(0, 2).toUpperCase();
+      const first = (m.name || '').split(' ')[0];
+      return `<span class="itask-assignee-chipv2" title="${esc(m.name)}">
+        <span class="itask-assignee-badge" style="background:${memberColor}22;border-color:${memberColor};color:${memberColor}">${esc(initials)}</span>
+        <span class="itask-assignee-name">${esc(first)}</span>
+      </span>`;
     }).join('');
   }
 
@@ -7018,15 +7086,17 @@ function renderProjectProgressHTML(p) {
 }
 
 function renderChecklistTab(container, project, phase) {
-  // Sub-tasks section (Pass 4A) — top of every Design/Install tab
-  const subtasksHTML = renderSubtasksSection(project, phase);
+  // Sub-tasks section — kept ONLY on Design. Install tab now uses the unified
+  // Install Tasks system below; the old install sub-tasks were migrated into
+  // it on first load (see _migrateInstallSubtasksToTasks).
+  const subtasksHTML = (phase === 'design') ? renderSubtasksSection(project, phase) : '';
   // Scheduling notes — only on Install tab. Provides quick visibility into
   // logistical detail like "out of building by 4pm Wed" set during install window pick.
   const schedNotesHTML = (phase === 'install') ? renderSchedulingNotesCard(project) : '';
 
   // Install tab — unified Install Tasks system (replaces the old per-system checklist)
   if (phase === 'install') {
-    container.innerHTML = schedNotesHTML + subtasksHTML + renderProjectTasksSection(project);
+    container.innerHTML = schedNotesHTML + renderProjectTasksSection(project);
     return;
   }
 
@@ -8825,6 +8895,7 @@ function renderCalendar(c) {
   let cells = '';
   let dayCount = 1;
   const prevMonthDays = new Date(year, month, 0).getDate();
+  const viewerId = getActiveTeamMemberId();
 
   for (let row = 0; row < 6; row++) {
     cells += '<tr>';
@@ -8854,6 +8925,21 @@ function renderCalendar(c) {
         const personalSlots = Math.max(0, visibleCount - projShown.length - meetingShown.length);
         const personalShown = personalEvents.slice(0, personalSlots);
 
+        // Install task subtasks on this day (from any project). Treated as
+        // its own chip type; respects the projShown+meetingShown+personalShown
+        // visible count budget. Each chip jumps to its project on click.
+        const taskItems = [];
+        (state.installTasks || []).forEach(t => {
+          if (t.projectId == null) return;
+          (t.subtasks || []).forEach(s => {
+            if (s.date === dateStr) taskItems.push({ task: t, subtask: s });
+          });
+          if (t.isMilestone && t.dueDate === dateStr) taskItems.push({ task: t, subtask: null });
+        });
+        const taskSlots = Math.max(0, visibleCount - projShown.length - meetingShown.length - personalShown.length);
+        const taskShown = taskItems.slice(0, taskSlots);
+        const totalCountWithTasks = totalCount + taskItems.length;
+
         cells += `<td class="${isToday ? 'today' : ''}" onclick="openCalendarDayDetail('${dateStr}')" style="cursor:pointer">
           <span class="cal-day-num">${dayCount}</span>
           ${projShown.map(e => {
@@ -8861,7 +8947,6 @@ function renderCalendar(c) {
             const notesPart = proj?.scheduling_notes ? `\n\nNotes: ${proj.scheduling_notes}` : '';
             const tooltip = `${e.name}${e.booked ? ' (Booked)' : ' (Estimated)'}${notesPart}`;
             const hasNotes = !!proj?.scheduling_notes;
-            // Unified: project color, solid for booked, outline for estimated
             const st = getEventStyle(getProjectColor(e.id), !!e.booked);
             return `<div class="cal-event${hasNotes ? ' cal-event-has-notes' : ''}" style="${st.css}" onclick="event.stopPropagation();openProject(${e.id},'install')" title="${esc(tooltip)}">${hasNotes ? '📝 ' : ''}${esc(e.name)}</div>`;
           }).join('')}
@@ -8870,20 +8955,26 @@ function renderCalendar(c) {
             const timeLabel = m.startTime ? _fmt12h(m.startTime) + ' ' : '';
             const isPending = m.status === 'pending_approval';
             const tooltip = `${m.title}${m.startTime && m.endTime ? ' · ' + _fmt12hRange(m.startTime, m.endTime) : ''}`;
-            // Unified: solid when confirmed, outline when pending
             const st = getEventStyle(mColor, !isPending);
             const timeColor = st.fill === 'transparent' ? mColor : st.text;
             return `<div class="cal-event" style="${st.css}" onclick="event.stopPropagation();openMeetingDetail(${m.id})" title="${esc(tooltip)}">${timeLabel ? `<span style="font-weight:600;color:${timeColor}">${esc(timeLabel)}</span>` : ''}${esc(m.title)}</div>`;
           }).join('')}
           ${personalShown.map(pe => {
             const owner = getTeamMember(pe.memberId);
-            const viewerId = getActiveTeamMemberId();
             const viewerIsOwner = pe.memberId === viewerId;
             const label = getPersonalEventDisplayLabel(pe, viewerIsOwner);
             const ownerLabel = (!viewerIsOwner && owner) ? `${owner.name.split(' ')[0]}: ` : '';
             return `<div class="cal-event cal-event-personal" style="background:${getPersonalEventColor(pe)}1F;border-color:${getPersonalEventColor(pe)};color:${getPersonalEventColor(pe)}" onclick="event.stopPropagation();openCalendarDayDetail('${dateStr}')" title="${esc(ownerLabel + label)}">${esc(ownerLabel + label)}</div>`;
           }).join('')}
-          ${totalCount > visibleCount ? `<div class="cal-event-overflow">+${totalCount - visibleCount} more</div>` : ''}
+          ${taskShown.map(({ task, subtask }) => {
+            const c = getProjectColor(task.projectId);
+            const isMile = !subtask && task.isMilestone;
+            const title = subtask ? subtask.title : task.title;
+            const tooltip = `${task.title}${subtask ? ' · ' + subtask.title : ''}`;
+            // Outline style — tasks are planning, not the install window itself
+            return `<div class="cal-event" style="background:transparent;border:1px solid ${c};color:${c}" onclick="event.stopPropagation();openProject(${task.projectId})" title="${esc(tooltip)}">${isMile ? '🚩 ' : '◷ '}${esc(title)}</div>`;
+          }).join('')}
+          ${totalCountWithTasks > visibleCount ? `<div class="cal-event-overflow">+${totalCountWithTasks - visibleCount} more</div>` : ''}
         </td>`;
         dayCount++;
       }
@@ -8892,7 +8983,6 @@ function renderCalendar(c) {
     if (dayCount > daysInMonth) break;
   }
 
-  const viewerId = getActiveTeamMemberId();
   // Booked + Estimated visibility toggles (default OFF — opt-in to reduce information overload)
   const showBooked = state.calendarShowBooked === true;
   const showEstimated = state.calendarShowEstimated === true;
@@ -15554,6 +15644,7 @@ async function init() {
   applyTextSize(state.textSize);
   _migrateInstallTaskShape();
   _migrateInstallTaskTemplates();
+  _migrateInstallSubtasksToTasks();
   try {
     renderCurrentPage();
   } catch (e) {
