@@ -6466,3 +6466,133 @@ html.text-large body {
 .dp-dot-task { background: #58A6FF; }
 .dp-dot-personal { background: #D29922; }
 .sub-row-date-btn { width: 100%; }
+
+/* Day picker — in-batch highlight + tooltip + batch marker */
+.dp-cell.is-in-batch {
+  background: #1B2333;
+  box-shadow: inset 0 0 0 1.5px #58A6FF;
+}
+.dp-cell.is-in-batch .dp-daynum { color: #58A6FF; font-weight: 600; }
+.dp-batch-marker {
+  display: inline-block;
+  width: 10px;
+  height: 10px;
+  border: 1.5px solid #58A6FF;
+  border-radius: 2px;
+  vertical-align: middle;
+  margin-right: 3px;
+}
+.dp-tooltip {
+  position: absolute;
+  z-index: 10003;
+  background: #161B22;
+  border: 1px solid #30363D;
+  border-radius: 6px;
+  padding: 8px 10px;
+  font-size: 11px;
+  color: #C9D1D9;
+  min-width: 180px;
+  max-width: 240px;
+  pointer-events: none;
+  box-shadow: 0 4px 12px rgba(0,0,0,0.4);
+}
+.dp-tooltip-title {
+  font-size: 11px;
+  font-weight: 700;
+  color: #E6EDF3;
+  margin-bottom: 4px;
+  border-bottom: 1px solid #30363D;
+  padding-bottom: 4px;
+}
+.dp-tooltip-row {
+  padding: 2px 0;
+  line-height: 1.4;
+  font-size: 11px;
+}
+.dp-tooltip-row::before {
+  content: '';
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  margin-right: 6px;
+  vertical-align: middle;
+  background: #6E7681;
+}
+.dp-tooltip-installs::before { background: #3FB950; }
+.dp-tooltip-meetings::before { background: #A371F7; }
+.dp-tooltip-tasks::before { background: #58A6FF; }
+.dp-tooltip-personal::before { background: #D29922; }
+.dp-tooltip-empty { color: #6E7681; font-style: italic; font-size: 11px; }
+
+/* Photo gate UI on subtasks */
+.itask-check.is-gated {
+  cursor: not-allowed;
+  border-color: #5A4A1A;
+  background: #1A1407;
+}
+.itask-photo-btn {
+  background: #1A1407;
+  border: 1px solid #5A4A1A;
+  color: #D29922;
+  font-size: 10px;
+  padding: 2px 7px;
+  border-radius: 10px;
+  cursor: pointer;
+  margin-left: 4px;
+  font-family: inherit;
+}
+.itask-photo-btn:hover { background: #2A1F0A; }
+.itask-photo-badge {
+  display: inline-block;
+  font-size: 11px;
+  margin-left: 4px;
+  vertical-align: middle;
+}
+.itask-photo-badge.has-photo { opacity: 0.9; }
+.itask-sub.has-photo-req { border-left: 2px solid #D29922; padding-left: 4px; }
+
+/* Day-detail nested install task subtasks under their parent job */
+.mcal-daylist-task {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 6px 8px;
+  background: #0D1117;
+  border: 1px solid #1C2333;
+  border-radius: 5px;
+  margin-bottom: 4px;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+.mcal-daylist-task:hover { background: #161B22; }
+.mcal-daylist-task.is-done { opacity: 0.5; }
+.mcal-daylist-task.is-done .mcal-task-title { text-decoration: line-through; }
+.mcal-task-check {
+  flex-shrink: 0;
+  width: 16px;
+  height: 16px;
+  border-radius: 3px;
+  border: 1.5px solid #30363D;
+  background: #161B22;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 11px;
+  color: #3FB950;
+  font-weight: 700;
+  margin-top: 1px;
+}
+.mcal-task-body { flex: 1; min-width: 0; }
+.mcal-task-title { font-size: 12px; color: #C9D1D9; line-height: 1.35; }
+.mcal-task-meta { font-size: 10px; color: #6E7681; margin-top: 2px; }
+.mcal-task-photo { color: #3FB950; font-size: 11px; }
+.mcal-task-photo-req {
+  color: #D29922;
+  font-size: 9px;
+  padding: 1px 4px;
+  border-radius: 3px;
+  background: #1A1407;
+  border: 1px solid #5A4A1A;
+  margin-left: 3px;
+}
