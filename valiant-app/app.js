@@ -1326,7 +1326,7 @@ function toggleInstallTaskDone(taskId) {
   save('vi_install_tasks', state.installTasks);
 }
 
-function addSubtask(taskId, { title, date, assigneeIds, notes }) {
+function addInstallSubtask(taskId, { title, date, assigneeIds, notes }) {
   const t = getInstallTaskById(taskId);
   if (!t) return;
   if (!t.subtasks) t.subtasks = [];
@@ -1343,7 +1343,7 @@ function addSubtask(taskId, { title, date, assigneeIds, notes }) {
   if (t.projectId != null && ids.length) ensureOnProjectCrew(t.projectId, ids);
 }
 
-function updateSubtask(taskId, subtaskId, patch) {
+function updateInstallSubtask(taskId, subtaskId, patch) {
   const t = getInstallTaskById(taskId);
   if (!t) return;
   const s = (t.subtasks || []).find(x => x.id === subtaskId);
@@ -1354,14 +1354,14 @@ function updateSubtask(taskId, subtaskId, patch) {
   if (t.projectId != null && s.assigneeIds.length) ensureOnProjectCrew(t.projectId, s.assigneeIds);
 }
 
-function deleteSubtask(taskId, subtaskId) {
+function deleteInstallSubtask(taskId, subtaskId) {
   const t = getInstallTaskById(taskId);
   if (!t) return;
   t.subtasks = (t.subtasks || []).filter(x => x.id !== subtaskId);
   save('vi_install_tasks', state.installTasks);
 }
 
-function toggleSubtaskDone(taskId, subtaskId) {
+function toggleInstallSubtaskDone(taskId, subtaskId) {
   const t = getInstallTaskById(taskId);
   if (!t) return;
   const s = (t.subtasks || []).find(x => x.id === subtaskId);
@@ -1501,7 +1501,7 @@ function seedTasksFromProjectScope(projectId, { overwrite } = {}) {
       templateKey: sysKey
     });
     // Add each template subtask with no date / no assignees — user fills in
-    (tpl.subtasks || []).forEach(s => addSubtask(master.id, {
+    (tpl.subtasks || []).forEach(s => addInstallSubtask(master.id, {
       title: s.title, notes: s.notes || '', date: null, assigneeIds: []
     }));
     seededCount++;
@@ -6073,7 +6073,7 @@ function renderProjectTasksSection(p) {
     const photoGated = s.photoRequired && !s.photo;
     const checkClickHandler = photoGated
       ? `event.stopPropagation();showToast('Upload a completion photo first','info')`
-      : `event.stopPropagation();toggleSubtaskDone(${t.id},${s.id});renderCurrentPage()`;
+      : `event.stopPropagation();toggleInstallSubtaskDone(${t.id},${s.id});renderCurrentPage()`;
     const checkClasses = `itask-check${photoGated ? ' is-gated' : ''}`;
     const photoBadge = s.photoRequired
       ? (s.photo
@@ -6092,7 +6092,7 @@ function renderProjectTasksSection(p) {
           </div>
           ${s.notes ? `<div class="itask-sub-notes">${esc(s.notes)}</div>` : ''}
         </div>
-        <span class="itask-del" onclick="event.stopPropagation();if(confirm('Delete this step?')){deleteSubtask(${t.id},${s.id});renderCurrentPage();}">×</span>
+        <span class="itask-del" onclick="event.stopPropagation();if(confirm('Delete this step?')){deleteInstallSubtask(${t.id},${s.id});renderCurrentPage();}">×</span>
       </div>
     `;
   }
@@ -6501,20 +6501,16 @@ function _rerenderSubDialog() {
 // Idempotent — replaces any previous binding by cloning + replacing.
 function _bindSubDialogListeners() {
   const overlay = document.getElementById('subtask-dialog');
-  if (!overlay) { console.log('[subtask] no overlay found for bind'); return; }
+  if (!overlay) return;
   const save = overlay.querySelector('#sub-save-btn');
-  if (!save) { console.log('[subtask] no save button found'); return; }
-  // Strip inline onclick (was the inline approach; we use addEventListener now)
+  if (!save) return;
   save.removeAttribute('onclick');
-  // Make sure the button isn't disabled or having pointer-events suppressed
   save.disabled = false;
   save.style.pointerEvents = 'auto';
-  // Bind via addEventListener — replace the node first to clear any prior listeners
   const fresh = save.cloneNode(true);
   fresh.removeAttribute('onclick');
   save.parentNode.replaceChild(fresh, save);
   fresh.addEventListener('click', function(e) {
-    console.log('[subtask] save button clicked');
     e.preventDefault();
     e.stopPropagation();
     try {
@@ -6524,13 +6520,11 @@ function _bindSubDialogListeners() {
       showToast('Save failed: ' + (err && err.message ? err.message : 'unknown error'), 'info');
     }
   });
-  console.log('[subtask] save button bound');
 }
 
 function _saveSubtaskDialog() {
-  console.log('[subtask] _saveSubtaskDialog called');
   const s = window._subDialogState;
-  if (!s) { console.log('[subtask] no dialog state'); return; }
+  if (!s) return;
   const t = getInstallTaskById(s.taskId);
   if (!t) return;
 
@@ -6554,10 +6548,8 @@ function _saveSubtaskDialog() {
       photoRequired: photoReqEl ? !!photoReqEl.checked : false
     };
   });
-  console.log('[subtask] rows read:', rows);
 
   const valid = rows.filter(r => r.title);
-  console.log('[subtask] valid rows:', valid.length, 'mode:', s.mode);
   if (valid.length === 0) {
     showToast('Each step needs a title', 'info');
     return;
@@ -6565,16 +6557,15 @@ function _saveSubtaskDialog() {
 
   if (s.mode === 'edit' && s.subtaskId != null) {
     const r = valid[0];
-    updateSubtask(s.taskId, s.subtaskId, r);
+    updateInstallSubtask(s.taskId, s.subtaskId, r);
     showToast('Step updated', 'success');
   } else {
-    valid.forEach(r => addSubtask(s.taskId, r));
+    valid.forEach(r => addInstallSubtask(s.taskId, r));
     showToast(`Added ${valid.length} step${valid.length === 1 ? '' : 's'}`, 'success');
   }
 
   document.getElementById('subtask-dialog')?.remove();
   window._subDialogState = null;
-  console.log('[subtask] save complete, re-rendering');
   renderCurrentPage();
 }
 
