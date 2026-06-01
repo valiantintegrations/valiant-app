@@ -6931,6 +6931,141 @@ function _dayPickerHoverEnd() {
   if (tip) tip.style.display = 'none';
 }
 
+// ════════════════════════════════════════════════════════════════════════════
+// CALENDAR HOVER TOOLTIP
+// ────────────────────────────────────────────────────────────────────────────
+// Hover any bar/chip on the Operations Master Calendar or the standalone
+// Calendar tab to get day-specific detail without clicking. Mobile devices
+// don't fire mouseenter so this is desktop-only by nature.
+// eventId: 'install-{projectId}' | 'meeting-{id}' | 'pe-{id}' | 'itask-{id}'
+// dateStr: the day under the bar (used to filter subtasks etc.)
+// ════════════════════════════════════════════════════════════════════════════
+
+function _calBuildHoverContent(eventId, dateStr) {
+  if (!eventId) return '';
+  const m = /^([a-z_]+)-(\d+)$/.exec(eventId);
+  if (!m) return '';
+  const kind = m[1];
+  const rawId = parseInt(m[2], 10);
+
+  function renderProjectBlock(project) {
+    if (!project) return '';
+    const clientName = project.client_name || '';
+    const projName = project.name || '';
+    const scopeTags = Array.isArray(project.scope_tags) ? project.scope_tags : [];
+    // Subtasks landing on this day across all tasks for this project
+    const daySubs = [];
+    (state.installTasks || []).forEach(t => {
+      if (t.projectId !== project.id) return;
+      (t.subtasks || []).forEach(s => {
+        if (s.date === dateStr) daySubs.push({ task: t, subtask: s });
+      });
+      if (t.isMilestone && t.dueDate === dateStr) daySubs.push({ task: t, subtask: null });
+    });
+    const subsHTML = daySubs.length
+      ? `<div class="cal-hover-section-label">Today's tasks</div>
+         ${daySubs.map(({ task, subtask }) => {
+           const ids = subtask ? (subtask.assigneeIds || []) : (task.assigneeIds || []);
+           const names = ids.map(id => (getTeamMember(id) || {}).name).filter(Boolean).map(n => n.split(' ')[0]).join(', ');
+           const isMile = !subtask && task.isMilestone;
+           const title = subtask ? `${task.title}: ${subtask.title}` : task.title;
+           return `<div class="cal-hover-task">
+             <div class="cal-hover-task-title">${isMile ? '🚩 ' : '◷ '}${esc(title)}</div>
+             ${names ? `<div class="cal-hover-task-who">${esc(names)}</div>` : '<div class="cal-hover-task-who" style="color:#D29922">Unassigned</div>'}
+           </div>`;
+         }).join('')}`
+      : `<div class="cal-hover-section-label">Today's tasks</div><div class="cal-hover-empty">No tasks landing on this day</div>`;
+    const scopeHTML = scopeTags.length
+      ? `<div class="cal-hover-section-label">Scope</div>
+         <div class="cal-hover-tags">${scopeTags.map(t => `<span class="cal-hover-tag">${esc(t)}</span>`).join('')}</div>`
+      : '';
+    return `
+      <div class="cal-hover-title">${esc(clientName || projName)}</div>
+      ${clientName && projName ? `<div class="cal-hover-subtitle">${esc(projName)}</div>` : ''}
+      ${scopeHTML}
+      ${subsHTML}
+    `;
+  }
+
+  if (kind === 'install') {
+    const p = state.projects.find(x => x.id === rawId);
+    return renderProjectBlock(p);
+  }
+  if (kind === 'itask') {
+    const t = (state.installTasks || []).find(x => x.id === rawId);
+    if (!t) return '';
+    const p = state.projects.find(x => x.id === t.projectId);
+    return renderProjectBlock(p);
+  }
+  if (kind === 'meeting') {
+    const meeting = (state.meetings || []).find(x => x.id === rawId);
+    if (!meeting) return '';
+    const proj = meeting.projectId != null ? state.projects.find(x => x.id === meeting.projectId) : null;
+    const time = (meeting.startTime && meeting.endTime)
+      ? _fmt12hRange(meeting.startTime, meeting.endTime)
+      : (meeting.startTime ? _fmt12h(meeting.startTime) : 'Time not set');
+    const attendees = (meeting.attendees || []).map(id => (getTeamMember(id) || {}).name).filter(Boolean).join(', ');
+    return `
+      <div class="cal-hover-title">${esc(meeting.title || 'Meeting')}</div>
+      ${proj ? `<div class="cal-hover-subtitle">${esc(proj.client_name || proj.name)}</div>` : ''}
+      <div class="cal-hover-section-label">Time</div>
+      <div class="cal-hover-row">${esc(time)}</div>
+      ${attendees ? `<div class="cal-hover-section-label">Attendees</div><div class="cal-hover-row">${esc(attendees)}</div>` : ''}
+    `;
+  }
+  if (kind === 'pe') {
+    const pe = (state.personalEvents || []).find(x => x.id === rawId);
+    if (!pe) return '';
+    const owner = pe.memberId != null ? getTeamMember(pe.memberId) : null;
+    const time = (pe.startTime && pe.endTime) ? _fmt12hRange(pe.startTime, pe.endTime) : 'All day';
+    return `
+      <div class="cal-hover-title">${esc(pe.title || pe.type || 'Personal')}</div>
+      ${owner ? `<div class="cal-hover-subtitle">${esc(owner.name)}</div>` : ''}
+      <div class="cal-hover-section-label">Time</div>
+      <div class="cal-hover-row">${esc(time)}</div>
+    `;
+  }
+  return '';
+}
+
+function _calHoverEnter(e, eventId, dateStr) {
+  // Mobile / touch ignore — touchstart fires before mouseenter on iOS, but we
+  // also gate by hover capability via @media (hover:hover) on the tooltip CSS.
+  if (window.matchMedia && window.matchMedia('(hover: none)').matches) return;
+  const content = _calBuildHoverContent(eventId, dateStr);
+  if (!content) return;
+  let tip = document.getElementById('cal-hover-tip');
+  if (!tip) {
+    tip = document.createElement('div');
+    tip.id = 'cal-hover-tip';
+    tip.className = 'cal-hover-tip';
+    document.body.appendChild(tip);
+  }
+  tip.innerHTML = content;
+  tip.style.display = 'block';
+  // Position near the cursor, clamped to viewport
+  const x = e.clientX;
+  const y = e.clientY;
+  const margin = 14;
+  // Wait a tick so we can measure
+  requestAnimationFrame(() => {
+    const r = tip.getBoundingClientRect();
+    let left = x + margin;
+    let top = y + margin;
+    if (left + r.width > window.innerWidth - 8) left = x - r.width - margin;
+    if (top + r.height > window.innerHeight - 8) top = y - r.height - margin;
+    if (left < 8) left = 8;
+    if (top < 8) top = 8;
+    tip.style.left = left + 'px';
+    tip.style.top = top + 'px';
+  });
+}
+
+function _calHoverLeave() {
+  const tip = document.getElementById('cal-hover-tip');
+  if (tip) tip.style.display = 'none';
+}
+
 function _dayPickerCommit(dateStr) {
   const ps = window._dayPickerState;
   const ds = window._subDialogState;
@@ -7718,7 +7853,9 @@ function getInstallWindow(p) {
     return {
       start: booked.start,
       end: booked.end || booked.start,
-      source: 'booked'
+      source: 'booked',
+      excludeWeekends: booked.excludeWeekends !== false,
+      weekendIncludes: Array.isArray(booked.weekendIncludes) ? booked.weekendIncludes : []
     };
   }
   const est = getEstimatedInstallRange(p);
@@ -7726,10 +7863,29 @@ function getInstallWindow(p) {
     return {
       start: est.start,
       end: est.end,
-      source: 'estimated'
+      source: 'estimated',
+      excludeWeekends: true,
+      weekendIncludes: []
     };
   }
   return null;
+}
+
+// Is the given date a working day inside the install window? Weekends are
+// excluded by default unless the window opts in (`excludeWeekends:false`) or
+// the specific date is in the `weekendIncludes` list. Non-weekend dates are
+// always working days inside the window.
+function isWorkingDayInWindow(win, dateStr) {
+  if (!win || !dateStr) return false;
+  if (dateStr < win.start || dateStr > win.end) return false;
+  // Parse as local
+  const d = _parseLocalYmd(dateStr);
+  if (!d) return false;
+  const dow = d.getDay(); // 0 = Sun, 6 = Sat
+  const isWeekend = (dow === 0 || dow === 6);
+  if (!isWeekend) return true;
+  if (!win.excludeWeekends) return true;
+  return (win.weekendIncludes || []).includes(dateStr);
 }
 
 function daysUntil(dateStr) {
@@ -9004,11 +9160,10 @@ function renderCalendar(c) {
           <span class="cal-day-num">${dayCount}</span>
           ${projShown.map(e => {
             const proj = state.projects.find(pp => pp.id === e.id);
-            const notesPart = proj?.scheduling_notes ? `\n\nNotes: ${proj.scheduling_notes}` : '';
-            const tooltip = `${e.name}${e.booked ? ' (Booked)' : ' (Estimated)'}${notesPart}`;
             const hasNotes = !!proj?.scheduling_notes;
             const st = getEventStyle(getProjectColor(e.id), !!e.booked);
-            return `<div class="cal-event${hasNotes ? ' cal-event-has-notes' : ''}" style="${st.css}" onclick="event.stopPropagation();openProject(${e.id},'install')" title="${esc(tooltip)}">${hasNotes ? '📝 ' : ''}${esc(e.name)}</div>`;
+            const label = (proj && proj.client_name) ? proj.client_name : e.name;
+            return `<div class="cal-event${hasNotes ? ' cal-event-has-notes' : ''}" style="${st.css}" onclick="event.stopPropagation();openProject(${e.id},'install')" onmouseenter="_calHoverEnter(event,'install-${e.id}','${dateStr}')" onmouseleave="_calHoverLeave()">${hasNotes ? '📝 ' : ''}${esc(label)}</div>`;
           }).join('')}
           ${meetingShown.map(m => {
             const mColor = m.projectId != null ? getProjectColor(m.projectId) : '#A371F7';
@@ -9017,14 +9172,14 @@ function renderCalendar(c) {
             const tooltip = `${m.title}${m.startTime && m.endTime ? ' · ' + _fmt12hRange(m.startTime, m.endTime) : ''}`;
             const st = getEventStyle(mColor, !isPending);
             const timeColor = st.fill === 'transparent' ? mColor : st.text;
-            return `<div class="cal-event" style="${st.css}" onclick="event.stopPropagation();openMeetingDetail(${m.id})" title="${esc(tooltip)}">${timeLabel ? `<span style="font-weight:600;color:${timeColor}">${esc(timeLabel)}</span>` : ''}${esc(m.title)}</div>`;
+            return `<div class="cal-event" style="${st.css}" onclick="event.stopPropagation();openMeetingDetail(${m.id})" onmouseenter="_calHoverEnter(event,'meeting-${m.id}','${dateStr}')" onmouseleave="_calHoverLeave()">${timeLabel ? `<span style="font-weight:600;color:${timeColor}">${esc(timeLabel)}</span>` : ''}${esc(m.title)}</div>`;
           }).join('')}
           ${personalShown.map(pe => {
             const owner = getTeamMember(pe.memberId);
             const viewerIsOwner = pe.memberId === viewerId;
             const label = getPersonalEventDisplayLabel(pe, viewerIsOwner);
             const ownerLabel = (!viewerIsOwner && owner) ? `${owner.name.split(' ')[0]}: ` : '';
-            return `<div class="cal-event cal-event-personal" style="background:${getPersonalEventColor(pe)}1F;border-color:${getPersonalEventColor(pe)};color:${getPersonalEventColor(pe)}" onclick="event.stopPropagation();openCalendarDayDetail('${dateStr}')" title="${esc(ownerLabel + label)}">${esc(ownerLabel + label)}</div>`;
+            return `<div class="cal-event cal-event-personal" style="background:${getPersonalEventColor(pe)}1F;border-color:${getPersonalEventColor(pe)};color:${getPersonalEventColor(pe)}" onclick="event.stopPropagation();openCalendarDayDetail('${dateStr}')" onmouseenter="_calHoverEnter(event,'pe-${pe.id}','${dateStr}')" onmouseleave="_calHoverLeave()">${esc(ownerLabel + label)}</div>`;
           }).join('')}
           ${taskShown.map(({ task, subtask }) => {
             const c = getProjectColor(task.projectId);
@@ -9038,7 +9193,9 @@ function renderCalendar(c) {
             const chipText = clientName ? `${clientName} · ${stepLabel}` : stepLabel;
             const tooltipParts = [clientName, projName, task.title, subtask ? subtask.title : null].filter(Boolean);
             const tooltip = tooltipParts.join(' · ');
-            return `<div class="cal-event" style="background:transparent;border:1px solid ${c};color:${c}" onclick="event.stopPropagation();openProject(${task.projectId})" title="${esc(tooltip)}">${isMile ? '🚩 ' : '◷ '}${esc(chipText)}</div>`;
+            // Hover uses install-{projectId} so the day-level detail is shown
+            // (subtasks landing on this day, including this one).
+            return `<div class="cal-event" style="background:transparent;border:1px solid ${c};color:${c}" onclick="event.stopPropagation();openProject(${task.projectId})" onmouseenter="_calHoverEnter(event,'install-${task.projectId}','${dateStr}')" onmouseleave="_calHoverLeave()">${isMile ? '🚩 ' : '◷ '}${esc(chipText)}</div>`;
           }).join('')}
           ${totalCountWithTasks > visibleCount ? `<div class="cal-event-overflow">+${totalCountWithTasks - visibleCount} more</div>` : ''}
         </td>`;
@@ -9232,6 +9389,11 @@ function getEventsForDate(dateStr) {
         return false;
       })();
       if (!inRange) return false;
+      // Weekend skip — install bars don't render on Sat/Sun unless explicitly
+      // included via the picker's weekendIncludes list. Matches the Master
+      // Calendar behavior.
+      const win = getInstallWindow(p);
+      if (win && !isWorkingDayInWindow(win, dateStr)) return false;
       // Assignment filter — at least one of the effective members must be assigned
       // to this project (any role: sales/design/pm/install/warehouse)
       const a = getProjectAssignment(p.id);
@@ -10712,7 +10874,7 @@ function getMasterCalendarEvents(startDateStr, endDateStr, ctx) {
       events.push({
         type: 'install',
         id: `install-${p.id}`,
-        title: p.name,
+        title: p.client_name || p.name,
         projectId: p.id,
         project: p,
         startDate: _mcNormalizeDate(win.start),
@@ -10724,7 +10886,9 @@ function getMasterCalendarEvents(startDateStr, endDateStr, ctx) {
         committed: isBooked,
         attendeeIds: involvedIds,
         statusLabel: isBooked ? 'Booked' : 'Estimated',
-        raw: win
+        raw: win,
+        excludeWeekends: win.excludeWeekends !== false,
+        weekendIncludes: win.weekendIncludes || []
       });
     });
   }
@@ -11537,14 +11701,37 @@ function renderMasterCalMonthView(ctx) {
             const dow = d.getDay(); // 0=Sun..6=Sat
             const isSpanStart = e.startDate === k;
             const isSpanEnd = e.endDate === k;
-            const isWeekStart = dow === 0;
-            const isWeekEnd = dow === 6;
-            // The title shows on the span start, or at the start of a new week
-            // for a continuing bar (so a job spanning weeks is labeled each row).
-            const showTitle = !isMultiDay || isSpanStart || isWeekStart;
-            // Connected look: square off the inner edges so adjacent days merge.
-            const roundLeft = !isMultiDay || isSpanStart || isWeekStart;
-            const roundRight = !isMultiDay || isSpanEnd || isWeekEnd;
+            // Install bars skip weekends by default (excludeWeekends), unless
+            // the specific weekend day was opted-in via weekendIncludes. Other
+            // event types (meetings, personal, install_task) render normally.
+            const isWeekend = (dow === 0 || dow === 6);
+            const skipThisDay = e.type === 'install'
+              && isWeekend
+              && e.excludeWeekends
+              && !(e.weekendIncludes || []).includes(k);
+            if (skipThisDay) return ''; // empty — Sat/Sun cell gets no bar
+            // Helper: is the adjacent day (delta = -1 prev, +1 next) a rendered
+            // working day for this event? Used to compute segment edges.
+            const isRenderedDay = (delta) => {
+              const dt = new Date(d);
+              dt.setDate(dt.getDate() + delta);
+              const dk = _ymd(dt);
+              if (dk < e.startDate || dk > e.endDate) return false;
+              if (e.type === 'install' && e.excludeWeekends) {
+                const dow2 = dt.getDay();
+                if ((dow2 === 0 || dow2 === 6) && !(e.weekendIncludes || []).includes(dk)) return false;
+              }
+              return true;
+            };
+            // Title shows on segment start (no rendered day before), OR on
+            // Monday for any continuing bar (so a job spanning weeks is
+            // labeled each Monday).
+            const isSegmentStart = !isRenderedDay(-1);
+            const isSegmentEnd = !isRenderedDay(1);
+            const isMonday = dow === 1;
+            const showTitle = !isMultiDay || isSegmentStart || isMonday;
+            const roundLeft = !isMultiDay || isSegmentStart;
+            const roundRight = !isMultiDay || isSegmentEnd;
             // Draggable from ANY day of the event (multi-day grabbable anywhere).
             const canDrag = !!_mcGetEventPermission(e.id);
             const dragAttrs = canDrag
@@ -11556,8 +11743,10 @@ function renderMasterCalMonthView(ctx) {
             const borderTweak = (isMultiDay && !roundLeft) ? 'border-left:none;' : '';
             const continuationClass = isMultiDay ? ' mcal-month-event-span' : '';
             const initials = showTitle ? _mcInitialsBadges(e.attendeeIds, 3) : '';
+            // Hover tooltip handlers — show day-specific detail
+            const hoverAttrs = `onmouseenter="_calHoverEnter(event,'${e.id}','${k}')" onmouseleave="_calHoverLeave()"`;
             return `
-            <div class="mcal-month-event${continuationClass}${canDrag ? ' mcal-event-draggable' : ''}" style="${st.css};${radiusStyle};${borderTweak}" ${dragAttrs} onclick="event.stopPropagation();_mcTapEvent('${e.id}')" title="${esc(e.title)}">
+            <div class="mcal-month-event${continuationClass}${canDrag ? ' mcal-event-draggable' : ''}" style="${st.css};${radiusStyle};${borderTweak}" ${dragAttrs} ${hoverAttrs} onclick="event.stopPropagation();_mcTapEvent('${e.id}')">
               ${showTitle
                 ? `<span class="mcal-month-event-label">${e.startTime ? `<span class="mcal-month-event-time" style="color:${timeColor}">${esc(_fmt12h(e.startTime))}</span> ` : ''}${esc(e.title)}</span>${initials}`
                 : '&nbsp;'}
