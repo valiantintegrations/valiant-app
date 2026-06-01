@@ -5468,9 +5468,6 @@ td.today .cal-day-num {
 }
 .mcal-month-grid {
   display: grid;
-  /* minmax(0,1fr) lets columns shrink below their content width so the grid
-     always fits the container (no overflow, no days falling off) — the key to
-     Google-Calendar-style fluid resizing. */
   grid-template-columns: repeat(7, minmax(0, 1fr));
   grid-auto-rows: minmax(64px, auto);
   gap: 1px;
@@ -5480,6 +5477,10 @@ td.today .cal-day-num {
   border-radius: 0 0 6px 6px;
   width: 100%;
   max-width: 100%;
+  /* Clip at the grid boundary so a label overflowing the last column doesn't
+     trigger horizontal scroll on the whole page. Within the grid, individual
+     cells use overflow:visible so multi-day labels can flow across them. */
+  overflow: hidden;
 }
 .mcal-month-cell {
   background: #0D1117;
@@ -5490,7 +5491,10 @@ td.today .cal-day-num {
   -webkit-tap-highlight-color: transparent;
   display: flex;
   flex-direction: column;
-  overflow: hidden;       /* clip anything wider than the column */
+  /* overflow: visible — labels on multi-day bars can flow visually into the
+     adjacent empty same-color continuation segments. Single-day events stay
+     bounded by their own `overflow:hidden` (set on the inner label element). */
+  overflow: visible;
 }
 .mcal-month-cell:hover { background: #161B22; }
 .mcal-month-cell.is-other-month { opacity: 0.4; }
@@ -5510,8 +5514,8 @@ td.today .cal-day-num {
   flex-direction: column;
   gap: 2px;
   font-size: 10px;
-  overflow: hidden;
-  min-width: 0;           /* allow event bars to clip instead of forcing width */
+  overflow: visible;
+  min-width: 0;
 }
 .mcal-month-event {
   display: flex;
@@ -5524,12 +5528,9 @@ td.today .cal-day-num {
   min-width: 0;
   line-height: 1.25;
 }
-/* Spanning (multi-day) segments reach the full cell width so adjacent days
-   connect into one continuous bar. The title only renders on the start
-   segment; sibling segments stay empty. */
 .mcal-month-event-span {
   margin: 0;
-  overflow: hidden;
+  overflow: visible;
 }
 .mcal-month-event:hover { filter: brightness(1.4); }
 .mcal-month-event-time {
@@ -6079,12 +6080,36 @@ td.today .cal-day-num {
 .mcal-month-event-label {
   flex: 1;
   min-width: 0;
+  /* Default (single-day events): 2-line clamp lets long titles wrap and stay
+     readable inside one cell. */
   display: -webkit-box;
   -webkit-line-clamp: 2;
   -webkit-box-orient: vertical;
   overflow: hidden;
   word-break: break-word;
   line-height: 1.25;
+}
+/* Spanning bars (multi-day): override the 2-line clamp so the label is one
+   line that visually flows past the cell edge across the same-color empty
+   continuation cells of the same bar. Full text shown on hover.
+   The clip safety net comes from the bar segments themselves — the label
+   stops being readable past the bar's true end since there's no more colored
+   background to sit on. */
+.mcal-month-event-span .mcal-month-event-label {
+  display: block;
+  white-space: nowrap;
+  overflow: visible;
+  -webkit-line-clamp: none;
+}
+/* The whole bar element on a label-bearing span needs to allow text overflow
+   while still NOT triggering a horizontal scroll on the row. */
+.mcal-month-event-span.has-label {
+  position: relative;
+  z-index: 2; /* draw label above continuation segments */
+}
+.mcal-month-event-span:not(.has-label) {
+  position: relative;
+  z-index: 1;
 }
 .mcal-initials-wrap {
   flex-shrink: 0;
@@ -6691,3 +6716,46 @@ html.text-large body {
 @media (hover: none) {
   .cal-hover-tip { display: none !important; }
 }
+
+/* Calendar tab spanning bars (multi-day) + initials chips */
+.cal-event-span {
+  /* Continuous bar across multiple cells — drop the default 2-line clamp,
+     allow the title segment's label to flow across same-color continuation
+     cells, and dampen the rounded corners (handled inline by radiusStyle). */
+  display: flex !important;
+  align-items: center !important;
+  -webkit-line-clamp: none !important;
+  overflow: visible !important;
+}
+.cal-event-span.has-label {
+  position: relative;
+  z-index: 2;
+}
+.cal-event-span:not(.has-label) {
+  position: relative;
+  z-index: 1;
+}
+.cal-event-span .cal-event-label {
+  flex: 1;
+  min-width: 0;
+  white-space: nowrap;
+  overflow: visible;
+}
+.cal-event-initials {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  border: 1px solid;
+  font-size: 8px;
+  font-weight: 700;
+  margin-left: 2px;
+  flex-shrink: 0;
+}
+
+/* Calendar tab table needs overflow:hidden on the table itself so flowing
+   labels can't trigger horizontal scroll on the whole page. */
+.calendar-grid { overflow: hidden; }
+.calendar-grid td { overflow: visible; }
