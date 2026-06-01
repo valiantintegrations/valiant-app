@@ -9162,8 +9162,45 @@ function renderCalendar(c) {
             const proj = state.projects.find(pp => pp.id === e.id);
             const hasNotes = !!proj?.scheduling_notes;
             const st = getEventStyle(getProjectColor(e.id), !!e.booked);
-            const label = (proj && proj.client_name) ? proj.client_name : e.name;
-            return `<div class="cal-event${hasNotes ? ' cal-event-has-notes' : ''}" style="${st.css}" onclick="event.stopPropagation();openProject(${e.id},'install')" onmouseenter="_calHoverEnter(event,'install-${e.id}','${dateStr}')" onmouseleave="_calHoverLeave()">${hasNotes ? '📝 ' : ''}${esc(label)}</div>`;
+            const label = e.clientName || e.name;
+            // Span logic — is this day the start/end of the bar's rendered range?
+            const isMultiDay = e.end && e.end !== e.start;
+            const isRenderedDay = (delta) => {
+              const dt = new Date(dateStr + 'T00:00:00');
+              dt.setDate(dt.getDate() + delta);
+              const dk = _ymd(dt);
+              if (dk < e.start || dk > e.end) return false;
+              if (e.excludeWeekends) {
+                const dow2 = dt.getDay();
+                if ((dow2 === 0 || dow2 === 6) && !(e.weekendIncludes || []).includes(dk)) return false;
+              }
+              return true;
+            };
+            const isSegmentStart = !isRenderedDay(-1);
+            const isSegmentEnd = !isRenderedDay(1);
+            const dt = new Date(dateStr + 'T00:00:00');
+            const isMonday = dt.getDay() === 1;
+            const showTitle = !isMultiDay || isSegmentStart || isMonday;
+            const roundLeft = !isMultiDay || isSegmentStart;
+            const roundRight = !isMultiDay || isSegmentEnd;
+            const radiusStyle = `border-top-left-radius:${roundLeft ? '3px' : '0'};border-bottom-left-radius:${roundLeft ? '3px' : '0'};border-top-right-radius:${roundRight ? '3px' : '0'};border-bottom-right-radius:${roundRight ? '3px' : '0'}`;
+            // Continuation segments (no title) drop the left border so the
+            // colored fill reads as one continuous bar across the cells.
+            const borderTweak = (isMultiDay && !roundLeft) ? 'border-left:none' : '';
+            const continuationClass = isMultiDay
+              ? (showTitle ? ' cal-event-span has-label' : ' cal-event-span')
+              : '';
+            // Initials of who's on this day — small badges next to the title
+            const initials = showTitle
+              ? (e.attendeeIds || []).slice(0, 3).map(id => {
+                  const m = getTeamMember(id);
+                  if (!m) return '';
+                  const memberColor = (DASHBOARD_ACCESS.find(d => d.key === m.primaryRole) || {}).color || '#6E7681';
+                  const ini = m.initials || (m.name || '').slice(0, 2).toUpperCase();
+                  return `<span class="cal-event-initials" style="background:${memberColor}22;border-color:${memberColor};color:${memberColor}">${esc(ini)}</span>`;
+                }).join('')
+              : '';
+            return `<div class="cal-event${hasNotes ? ' cal-event-has-notes' : ''}${continuationClass}" style="${st.css};${radiusStyle};${borderTweak}" onclick="event.stopPropagation();openProject(${e.id},'install')" onmouseenter="_calHoverEnter(event,'install-${e.id}','${dateStr}')" onmouseleave="_calHoverLeave()">${showTitle ? `<span class="cal-event-label">${hasNotes ? '📝 ' : ''}${esc(label)}</span>${initials}` : '&nbsp;'}</div>`;
           }).join('')}
           ${meetingShown.map(m => {
             const mColor = m.projectId != null ? getProjectColor(m.projectId) : '#A371F7';
@@ -9407,11 +9444,23 @@ function getEventsForDate(dateStr) {
     })
     .map(p => {
       const dates = getCalendarDates(p);
+      const win = getInstallWindow(p);
+      const a = getProjectAssignment(p.id);
+      const attendeeIds = [
+        ...((a.pm || []).filter(x => x.lead).map(x => x.id)),
+        ...((a.install || []).map(x => x.id))
+      ].filter((v, i, arr) => v != null && arr.indexOf(v) === i);
       return {
         id: p.id,
         name: p.name,
+        clientName: p.client_name || '',
         booked: dates.source === 'booked',
-        color: dates.source === 'booked' ? 'booked' : 'estimated'
+        color: dates.source === 'booked' ? 'booked' : 'estimated',
+        start: win ? win.start : dates.start,
+        end: win ? win.end : (dates.end || dates.start),
+        excludeWeekends: win ? win.excludeWeekends : true,
+        weekendIncludes: win ? (win.weekendIncludes || []) : [],
+        attendeeIds
       };
     });
 }
@@ -11741,7 +11790,9 @@ function renderMasterCalMonthView(ctx) {
             // For continuation segments (no title), drop the left border so the
             // colored fill reads as one continuous bar.
             const borderTweak = (isMultiDay && !roundLeft) ? 'border-left:none;' : '';
-            const continuationClass = isMultiDay ? ' mcal-month-event-span' : '';
+            const continuationClass = isMultiDay
+              ? (showTitle ? ' mcal-month-event-span has-label' : ' mcal-month-event-span')
+              : '';
             const initials = showTitle ? _mcInitialsBadges(e.attendeeIds, 3) : '';
             // Hover tooltip handlers — show day-specific detail
             const hoverAttrs = `onmouseenter="_calHoverEnter(event,'${e.id}','${k}')" onmouseleave="_calHoverLeave()"`;
