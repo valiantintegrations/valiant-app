@@ -11808,9 +11808,9 @@ function renderMasterCalMonthView(ctx) {
   const headerHTML = `<div class="mcal-month-header">${days.map(d => `<div class="mcal-month-dow">${d}</div>`).join('')}</div>`;
 
   // Constants matching the CSS (bar height + gap + day-num header inside cell)
-  const BAR_HEIGHT = 20;
-  const BAR_GAP = 2;
-  const DAYNUM_HEIGHT = 24;
+  const BAR_HEIGHT = 18;
+  const BAR_GAP = 3;
+  const DAYNUM_HEIGHT = 30;
   const PER_LANE = BAR_HEIGHT + BAR_GAP;
 
   const weekRowsHTML = weekRows.map(({ weekStart, weekStartStr, weekRuns, maxLane }) => {
