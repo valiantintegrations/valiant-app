@@ -11689,7 +11689,6 @@ function renderMasterCalMonthView(ctx) {
   const year = anchor.getFullYear();
   const month = anchor.getMonth();
   const first = new Date(year, month, 1);
-  const lastDay = new Date(year, month + 1, 0).getDate();
 
   // Build a 6-week grid starting from the Sunday before/on day 1
   const gridStart = _startOfWeek(first);
@@ -11699,122 +11698,223 @@ function renderMasterCalMonthView(ctx) {
 
   const events = getMasterCalendarEvents(startStr, endStr, ctx);
 
-  // Group events by date for quick lookup
-  const eventsByDate = {};
-  events.forEach(e => {
-    // Multi-day event: tag every date in its span
+  const todayStr = _ymd(new Date());
+
+  // Helper: does the event render on a given date? (handles weekend skip)
+  function eventCoversDate(e, dateStr) {
+    if (dateStr < e.startDate || dateStr > e.endDate) return false;
+    if (e.type === 'install' && e.excludeWeekends) {
+      const d = _parseLocalYmd(dateStr);
+      const dow = d.getDay();
+      if ((dow === 0 || dow === 6) && !(e.weekendIncludes || []).includes(dateStr)) return false;
+    }
+    return true;
+  }
+
+  // Compute the runs of an event within a given week (Sun..Sat). A run is a
+  // continuous block of rendered days. A weekend skip breaks one event into
+  // two runs (Mon-Fri, then maybe a Sun-Sun if weekendIncludes specifies).
+  function runsForEventInWeek(e, weekStart) {
+    const runs = [];
+    let runStart = null;
+    for (let i = 0; i < 7; i++) {
+      const d = _addDays(weekStart, i);
+      const k = _ymd(d);
+      const covers = eventCoversDate(e, k);
+      if (covers) {
+        if (runStart === null) runStart = i;
+      } else {
+        if (runStart !== null) {
+          runs.push({ startCol: runStart, endCol: i - 1 });
+          runStart = null;
+        }
+      }
+    }
+    if (runStart !== null) runs.push({ startCol: runStart, endCol: 6 });
+    return runs;
+  }
+
+  // Multi-day events (more than one rendered day across their whole span)
+  // become positioned bars. Everything else (single-day, or events whose
+  // rendered span collapses to a single day) renders inside its day cell.
+  function isMultiDayEvent(e) {
+    if (!e.endDate || e.endDate === e.startDate) return false;
+    // Count rendered days
+    let count = 0;
+    let cursor = new Date(e.startDate + 'T00:00:00');
+    const end = new Date(e.endDate + 'T00:00:00');
+    while (cursor <= end && count < 2) {
+      if (eventCoversDate(e, _ymd(cursor))) count++;
+      cursor.setDate(cursor.getDate() + 1);
+    }
+    return count >= 2;
+  }
+
+  const multiDayEvents = events.filter(isMultiDayEvent);
+  const singleDayEventsByDate = {};
+  events.filter(e => !isMultiDayEvent(e)).forEach(e => {
+    // Treat as single-day on whichever date is its first rendered day
     let cursor = new Date(e.startDate + 'T00:00:00');
     const end = new Date(e.endDate + 'T00:00:00');
     while (cursor <= end) {
       const k = _ymd(cursor);
-      if (!eventsByDate[k]) eventsByDate[k] = [];
-      eventsByDate[k].push(e);
+      if (eventCoversDate(e, k)) {
+        if (!singleDayEventsByDate[k]) singleDayEventsByDate[k] = [];
+        singleDayEventsByDate[k].push(e);
+        break;
+      }
       cursor.setDate(cursor.getDate() + 1);
     }
   });
 
-  const todayStr = _ymd(new Date());
-  const cells = [];
-  for (let i = 0; i < 42; i++) {
-    const d = _addDays(gridStart, i);
-    const k = _ymd(d);
-    const inMonth = d.getMonth() === month;
-    const isToday = k === todayStr;
-    // Sort each cell's events so multi-day spans sit in a stable order across
-    // days (keeps a continuous bar on the same row from cell to cell).
-    const cellEvents = (eventsByDate[k] || []).slice().sort((a, b) => {
-      const aMulti = (a.endDate && a.endDate !== a.startDate) ? 0 : 1;
-      const bMulti = (b.endDate && b.endDate !== b.startDate) ? 0 : 1;
-      if (aMulti !== bMulti) return aMulti - bMulti;
-      if (a.startDate !== b.startDate) return a.startDate.localeCompare(b.startDate);
-      return String(a.id).localeCompare(String(b.id));
-    });
-    const dayEvents = cellEvents.slice(0, 3);
-    const overflow = cellEvents.length - dayEvents.length;
+  // Build week rows. For each week: compute runs for every multi-day event
+  // that touches the week, sort, lane-assign.
+  const days = ['SUN', 'MON', 'TUE', 'WED', 'THU', 'FRI', 'SAT'];
+  const weekRows = [];
+  for (let w = 0; w < 6; w++) {
+    const weekStart = _addDays(gridStart, w * 7);
+    const weekStartStr = _ymd(weekStart);
+    const weekEndStr = _ymd(_addDays(weekStart, 6));
 
-    cells.push(`
-      <div class="mcal-month-cell${inMonth ? '' : ' is-other-month'}${isToday ? ' is-today' : ''}"
-           data-date="${k}"
-           ondragover="_mcCellDragOver(event,'${k}')"
-           ondragleave="_mcCellDragLeave(event)"
-           ondrop="_mcCellDrop(event,'${k}')"
-           onclick="_mcDayCellTap('${k}')">
-        <div class="mcal-month-daynum">${d.getDate()}</div>
-        <div class="mcal-month-events">
-          ${dayEvents.map(e => {
-            const st = getEventStyle(e.displayColor || e.color, e.committed);
-            const timeColor = st.fill === 'transparent' ? (e.displayColor || e.color) : st.text;
-            const isMultiDay = e.endDate && e.endDate !== e.startDate;
-            // Segment geometry for multi-day events: is this the span start/end,
-            // and is it the left/right edge of the current week (col 0 / col 6)?
-            const dow = d.getDay(); // 0=Sun..6=Sat
-            const isSpanStart = e.startDate === k;
-            const isSpanEnd = e.endDate === k;
-            // Install bars skip weekends by default (excludeWeekends), unless
-            // the specific weekend day was opted-in via weekendIncludes. Other
-            // event types (meetings, personal, install_task) render normally.
-            const isWeekend = (dow === 0 || dow === 6);
-            const skipThisDay = e.type === 'install'
-              && isWeekend
-              && e.excludeWeekends
-              && !(e.weekendIncludes || []).includes(k);
-            if (skipThisDay) return ''; // empty — Sat/Sun cell gets no bar
-            // Helper: is the adjacent day (delta = -1 prev, +1 next) a rendered
-            // working day for this event? Used to compute segment edges.
-            const isRenderedDay = (delta) => {
-              const dt = new Date(d);
-              dt.setDate(dt.getDate() + delta);
-              const dk = _ymd(dt);
-              if (dk < e.startDate || dk > e.endDate) return false;
-              if (e.type === 'install' && e.excludeWeekends) {
-                const dow2 = dt.getDay();
-                if ((dow2 === 0 || dow2 === 6) && !(e.weekendIncludes || []).includes(dk)) return false;
-              }
-              return true;
-            };
-            // Title shows on segment start (no rendered day before), OR on
-            // Monday for any continuing bar (so a job spanning weeks is
-            // labeled each Monday).
-            const isSegmentStart = !isRenderedDay(-1);
-            const isSegmentEnd = !isRenderedDay(1);
-            const isMonday = dow === 1;
-            const showTitle = !isMultiDay || isSegmentStart || isMonday;
-            const roundLeft = !isMultiDay || isSegmentStart;
-            const roundRight = !isMultiDay || isSegmentEnd;
-            // Draggable from ANY day of the event (multi-day grabbable anywhere).
-            const canDrag = !!_mcGetEventPermission(e.id);
-            const dragAttrs = canDrag
-              ? `draggable="true" ondragstart="_mcDragStart(event,'${e.id}','${k}')" ondragend="_mcDragEnd(event)" ontouchstart="_mcTouchStart(event,'${e.id}','${k}')" ontouchmove="_mcTouchMove(event)" ontouchend="_mcTouchEnd(event)"`
-              : '';
-            const radiusStyle = `border-top-left-radius:${roundLeft ? '4px' : '0'};border-bottom-left-radius:${roundLeft ? '4px' : '0'};border-top-right-radius:${roundRight ? '4px' : '0'};border-bottom-right-radius:${roundRight ? '4px' : '0'}`;
-            // For continuation segments (no title), drop the left border so the
-            // colored fill reads as one continuous bar.
-            const borderTweak = (isMultiDay && !roundLeft) ? 'border-left:none;' : '';
-            const continuationClass = isMultiDay
-              ? (showTitle ? ' mcal-month-event-span has-label' : ' mcal-month-event-span')
-              : '';
-            const initials = showTitle ? _mcInitialsBadges(e.attendeeIds, 3) : '';
-            // Hover tooltip handlers — show day-specific detail
-            const hoverAttrs = `onmouseenter="_calHoverEnter(event,'${e.id}','${k}')" onmouseleave="_calHoverLeave()"`;
-            return `
-            <div class="mcal-month-event${continuationClass}${canDrag ? ' mcal-event-draggable' : ''}" style="${st.css};${radiusStyle};${borderTweak}" ${dragAttrs} ${hoverAttrs} onclick="event.stopPropagation();_mcTapEvent('${e.id}')">
-              ${showTitle
-                ? `<span class="mcal-month-event-label">${e.startTime ? `<span class="mcal-month-event-time" style="color:${timeColor}">${esc(_fmt12h(e.startTime))}</span> ` : ''}${esc(e.title)}</span>${initials}`
-                : '&nbsp;'}
-            </div>
-          `;
-          }).join('')}
-          ${overflow > 0 ? `<div class="mcal-month-overflow">+${overflow} more</div>` : ''}
-        </div>
-      </div>
-    `);
+    // Collect runs from every multi-day event that has at least one rendered day this week
+    const weekRuns = [];
+    multiDayEvents.forEach(e => {
+      if (e.endDate < weekStartStr || e.startDate > weekEndStr) return;
+      const runs = runsForEventInWeek(e, weekStart);
+      runs.forEach(r => weekRuns.push({ event: e, ...r }));
+    });
+
+    // Sort runs by start column then by event start date (earlier events get
+    // top lanes). This makes lane assignment stable.
+    weekRuns.sort((a, b) => {
+      if (a.startCol !== b.startCol) return a.startCol - b.startCol;
+      return a.event.startDate.localeCompare(b.event.startDate);
+    });
+
+    // Lane assignment — greedy
+    const laneEnds = []; // laneEnds[i] = endCol of the last run placed on lane i
+    weekRuns.forEach(run => {
+      let lane = 0;
+      while (lane < laneEnds.length && laneEnds[lane] >= run.startCol) lane++;
+      laneEnds[lane] = run.endCol;
+      run.lane = lane;
+    });
+
+    const maxLane = laneEnds.length; // count of lanes used
+    weekRows.push({ weekStart, weekStartStr, weekRuns, maxLane });
   }
 
-  const days = ['SUN', 'MON', 'TUE', 'WED', 'THU', 'FRI', 'SAT'];
+  // Render
+  const headerHTML = `<div class="mcal-month-header">${days.map(d => `<div class="mcal-month-dow">${d}</div>`).join('')}</div>`;
+
+  // Constants matching the CSS (bar height + gap + day-num header inside cell)
+  const BAR_HEIGHT = 20;
+  const BAR_GAP = 2;
+  const DAYNUM_HEIGHT = 24;
+  const PER_LANE = BAR_HEIGHT + BAR_GAP;
+
+  const weekRowsHTML = weekRows.map(({ weekStart, weekStartStr, weekRuns, maxLane }) => {
+    // 7 cells with daynum + single-day events. Multi-day bars overlay on top.
+    const cellsHTML = [];
+    for (let col = 0; col < 7; col++) {
+      const d = _addDays(weekStart, col);
+      const k = _ymd(d);
+      const inMonth = d.getMonth() === month;
+      const isToday = k === todayStr;
+      const singleDay = (singleDayEventsByDate[k] || []).slice();
+      // Sort by startTime (timed events first by time), then by id
+      singleDay.sort((a, b) => {
+        const at = a.startTime || '99:99';
+        const bt = b.startTime || '99:99';
+        if (at !== bt) return at.localeCompare(bt);
+        return String(a.id).localeCompare(String(b.id));
+      });
+      // Visible per cell — keep 3 max, room shared with the multi-day lanes
+      const maxVisibleSingles = Math.max(1, 4 - maxLane);
+      const visibleSingles = singleDay.slice(0, maxVisibleSingles);
+      const overflowSingles = singleDay.length - visibleSingles.length;
+
+      const singleHTML = visibleSingles.map(e => {
+        const st = getEventStyle(e.displayColor || e.color, e.committed);
+        const timeColor = st.fill === 'transparent' ? (e.displayColor || e.color) : st.text;
+        const canDrag = !!_mcGetEventPermission(e.id);
+        const dragAttrs = canDrag
+          ? `draggable="true" ondragstart="_mcDragStart(event,'${e.id}','${k}')" ondragend="_mcDragEnd(event)" ontouchstart="_mcTouchStart(event,'${e.id}','${k}')" ontouchmove="_mcTouchMove(event)" ontouchend="_mcTouchEnd(event)"`
+          : '';
+        const hoverAttrs = `onmouseenter="_calHoverEnter(event,'${e.id}','${k}')" onmouseleave="_calHoverLeave()"`;
+        const initials = _mcInitialsBadges(e.attendeeIds, 2);
+        return `
+          <div class="mcal-month-event${canDrag ? ' mcal-event-draggable' : ''}" style="${st.css}" ${dragAttrs} ${hoverAttrs} onclick="event.stopPropagation();_mcTapEvent('${e.id}')">
+            <span class="mcal-month-event-label">${e.startTime ? `<span class="mcal-month-event-time" style="color:${timeColor}">${esc(_fmt12h(e.startTime))}</span> ` : ''}${esc(e.title)}</span>${initials}
+          </div>
+        `;
+      }).join('');
+
+      // Reserve vertical space at top of cell for multi-day bars based on this
+      // week's lane count, so single-day events don't overlap them.
+      const singleAreaTop = DAYNUM_HEIGHT + (maxLane * PER_LANE);
+
+      cellsHTML.push(`
+        <div class="mcal-month-cell${inMonth ? '' : ' is-other-month'}${isToday ? ' is-today' : ''}"
+             data-date="${k}"
+             ondragover="_mcCellDragOver(event,'${k}')"
+             ondragleave="_mcCellDragLeave(event)"
+             ondrop="_mcCellDrop(event,'${k}')"
+             onclick="_mcDayCellTap('${k}')">
+          <div class="mcal-month-daynum">${d.getDate()}</div>
+          <div class="mcal-month-events" style="margin-top:${maxLane * PER_LANE}px">
+            ${singleHTML}
+            ${overflowSingles > 0 ? `<div class="mcal-month-overflow">+${overflowSingles} more</div>` : ''}
+          </div>
+        </div>
+      `);
+    }
+
+    // Positioned multi-day bars layer
+    const barsHTML = weekRuns.map(run => {
+      const e = run.event;
+      const st = getEventStyle(e.displayColor || e.color, e.committed);
+      const timeColor = st.fill === 'transparent' ? (e.displayColor || e.color) : st.text;
+      const leftPct = (run.startCol / 7) * 100;
+      const widthPct = ((run.endCol - run.startCol + 1) / 7) * 100;
+      const top = DAYNUM_HEIGHT + (run.lane * PER_LANE);
+      const canDrag = !!_mcGetEventPermission(e.id);
+      const runStartDate = _ymd(_addDays(weekStart, run.startCol));
+      const dragAttrs = canDrag
+        ? `draggable="true" ondragstart="_mcDragStart(event,'${e.id}','${runStartDate}')" ondragend="_mcDragEnd(event)" ontouchstart="_mcTouchStart(event,'${e.id}','${runStartDate}')" ontouchmove="_mcTouchMove(event)" ontouchend="_mcTouchEnd(event)"`
+        : '';
+      const hoverAttrs = `onmouseenter="_calHoverEnter(event,'${e.id}','${runStartDate}')" onmouseleave="_calHoverLeave()"`;
+      const initials = _mcInitialsBadges(e.attendeeIds, 3);
+      // Run start = first column of this run on this week; also true span start
+      // if this run begins on the event's first rendered day.
+      const isSpanStart = e.startDate === runStartDate;
+      const radiusLeft = isSpanStart || run.startCol === 0;
+      const runEndDate = _ymd(_addDays(weekStart, run.endCol));
+      const isSpanEnd = e.endDate === runEndDate;
+      const radiusRight = isSpanEnd || run.endCol === 6;
+      const radiusStyle = `border-top-left-radius:${radiusLeft ? '4px' : '0'};border-bottom-left-radius:${radiusLeft ? '4px' : '0'};border-top-right-radius:${radiusRight ? '4px' : '0'};border-bottom-right-radius:${radiusRight ? '4px' : '0'}`;
+      return `
+        <div class="mcal-month-bar${canDrag ? ' mcal-event-draggable' : ''}"
+             style="${st.css};${radiusStyle};left:${leftPct}%;width:${widthPct}%;top:${top}px;height:${BAR_HEIGHT}px"
+             ${dragAttrs} ${hoverAttrs}
+             onclick="event.stopPropagation();_mcTapEvent('${e.id}')">
+          <span class="mcal-month-bar-label">${e.startTime ? `<span class="mcal-month-event-time" style="color:${timeColor}">${esc(_fmt12h(e.startTime))}</span> ` : ''}${esc(e.title)}</span>${initials}
+        </div>
+      `;
+    }).join('');
+
+    return `
+      <div class="mcal-month-week" data-week-start="${weekStartStr}">
+        <div class="mcal-month-week-cells">${cellsHTML.join('')}</div>
+        <div class="mcal-month-week-bars">${barsHTML}</div>
+      </div>
+    `;
+  }).join('');
+
   return `
     <div class="mcal-month">
-      <div class="mcal-month-header">${days.map(d => `<div class="mcal-month-dow">${d}</div>`).join('')}</div>
-      <div class="mcal-month-grid">${cells.join('')}</div>
+      ${headerHTML}
+      <div class="mcal-month-grid">${weekRowsHTML}</div>
     </div>
   `;
 }
