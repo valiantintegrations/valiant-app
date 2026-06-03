@@ -9291,7 +9291,8 @@ function renderCalendar(c) {
     // Positioned bars layer for multi-day installs
     const barsHTML = weekRuns.map(run => {
       const bar = run.bar;
-      const st = getEventStyle(getProjectColor(bar.projectId), bar.booked);
+      // Always outline style on multi-day install bars — matches Master Calendar
+      const st = getEventStyle(getProjectColor(bar.projectId), false);
       const leftPct = (run.startCol / 7) * 100;
       const widthPct = ((run.endCol - run.startCol + 1) / 7) * 100;
       const top = DAYNUM_HEIGHT + (run.lane * PER_LANE);
@@ -11960,7 +11961,12 @@ function renderMasterCalMonthView(ctx) {
     // Positioned multi-day bars layer
     const barsHTML = weekRuns.map(run => {
       const e = run.event;
-      const st = getEventStyle(e.displayColor || e.color, e.committed);
+      // Force outline style for install bars regardless of booked/estimated —
+      // matches the Calendar tab's visual weight so both calendars look
+      // identical. Solid fill made multi-day bars appear visually heavier than
+      // single-day chips, which was the source of the "bigger text" complaint.
+      const useOutline = e.type === 'install';
+      const st = getEventStyle(e.displayColor || e.color, useOutline ? false : e.committed);
       const timeColor = st.fill === 'transparent' ? (e.displayColor || e.color) : st.text;
       const leftPct = (run.startCol / 7) * 100;
       const widthPct = ((run.endCol - run.startCol + 1) / 7) * 100;
