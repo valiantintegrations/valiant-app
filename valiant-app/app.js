@@ -9107,143 +9107,228 @@ function renderCalendar(c) {
   const firstDay = new Date(year, month, 1).getDay();
   const daysInMonth = new Date(year, month + 1, 0).getDate();
   const today = new Date();
+  const todayStr = _ymd(today);
   const days = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];
-  let cells = '';
-  let dayCount = 1;
-  const prevMonthDays = new Date(year, month, 0).getDate();
   const viewerId = getActiveTeamMemberId();
 
-  for (let row = 0; row < 6; row++) {
-    cells += '<tr>';
-    for (let col = 0; col < 7; col++) {
-      const cellIdx = row * 7 + col;
-      if (cellIdx < firstDay) {
-        const prevDay = prevMonthDays - firstDay + cellIdx + 1;
-        cells += `<td class="other-month"><span class="cal-day-num">${prevDay}</span></td>`;
-      } else if (dayCount > daysInMonth) {
-        const nextDay = dayCount - daysInMonth;
-        cells += `<td class="other-month"><span class="cal-day-num">${nextDay}</span></td>`;
-        dayCount++;
-      } else {
-        const isToday = dayCount === today.getDate() && month === today.getMonth() && year === today.getFullYear();
-        const dateStr = `${year}-${String(month + 1).padStart(2, '0')}-${String(dayCount).padStart(2, '0')}`;
-        const projectEvents = getEventsForDate(dateStr);
-        const personalEvents = getPersonalEventsForDateForViewMode(dateStr);
-        const meetingEvents = getMeetingsForDateForViewMode(dateStr);
-        const totalCount = projectEvents.length + personalEvents.length + meetingEvents.length;
-        const visibleCount = 3;
-        // Fill the 3 visible slots in priority order: project installs, then
-        // meetings, then personal events. Each renderer slices against how many
-        // slots are still free so we never exceed `visibleCount` chips.
-        const projShown = projectEvents.slice(0, visibleCount);
-        const meetingSlots = Math.max(0, visibleCount - projShown.length);
-        const meetingShown = meetingEvents.slice(0, meetingSlots);
-        const personalSlots = Math.max(0, visibleCount - projShown.length - meetingShown.length);
-        const personalShown = personalEvents.slice(0, personalSlots);
+  // Build grid date range
+  const gridStart = new Date(year, month, 1 - firstDay);
+  const gridStartStr = _ymd(gridStart);
+  const gridEnd = _addDays(gridStart, 41);
+  const gridEndStr = _ymd(gridEnd);
 
-        // Install task subtasks on this day (from any project). Treated as
-        // its own chip type; respects the projShown+meetingShown+personalShown
-        // visible count budget. Each chip jumps to its project on click.
-        const taskItems = [];
-        (state.installTasks || []).forEach(t => {
-          if (t.projectId == null) return;
-          (t.subtasks || []).forEach(s => {
-            if (s.date === dateStr) taskItems.push({ task: t, subtask: s });
-          });
-          if (t.isMilestone && t.dueDate === dateStr) taskItems.push({ task: t, subtask: null });
-        });
-        const taskSlots = Math.max(0, visibleCount - projShown.length - meetingShown.length - personalShown.length);
-        const taskShown = taskItems.slice(0, taskSlots);
-        const totalCountWithTasks = totalCount + taskItems.length;
-
-        cells += `<td class="${isToday ? 'today' : ''}" onclick="openCalendarDayDetail('${dateStr}')" style="cursor:pointer">
-          <span class="cal-day-num">${dayCount}</span>
-          ${projShown.map(e => {
-            const proj = state.projects.find(pp => pp.id === e.id);
-            const hasNotes = !!proj?.scheduling_notes;
-            const st = getEventStyle(getProjectColor(e.id), !!e.booked);
-            const label = e.clientName || e.name;
-            // Span logic — is this day the start/end of the bar's rendered range?
-            const isMultiDay = e.end && e.end !== e.start;
-            const isRenderedDay = (delta) => {
-              const dt = new Date(dateStr + 'T00:00:00');
-              dt.setDate(dt.getDate() + delta);
-              const dk = _ymd(dt);
-              if (dk < e.start || dk > e.end) return false;
-              if (e.excludeWeekends) {
-                const dow2 = dt.getDay();
-                if ((dow2 === 0 || dow2 === 6) && !(e.weekendIncludes || []).includes(dk)) return false;
-              }
-              return true;
-            };
-            const isSegmentStart = !isRenderedDay(-1);
-            const isSegmentEnd = !isRenderedDay(1);
-            const dt = new Date(dateStr + 'T00:00:00');
-            const isMonday = dt.getDay() === 1;
-            const showTitle = !isMultiDay || isSegmentStart || isMonday;
-            const roundLeft = !isMultiDay || isSegmentStart;
-            const roundRight = !isMultiDay || isSegmentEnd;
-            const radiusStyle = `border-top-left-radius:${roundLeft ? '3px' : '0'};border-bottom-left-radius:${roundLeft ? '3px' : '0'};border-top-right-radius:${roundRight ? '3px' : '0'};border-bottom-right-radius:${roundRight ? '3px' : '0'}`;
-            // Continuation segments (no title) drop the left border so the
-            // colored fill reads as one continuous bar across the cells.
-            const borderTweak = (isMultiDay && !roundLeft) ? 'border-left:none' : '';
-            const continuationClass = isMultiDay
-              ? (showTitle ? ' cal-event-span has-label' : ' cal-event-span')
-              : '';
-            // Initials of who's on this day — small badges next to the title
-            const initials = showTitle
-              ? (e.attendeeIds || []).slice(0, 3).map(id => {
-                  const m = getTeamMember(id);
-                  if (!m) return '';
-                  const memberColor = (DASHBOARD_ACCESS.find(d => d.key === m.primaryRole) || {}).color || '#6E7681';
-                  const ini = m.initials || (m.name || '').slice(0, 2).toUpperCase();
-                  return `<span class="cal-event-initials" style="background:${memberColor}22;border-color:${memberColor};color:${memberColor}">${esc(ini)}</span>`;
-                }).join('')
-              : '';
-            return `<div class="cal-event${hasNotes ? ' cal-event-has-notes' : ''}${continuationClass}" style="${st.css};${radiusStyle};${borderTweak}" onclick="event.stopPropagation();openProject(${e.id},'install')" onmouseenter="_calHoverEnter(event,'install-${e.id}','${dateStr}')" onmouseleave="_calHoverLeave()">${showTitle ? `<span class="cal-event-label">${hasNotes ? '📝 ' : ''}${esc(label)}</span>${initials}` : '&nbsp;'}</div>`;
-          }).join('')}
-          ${meetingShown.map(m => {
-            const mColor = m.projectId != null ? getProjectColor(m.projectId) : '#A371F7';
-            const timeLabel = m.startTime ? _fmt12h(m.startTime) + ' ' : '';
-            const isPending = m.status === 'pending_approval';
-            const tooltip = `${m.title}${m.startTime && m.endTime ? ' · ' + _fmt12hRange(m.startTime, m.endTime) : ''}`;
-            const st = getEventStyle(mColor, !isPending);
-            const timeColor = st.fill === 'transparent' ? mColor : st.text;
-            return `<div class="cal-event" style="${st.css}" onclick="event.stopPropagation();openMeetingDetail(${m.id})" onmouseenter="_calHoverEnter(event,'meeting-${m.id}','${dateStr}')" onmouseleave="_calHoverLeave()">${timeLabel ? `<span style="font-weight:600;color:${timeColor}">${esc(timeLabel)}</span>` : ''}${esc(m.title)}</div>`;
-          }).join('')}
-          ${personalShown.map(pe => {
-            const owner = getTeamMember(pe.memberId);
-            const viewerIsOwner = pe.memberId === viewerId;
-            const label = getPersonalEventDisplayLabel(pe, viewerIsOwner);
-            const ownerLabel = (!viewerIsOwner && owner) ? `${owner.name.split(' ')[0]}: ` : '';
-            return `<div class="cal-event cal-event-personal" style="background:${getPersonalEventColor(pe)}1F;border-color:${getPersonalEventColor(pe)};color:${getPersonalEventColor(pe)}" onclick="event.stopPropagation();openCalendarDayDetail('${dateStr}')" onmouseenter="_calHoverEnter(event,'pe-${pe.id}','${dateStr}')" onmouseleave="_calHoverLeave()">${esc(ownerLabel + label)}</div>`;
-          }).join('')}
-          ${taskShown.map(({ task, subtask }) => {
-            const c = getProjectColor(task.projectId);
-            const proj = state.projects.find(pp => pp.id === task.projectId);
-            const clientName = proj ? (proj.client_name || '') : '';
-            const projName = proj ? proj.name : '';
-            const isMile = !subtask && task.isMilestone;
-            const stepLabel = subtask ? subtask.title : task.title;
-            // Chip shows client + step (clients are what the team identifies work by).
-            // Project name moves to the hover tooltip.
-            const chipText = clientName ? `${clientName} · ${stepLabel}` : stepLabel;
-            const tooltipParts = [clientName, projName, task.title, subtask ? subtask.title : null].filter(Boolean);
-            const tooltip = tooltipParts.join(' · ');
-            // Hover uses install-{projectId} so the day-level detail is shown
-            // (subtasks landing on this day, including this one).
-            return `<div class="cal-event" style="background:transparent;border:1px solid ${c};color:${c}" onclick="event.stopPropagation();openProject(${task.projectId})" onmouseenter="_calHoverEnter(event,'install-${task.projectId}','${dateStr}')" onmouseleave="_calHoverLeave()">${isMile ? '🚩 ' : '◷ '}${esc(chipText)}</div>`;
-          }).join('')}
-          ${totalCountWithTasks > visibleCount ? `<div class="cal-event-overflow">+${totalCountWithTasks - visibleCount} more</div>` : ''}
-        </td>`;
-        dayCount++;
-      }
-    }
-    cells += '</tr>';
-    if (dayCount > daysInMonth) break;
+  // Collect all install windows in range (for multi-day positioned bars)
+  // Each entry: { type:'install', projectId, name, clientName, color, start, end, attendeeIds, hasNotes, booked, excludeWeekends, weekendIncludes }
+  const installBars = [];
+  // Use the existing getEventsForDate machinery — it already respects the
+  // people/booked/estimated filters. Just gather unique projects in the range.
+  const seenProjectIds = new Set();
+  for (let i = 0; i < 42; i++) {
+    const dt = _addDays(gridStart, i);
+    const dk = _ymd(dt);
+    const evs = getEventsForDate(dk);
+    evs.forEach(e => {
+      if (seenProjectIds.has(e.id)) return;
+      seenProjectIds.add(e.id);
+      const proj = state.projects.find(pp => pp.id === e.id);
+      installBars.push({
+        type: 'install',
+        projectId: e.id,
+        name: e.name,
+        clientName: e.clientName || '',
+        booked: !!e.booked,
+        start: e.start,
+        end: e.end,
+        excludeWeekends: e.excludeWeekends !== false,
+        weekendIncludes: e.weekendIncludes || [],
+        attendeeIds: e.attendeeIds || [],
+        hasNotes: !!proj?.scheduling_notes
+      });
+    });
   }
 
-  // Booked + Estimated visibility toggles (default OFF — opt-in to reduce information overload)
+  // Does the install bar render on a given date? (handles weekend skip)
+  function installCoversDate(bar, dateStr) {
+    if (dateStr < bar.start || dateStr > bar.end) return false;
+    const dt = _parseLocalYmd(dateStr);
+    const dow = dt.getDay();
+    if ((dow === 0 || dow === 6) && bar.excludeWeekends && !(bar.weekendIncludes || []).includes(dateStr)) return false;
+    return true;
+  }
+
+  // Compute runs of a bar within a week
+  function installRunsInWeek(bar, weekStart) {
+    const runs = [];
+    let runStart = null;
+    for (let i = 0; i < 7; i++) {
+      const dt = _addDays(weekStart, i);
+      const k = _ymd(dt);
+      if (installCoversDate(bar, k)) {
+        if (runStart === null) runStart = i;
+      } else {
+        if (runStart !== null) { runs.push({ startCol: runStart, endCol: i - 1 }); runStart = null; }
+      }
+    }
+    if (runStart !== null) runs.push({ startCol: runStart, endCol: 6 });
+    return runs;
+  }
+
+  // Build the 6 week rows
+  const BAR_HEIGHT = 18;
+  const BAR_GAP = 3;
+  const DAYNUM_HEIGHT = 26;
+  const PER_LANE = BAR_HEIGHT + BAR_GAP;
+
+  const weekRowsHTML = [];
+  for (let w = 0; w < 6; w++) {
+    const weekStart = _addDays(gridStart, w * 7);
+    const weekStartStr = _ymd(weekStart);
+    const weekEndStr = _ymd(_addDays(weekStart, 6));
+
+    // Skip rows past month end
+    const lastDayInWeek = _addDays(weekStart, 6);
+    if (weekStart.getMonth() > month && weekStart.getFullYear() >= year) break;
+
+    // Collect runs for this week (multi-day only — single-day still in-cell)
+    const weekRuns = [];
+    installBars.forEach(bar => {
+      if (bar.end < weekStartStr || bar.start > weekEndStr) return;
+      if (bar.start === bar.end) return; // single-day install treated as in-cell chip below
+      const runs = installRunsInWeek(bar, weekStart);
+      runs.forEach(r => weekRuns.push({ bar, ...r }));
+    });
+    // Sort + lane assign
+    weekRuns.sort((a, b) => {
+      if (a.startCol !== b.startCol) return a.startCol - b.startCol;
+      return a.bar.start.localeCompare(b.bar.start);
+    });
+    const laneEnds = [];
+    weekRuns.forEach(run => {
+      let lane = 0;
+      while (lane < laneEnds.length && laneEnds[lane] >= run.startCol) lane++;
+      laneEnds[lane] = run.endCol;
+      run.lane = lane;
+    });
+    const maxLane = laneEnds.length;
+
+    // Build 7 cells of this week
+    const cellsHTML = [];
+    for (let col = 0; col < 7; col++) {
+      const dt = _addDays(weekStart, col);
+      const dk = _ymd(dt);
+      const inMonth = dt.getMonth() === month;
+      const isToday = dk === todayStr;
+      const dayNum = dt.getDate();
+
+      // In-cell single-day events: meetings, personal events, install tasks,
+      // AND single-day install windows. Multi-day install windows render as
+      // positioned bars in the overlay.
+      const projectEvents = inMonth ? getEventsForDate(dk).filter(e => e.start === e.end) : [];
+      const personalEvents = inMonth ? getPersonalEventsForDateForViewMode(dk) : [];
+      const meetingEvents = inMonth ? getMeetingsForDateForViewMode(dk) : [];
+      const taskItems = [];
+      if (inMonth) {
+        (state.installTasks || []).forEach(t => {
+          if (t.projectId == null) return;
+          (t.subtasks || []).forEach(s => { if (s.date === dk) taskItems.push({ task: t, subtask: s }); });
+          if (t.isMilestone && t.dueDate === dk) taskItems.push({ task: t, subtask: null });
+        });
+      }
+      const visibleCount = Math.max(2, 4 - maxLane);
+      const totalCount = projectEvents.length + meetingEvents.length + personalEvents.length + taskItems.length;
+      const projShown = projectEvents.slice(0, visibleCount);
+      const meetingShown = meetingEvents.slice(0, Math.max(0, visibleCount - projShown.length));
+      const personalShown = personalEvents.slice(0, Math.max(0, visibleCount - projShown.length - meetingShown.length));
+      const taskShown = taskItems.slice(0, Math.max(0, visibleCount - projShown.length - meetingShown.length - personalShown.length));
+
+      const projHTML = projShown.map(e => {
+        const proj = state.projects.find(pp => pp.id === e.id);
+        const st = getEventStyle(getProjectColor(e.id), !!e.booked);
+        const label = e.clientName || e.name;
+        return `<div class="cal-event" style="${st.css}" onclick="event.stopPropagation();openProject(${e.id},'install')" onmouseenter="_calHoverEnter(event,'install-${e.id}','${dk}')" onmouseleave="_calHoverLeave()">${proj?.scheduling_notes ? '📝 ' : ''}${esc(label)}</div>`;
+      }).join('');
+
+      const meetingHTML = meetingShown.map(m => {
+        const mColor = m.projectId != null ? getProjectColor(m.projectId) : '#A371F7';
+        const timeLabel = m.startTime ? _fmt12h(m.startTime) + ' ' : '';
+        const isPending = m.status === 'pending_approval';
+        const st = getEventStyle(mColor, !isPending);
+        const timeColor = st.fill === 'transparent' ? mColor : st.text;
+        return `<div class="cal-event" style="${st.css}" onclick="event.stopPropagation();openMeetingDetail(${m.id})" onmouseenter="_calHoverEnter(event,'meeting-${m.id}','${dk}')" onmouseleave="_calHoverLeave()">${timeLabel ? `<span style="font-weight:600;color:${timeColor}">${esc(timeLabel)}</span>` : ''}${esc(m.title)}</div>`;
+      }).join('');
+
+      const personalHTML = personalShown.map(pe => {
+        const owner = getTeamMember(pe.memberId);
+        const viewerIsOwner = pe.memberId === viewerId;
+        const label = getPersonalEventDisplayLabel(pe, viewerIsOwner);
+        const ownerLabel = (!viewerIsOwner && owner) ? `${owner.name.split(' ')[0]}: ` : '';
+        return `<div class="cal-event cal-event-personal" style="background:${getPersonalEventColor(pe)}1F;border-color:${getPersonalEventColor(pe)};color:${getPersonalEventColor(pe)}" onclick="event.stopPropagation();openCalendarDayDetail('${dk}')" onmouseenter="_calHoverEnter(event,'pe-${pe.id}','${dk}')" onmouseleave="_calHoverLeave()">${esc(ownerLabel + label)}</div>`;
+      }).join('');
+
+      const taskHTML = taskShown.map(({ task, subtask }) => {
+        const cc = getProjectColor(task.projectId);
+        const proj = state.projects.find(pp => pp.id === task.projectId);
+        const clientName = proj ? (proj.client_name || '') : '';
+        const isMile = !subtask && task.isMilestone;
+        const stepLabel = subtask ? subtask.title : task.title;
+        const chipText = clientName ? `${clientName} · ${stepLabel}` : stepLabel;
+        return `<div class="cal-event" style="background:transparent;border:1px solid ${cc};color:${cc}" onclick="event.stopPropagation();openProject(${task.projectId})" onmouseenter="_calHoverEnter(event,'install-${task.projectId}','${dk}')" onmouseleave="_calHoverLeave()">${isMile ? '🚩 ' : '◷ '}${esc(chipText)}</div>`;
+      }).join('');
+
+      const overflowCount = totalCount - (projShown.length + meetingShown.length + personalShown.length + taskShown.length);
+
+      cellsHTML.push(`
+        <div class="cal2-cell${inMonth ? '' : ' is-other-month'}${isToday ? ' is-today' : ''}" data-date="${dk}" onclick="${inMonth ? `openCalendarDayDetail('${dk}')` : 'void(0)'}">
+          <div class="cal2-daynum">${dayNum}</div>
+          <div class="cal2-events" style="margin-top:${maxLane * PER_LANE}px">
+            ${projHTML}${meetingHTML}${personalHTML}${taskHTML}
+            ${overflowCount > 0 ? `<div class="cal-event-overflow">+${overflowCount} more</div>` : ''}
+          </div>
+        </div>
+      `);
+    }
+
+    // Positioned bars layer for multi-day installs
+    const barsHTML = weekRuns.map(run => {
+      const bar = run.bar;
+      const st = getEventStyle(getProjectColor(bar.projectId), bar.booked);
+      const leftPct = (run.startCol / 7) * 100;
+      const widthPct = ((run.endCol - run.startCol + 1) / 7) * 100;
+      const top = DAYNUM_HEIGHT + (run.lane * PER_LANE);
+      const runStartDate = _ymd(_addDays(weekStart, run.startCol));
+      const runEndDate = _ymd(_addDays(weekStart, run.endCol));
+      const isSpanStart = bar.start === runStartDate;
+      const isSpanEnd = bar.end === runEndDate;
+      const radiusLeft = isSpanStart || run.startCol === 0;
+      const radiusRight = isSpanEnd || run.endCol === 6;
+      const radiusStyle = `border-top-left-radius:${radiusLeft ? '4px' : '0'};border-bottom-left-radius:${radiusLeft ? '4px' : '0'};border-top-right-radius:${radiusRight ? '4px' : '0'};border-bottom-right-radius:${radiusRight ? '4px' : '0'}`;
+      const label = bar.clientName || bar.name;
+      const initials = (bar.attendeeIds || []).slice(0, 3).map(id => {
+        const m = getTeamMember(id);
+        if (!m) return '';
+        const memberColor = (DASHBOARD_ACCESS.find(d => d.key === m.primaryRole) || {}).color || '#6E7681';
+        const ini = m.initials || (m.name || '').slice(0, 2).toUpperCase();
+        return `<span class="cal2-bar-initials" style="background:${memberColor}22;border-color:${memberColor};color:${memberColor}">${esc(ini)}</span>`;
+      }).join('');
+      const hoverAttrs = `onmouseenter="_calHoverEnter(event,'install-${bar.projectId}','${runStartDate}')" onmouseleave="_calHoverLeave()"`;
+      return `
+        <div class="cal2-bar" style="${st.css};${radiusStyle};left:${leftPct}%;width:${widthPct}%;top:${top}px;height:${BAR_HEIGHT}px"
+             ${hoverAttrs}
+             onclick="event.stopPropagation();openProject(${bar.projectId},'install')">
+          <span class="cal2-bar-label">${bar.hasNotes ? '📝 ' : ''}${esc(label)}</span>${initials}
+        </div>
+      `;
+    }).join('');
+
+    weekRowsHTML.push(`
+      <div class="cal2-week">
+        <div class="cal2-week-cells">${cellsHTML.join('')}</div>
+        <div class="cal2-week-bars">${barsHTML}</div>
+      </div>
+    `);
+  }
+
+  // Booked + Estimated visibility toggles (default OFF)
   const showBooked = state.calendarShowBooked === true;
   const showEstimated = state.calendarShowEstimated === true;
 
@@ -9262,10 +9347,10 @@ function renderCalendar(c) {
         </div>
       </div>
       ${renderCalendarFilters()}
-      <table class="calendar-grid">
-        <thead><tr>${days.map(d => `<th>${d}</th>`).join('')}</tr></thead>
-        <tbody>${cells}</tbody>
-      </table>
+      <div class="cal2">
+        <div class="cal2-header">${days.map(d => `<div class="cal2-dow">${d}</div>`).join('')}</div>
+        <div class="cal2-grid">${weekRowsHTML.join('')}</div>
+      </div>
     </div>
   `;
 }
