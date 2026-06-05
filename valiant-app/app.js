@@ -1191,13 +1191,42 @@ function getInstallChangesAwaitingMyApproval() {
 // ════════════════════════════════════════════════════════════════════════════
 
 function _nextTaskId() {
-  const all = state.installTasks || [];
+  const all = [...(state.installTasks || []), ...(state.designTasks || [])];
   let max = 0;
   all.forEach(t => {
     if (t.id > max) max = t.id;
     (t.subtasks || []).forEach(s => { if (s.id > max) max = s.id; });
   });
   return max + 1;
+}
+
+// One-time fix: design tasks were created before _nextTaskId considered the
+// design store, so their ids collide with install task ids. Renumber any
+// design task/subtask whose id already exists in installTasks.
+function _fixDesignTaskIdCollisions() {
+  const installIds = new Set();
+  (state.installTasks || []).forEach(t => {
+    installIds.add(t.id);
+    (t.subtasks || []).forEach(s => installIds.add(s.id));
+  });
+  let nextId = 0;
+  (state.installTasks || []).forEach(t => {
+    if (t.id > nextId) nextId = t.id;
+    (t.subtasks || []).forEach(s => { if (s.id > nextId) nextId = s.id; });
+  });
+  (state.designTasks || []).forEach(t => {
+    if (t.id > nextId) nextId = t.id;
+    (t.subtasks || []).forEach(s => { if (s.id > nextId) nextId = s.id; });
+  });
+
+  let changed = false;
+  (state.designTasks || []).forEach(t => {
+    if (installIds.has(t.id)) { nextId++; t.id = nextId; changed = true; }
+    (t.subtasks || []).forEach(s => {
+      if (installIds.has(s.id)) { nextId++; s.id = nextId; changed = true; }
+    });
+  });
+  if (changed) save('vi_design_tasks', state.designTasks);
 }
 
 // Migrate old task shape (single assignee, manual start/end) to new shape.
@@ -16952,6 +16981,7 @@ async function init() {
   _migrateInstallSubtasksToTasks();
   _migrateDesignTaskTemplates();
   _migrateDesignSubtasksToTasks();
+  _fixDesignTaskIdCollisions();
   try {
     renderCurrentPage();
   } catch (e) {
