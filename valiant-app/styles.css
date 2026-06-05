@@ -6843,3 +6843,128 @@ html.text-large body {
   word-break: break-word;
   line-height: 1.25;
 }
+
+
+/* ── Install Task EDIT MODE ── */
+.itask-head-actions { display: flex; align-items: center; gap: 6px; }
+.itask-editbtn {
+  font-size: 11px;
+  padding: 4px 10px;
+  border: 1px solid;
+  border-radius: 4px;
+  cursor: pointer;
+  font-weight: 500;
+}
+.itask-reseedbtn {
+  font-size: 11px;
+  padding: 4px 10px;
+  background: #1A0D0D;
+  border: 1px solid #DA3633;
+  color: #F85149;
+  border-radius: 4px;
+  cursor: pointer;
+}
+.itask-reseedbtn:hover { background: #2A1515; }
+.itask-card.is-editing {
+  border-color: #3FB950;
+  background: #0D1A0E;
+}
+.itask-bulk-panel {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  background: #161B22;
+  border: 1px solid #3FB950;
+  border-radius: 4px;
+  margin: 8px 0;
+  flex-wrap: wrap;
+}
+.itask-bulk-info {
+  font-size: 12px;
+  font-weight: 600;
+  color: #3FB950;
+}
+.itask-bulk-btn {
+  font-size: 11px;
+  padding: 4px 10px;
+  background: #0D1117;
+  border: 1px solid #30363D;
+  color: #C9D1D9;
+  border-radius: 4px;
+  cursor: pointer;
+}
+.itask-bulk-btn:hover { background: #161B22; }
+.itask-bulk-clear { color: #6E7681; }
+
+.itask-selectall {
+  font-size: 11px;
+  color: #6E7681;
+  margin-left: 8px;
+  cursor: pointer;
+  user-select: none;
+}
+.itask-selectall:hover { color: #C9D1D9; }
+
+.itask-sub-editing {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px;
+  background: #0D1117;
+  border: 1px solid #30363D;
+  border-radius: 4px;
+  margin-bottom: 4px;
+}
+.itask-sub-editing.is-selected {
+  background: #0D1A26;
+  border-color: #58A6FF;
+}
+.itask-drag-handle {
+  cursor: grab;
+  color: #6E7681;
+  font-size: 14px;
+  user-select: none;
+  padding: 0 4px;
+}
+.itask-drag-handle:active { cursor: grabbing; }
+.itask-select-box {
+  width: 18px;
+  height: 18px;
+  border: 1px solid #30363D;
+  border-radius: 3px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  flex-shrink: 0;
+  font-size: 11px;
+  color: #58A6FF;
+  background: #0D1117;
+}
+.itask-select-box.is-selected {
+  background: #0D1A26;
+  border-color: #58A6FF;
+}
+.itask-edit-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 4px;
+  flex-wrap: wrap;
+}
+.itask-edit-daybtn,
+.itask-edit-peoplebtn {
+  font-size: 11px;
+  padding: 3px 8px;
+  background: #161B22;
+  border: 1px solid #30363D;
+  color: #C9D1D9;
+  border-radius: 3px;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+.itask-edit-daybtn:hover,
+.itask-edit-peoplebtn:hover { background: #1F2530; }
