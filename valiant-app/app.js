@@ -9154,6 +9154,48 @@ function renderCalendar(c) {
     });
   }
 
+  // Add install_task masters whose dates aren't fully covered by an install
+  // window. Mirrors the Operations Master Calendar surfacing so the same task
+  // bar appears in both places.
+  (state.installTasks || []).forEach(t => {
+    if (t.projectId == null) return;
+    const proj = state.projects.find(p => p.id === t.projectId);
+    if (!proj) return;
+    let range;
+    if (t.isMilestone) {
+      if (!t.dueDate) return;
+      range = { start: t.dueDate, end: t.dueDate };
+    } else {
+      range = getTaskDateRange(t);
+      if (!range) return;
+    }
+    if (range.end < gridStartStr || range.start > gridEndStr) return;
+    // Skip when project install window already covers this range
+    const win = getInstallWindow(proj);
+    if (win && win.start <= range.start && win.end >= range.end) return;
+
+    const allAttendees = new Set();
+    (t.assigneeIds || []).forEach(id => allAttendees.add(id));
+    (t.subtasks || []).forEach(s => (s.assigneeIds || []).forEach(id => allAttendees.add(id)));
+
+    installBars.push({
+      type: 'install_task',
+      projectId: t.projectId,
+      taskId: t.id,
+      name: t.title,
+      clientName: proj.client_name || '',
+      booked: false, // tasks render outline (planning)
+      start: range.start,
+      end: range.end,
+      excludeWeekends: false, // tasks don't skip weekends — subtasks pinned to specific days
+      weekendIncludes: [],
+      attendeeIds: [...allAttendees],
+      hasNotes: false,
+      isMilestone: !!t.isMilestone,
+      titleOverride: `${proj.client_name || proj.name} · ${t.title}`
+    });
+  });
+
   // Does the install bar render on a given date? (handles weekend skip)
   function installCoversDate(bar, dateStr) {
     if (dateStr < bar.start || dateStr > bar.end) return false;
@@ -9309,7 +9351,7 @@ function renderCalendar(c) {
       const radiusLeft = isSpanStart || run.startCol === 0;
       const radiusRight = isSpanEnd || run.endCol === 6;
       const radiusStyle = `border-top-left-radius:${radiusLeft ? '4px' : '0'};border-bottom-left-radius:${radiusLeft ? '4px' : '0'};border-top-right-radius:${radiusRight ? '4px' : '0'};border-bottom-right-radius:${radiusRight ? '4px' : '0'}`;
-      const label = bar.clientName || bar.name;
+      const label = bar.titleOverride || bar.clientName || bar.name;
       const initials = (bar.attendeeIds || []).slice(0, 3).map(id => {
         const m = getTeamMember(id);
         if (!m) return '';
