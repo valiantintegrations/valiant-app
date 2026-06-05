@@ -9987,6 +9987,61 @@ function renderCalendar(c) {
     taskIdsWithBar.add(t.id);
   });
 
+  // Design task masters — surface as bars too, with 📐 prefix to distinguish
+  // them at a glance from install tasks. Same outline treatment. Respects the
+  // Calendar tab's People filter (Me/All/individual): a design task only shows
+  // if at least one of the effective members is an assignee on the task or any
+  // of its subtasks. Matches how install bars filter via assignment.
+  const designTaskIdsWithBar = new Set();
+  const _calViewerId = getActiveTeamMemberId();
+  const _calSelected = state.calendarSelectedMembers || [];
+  const _calEffective = _calSelected.length === 0 ? [_calViewerId] : _calSelected;
+  (state.designTasks || []).forEach(t => {
+    if (t.projectId == null) return;
+    const proj = state.projects.find(p => p.id === t.projectId);
+    if (!proj) return;
+    let range;
+    if (t.isMilestone) {
+      if (!t.dueDate) return;
+      range = { start: t.dueDate, end: t.dueDate };
+    } else {
+      range = getTaskDateRange(t);
+      if (!range) return;
+    }
+    if (range.end < gridStartStr || range.start > gridEndStr) return;
+
+    const allAttendees = new Set();
+    (t.assigneeIds || []).forEach(id => allAttendees.add(id));
+    (t.subtasks || []).forEach(s => (s.assigneeIds || []).forEach(id => allAttendees.add(id)));
+    // Also include design assignees from project crew so jobs the viewer
+    // designs but didn't claim on a specific task still show up
+    const a = getProjectAssignment(t.projectId);
+    (a.design || []).forEach(x => allAttendees.add(x.id));
+    (a.pm || []).forEach(x => allAttendees.add(x.id));
+
+    // People filter
+    const attendeeList = [...allAttendees];
+    if (!_calEffective.some(mid => attendeeList.includes(mid))) return;
+
+    installBars.push({
+      type: 'design_task',
+      projectId: t.projectId,
+      taskId: t.id,
+      name: t.title,
+      clientName: proj.client_name || '',
+      booked: false,
+      start: range.start,
+      end: range.end,
+      excludeWeekends: false,
+      weekendIncludes: [],
+      attendeeIds: [...allAttendees],
+      hasNotes: false,
+      isMilestone: !!t.isMilestone,
+      titleOverride: `📐 ${proj.client_name || proj.name} · ${t.title}`
+    });
+    designTaskIdsWithBar.add(t.id);
+  });
+
   // Does the install bar render on a given date? (handles weekend skip)
   function installCoversDate(bar, dateStr) {
     if (dateStr < bar.start || dateStr > bar.end) return false;
@@ -10157,11 +10212,12 @@ function renderCalendar(c) {
         const ini = m.initials || (m.name || '').slice(0, 2).toUpperCase();
         return `<span class="mcal-initials-badge" style="background:${memberColor}22;border-color:${memberColor};color:${memberColor}">${esc(ini)}</span>`;
       }).join('');
+      const targetTab = bar.type === 'design_task' ? 'design' : 'install';
       const hoverAttrs = `onmouseenter="_calHoverEnter(event,'install-${bar.projectId}','${runStartDate}')" onmouseleave="_calHoverLeave()"`;
       return `
         <div class="mcal-month-bar" style="${st.css};${radiusStyle};left:${leftPct}%;width:${widthPct}%;top:${top}px;height:${BAR_HEIGHT}px"
              ${hoverAttrs}
-             onclick="event.stopPropagation();openProject(${bar.projectId},'install')">
+             onclick="event.stopPropagation();openProject(${bar.projectId},'${targetTab}')">
           <span class="mcal-month-bar-label">${bar.hasNotes ? '📝 ' : ''}${esc(label)}</span>${initials}
         </div>
       `;
@@ -11994,6 +12050,51 @@ function getMasterCalendarEvents(startDateStr, endDateStr, ctx) {
         isMilestone: !!t.isMilestone
       });
     });
+
+    // 5) Design task masters — same surfacing pattern as install_task.
+    //    Skipped when project install window covers the range (rare for design
+    //    but defensive). No parent design "window" exists, so they always show
+    //    as their own bar if dates are set.
+    (state.designTasks || []).forEach(t => {
+      if (t.projectId == null) return;
+      const allAttendees = new Set();
+      (t.assigneeIds || []).forEach(id => allAttendees.add(id));
+      (t.subtasks || []).forEach(s => (s.assigneeIds || []).forEach(id => allAttendees.add(id)));
+      if (!anyAttendeeAllowed([...allAttendees])) return;
+
+      const proj = state.projects.find(p => p.id === t.projectId);
+      if (!proj) return;
+
+      let range;
+      if (t.isMilestone) {
+        if (!t.dueDate) return;
+        range = { start: t.dueDate, end: t.dueDate };
+      } else {
+        range = getTaskDateRange(t);
+        if (!range) return;
+      }
+      if (range.end < startDateStr || range.start > endDateStr) return;
+
+      events.push({
+        type: 'design_task',
+        id: `dtask-${t.id}`,
+        title: `📐 ${proj.client_name || proj.name} · ${t.title}${t.isMilestone ? ' (milestone)' : ''}`,
+        projectId: t.projectId,
+        project: proj,
+        startDate: _mcNormalizeDate(range.start),
+        endDate: _mcNormalizeDate(range.end),
+        startTime: null,
+        endTime: null,
+        color: t.isMilestone ? '#D29922' : '#A371F7',
+        displayColor: getProjectColor(t.projectId),
+        committed: false,
+        attendeeIds: [...allAttendees],
+        statusLabel: t.isMilestone ? 'Milestone' : 'Design',
+        raw: t,
+        isMilestone: !!t.isMilestone,
+        phase: 'design'
+      });
+    });
   }
 
   return events;
@@ -12024,7 +12125,13 @@ function _mcTapEvent(eventId) {
   if (eventId.startsWith('itask-')) {
     const tid = parseInt(eventId.slice(6), 10);
     const t = (state.installTasks || []).find(x => x.id === tid);
-    if (t && t.projectId != null) openProject(t.projectId);
+    if (t && t.projectId != null) openProject(t.projectId, 'install');
+    return;
+  }
+  if (eventId.startsWith('dtask-')) {
+    const tid = parseInt(eventId.slice(6), 10);
+    const t = (state.designTasks || []).find(x => x.id === tid);
+    if (t && t.projectId != null) openProject(t.projectId, 'design');
     return;
   }
   if (eventId.startsWith('meeting-')) {
