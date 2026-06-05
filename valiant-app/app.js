@@ -2171,6 +2171,10 @@ function toggleSidebar() {
 function renderCurrentPage() {
   const c = document.getElementById('content');
   if (!c) return;
+  // Cleanup any lingering floating tooltips before re-rendering. Defensive —
+  // covers any navigation path that bypasses openProject().
+  const tip = document.getElementById('cal-hover-tip');
+  if (tip) tip.style.display = 'none';
   try {
     switch (state.currentPage) {
       case 'dashboard': renderDashboard(c); break;
@@ -2199,6 +2203,9 @@ function renderCurrentPage() {
 function openProject(id, tabOrAnchor, anchor) {
   const p = state.projects.find(x => x.id === id);
   if (!p) return;
+  // Cleanup any lingering calendar hover tooltip — fixed-position element
+  // appended to body persists across page navigations otherwise.
+  _calHoverLeave();
   // Remember where we came from so Back returns to the right page
   if (state.currentPage && state.currentPage !== 'project') {
     state.projectOrigin = state.currentPage;
