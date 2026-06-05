@@ -10084,11 +10084,14 @@ function renderCalendar(c) {
     const lastDayInWeek = _addDays(weekStart, 6);
     if (weekStart.getMonth() > month && weekStart.getFullYear() >= year) break;
 
-    // Collect runs for this week (multi-day only — single-day still in-cell)
+    // Collect runs for this week (multi-day only for install windows — task
+    // bars render even on single-day so the "Client · Task" label gets the
+    // proper bar treatment with initials. Single-day install windows still
+    // fall back to in-cell chips.)
     const weekRuns = [];
     installBars.forEach(bar => {
       if (bar.end < weekStartStr || bar.start > weekEndStr) return;
-      if (bar.start === bar.end) return; // single-day install treated as in-cell chip below
+      if (bar.type === 'install' && bar.start === bar.end) return; // single-day install window only
       const runs = installRunsInWeek(bar, weekStart);
       runs.forEach(r => weekRuns.push({ bar, ...r }));
     });
