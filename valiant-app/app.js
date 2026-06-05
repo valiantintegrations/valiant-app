@@ -1790,7 +1790,7 @@ function _openBulkPeoplePicker(taskId) {
     showToast('Select at least one step first', 'info');
     return;
   }
-  const t = getInstallTaskById(taskId);
+  const t = _getTaskByIdAnyPhase(taskId);
   if (!t) return;
   // Available people: install crew + PM on this project, then everyone else.
   // Same pool as the per-subtask dialog so users see a consistent picker.
@@ -7231,7 +7231,7 @@ function openSubtaskDialog(taskId, subtaskId) {
 function _renderSubDialogContent() {
   const s = window._subDialogState;
   if (!s) return '';
-  const t = getInstallTaskById(s.taskId);
+  const t = _getTaskByIdAnyPhase(s.taskId);
   const taskTitle = t ? t.title : 'task';
   const isEdit = s.mode === 'edit';
 
@@ -7422,7 +7422,7 @@ function _bindSubDialogListeners() {
 function _saveSubtaskDialog() {
   const s = window._subDialogState;
   if (!s) return;
-  const t = getInstallTaskById(s.taskId);
+  const t = _getTaskByIdAnyPhase(s.taskId);
   if (!t) return;
 
   // Read row values directly from the DOM — DOM is authoritative. This is
