@@ -1201,19 +1201,21 @@ function _nextTaskId() {
 }
 
 // One-time fix: design tasks were created before _nextTaskId considered the
-// design store, so their ids collide with install task ids. Renumber any
-// design task/subtask whose id already exists in installTasks.
+// design store. Two flavors of breakage are possible:
+//   (a) design ids collide with install ids
+//   (b) MULTIPLE design subtasks share the same id (because _nextTaskId
+//       returned the same value for every addDesignSubtask call in a batch)
+// Renumber any colliding ids — both flavors — to globally unique values.
 function _fixDesignTaskIdCollisions() {
-  const installIds = new Set();
+  const seen = new Set();
+  // Reserve all install ids first — they keep theirs
   (state.installTasks || []).forEach(t => {
-    installIds.add(t.id);
-    (t.subtasks || []).forEach(s => installIds.add(s.id));
+    seen.add(t.id);
+    (t.subtasks || []).forEach(s => seen.add(s.id));
   });
+  // Find current max across both stores
   let nextId = 0;
-  (state.installTasks || []).forEach(t => {
-    if (t.id > nextId) nextId = t.id;
-    (t.subtasks || []).forEach(s => { if (s.id > nextId) nextId = s.id; });
-  });
+  seen.forEach(id => { if (id > nextId) nextId = id; });
   (state.designTasks || []).forEach(t => {
     if (t.id > nextId) nextId = t.id;
     (t.subtasks || []).forEach(s => { if (s.id > nextId) nextId = s.id; });
@@ -1221,9 +1223,19 @@ function _fixDesignTaskIdCollisions() {
 
   let changed = false;
   (state.designTasks || []).forEach(t => {
-    if (installIds.has(t.id)) { nextId++; t.id = nextId; changed = true; }
+    if (seen.has(t.id) || t.id == null) {
+      nextId++;
+      t.id = nextId;
+      changed = true;
+    }
+    seen.add(t.id);
     (t.subtasks || []).forEach(s => {
-      if (installIds.has(s.id)) { nextId++; s.id = nextId; changed = true; }
+      if (seen.has(s.id) || s.id == null) {
+        nextId++;
+        s.id = nextId;
+        changed = true;
+      }
+      seen.add(s.id);
     });
   });
   if (changed) save('vi_design_tasks', state.designTasks);
