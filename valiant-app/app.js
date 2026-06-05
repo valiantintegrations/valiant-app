@@ -9252,7 +9252,7 @@ function renderCalendar(c) {
         const proj = state.projects.find(pp => pp.id === e.id);
         const st = getEventStyle(getProjectColor(e.id), !!e.booked);
         const label = e.clientName || e.name;
-        return `<div class="cal-event" style="${st.css}" onclick="event.stopPropagation();openProject(${e.id},'install')" onmouseenter="_calHoverEnter(event,'install-${e.id}','${dk}')" onmouseleave="_calHoverLeave()">${proj?.scheduling_notes ? '📝 ' : ''}${esc(label)}</div>`;
+        return `<div class="mcal-month-event" style="${st.css}" onclick="event.stopPropagation();openProject(${e.id},'install')" onmouseenter="_calHoverEnter(event,'install-${e.id}','${dk}')" onmouseleave="_calHoverLeave()">${proj?.scheduling_notes ? '📝 ' : ''}${esc(label)}</div>`;
       }).join('');
 
       const meetingHTML = meetingShown.map(m => {
@@ -9261,7 +9261,7 @@ function renderCalendar(c) {
         const isPending = m.status === 'pending_approval';
         const st = getEventStyle(mColor, !isPending);
         const timeColor = st.fill === 'transparent' ? mColor : st.text;
-        return `<div class="cal-event" style="${st.css}" onclick="event.stopPropagation();openMeetingDetail(${m.id})" onmouseenter="_calHoverEnter(event,'meeting-${m.id}','${dk}')" onmouseleave="_calHoverLeave()">${timeLabel ? `<span style="font-weight:600;color:${timeColor}">${esc(timeLabel)}</span>` : ''}${esc(m.title)}</div>`;
+        return `<div class="mcal-month-event" style="${st.css}" onclick="event.stopPropagation();openMeetingDetail(${m.id})" onmouseenter="_calHoverEnter(event,'meeting-${m.id}','${dk}')" onmouseleave="_calHoverLeave()">${timeLabel ? `<span style="font-weight:600;color:${timeColor}">${esc(timeLabel)}</span>` : ''}${esc(m.title)}</div>`;
       }).join('');
 
       const personalHTML = personalShown.map(pe => {
@@ -9269,7 +9269,7 @@ function renderCalendar(c) {
         const viewerIsOwner = pe.memberId === viewerId;
         const label = getPersonalEventDisplayLabel(pe, viewerIsOwner);
         const ownerLabel = (!viewerIsOwner && owner) ? `${owner.name.split(' ')[0]}: ` : '';
-        return `<div class="cal-event cal-event-personal" style="background:${getPersonalEventColor(pe)}1F;border-color:${getPersonalEventColor(pe)};color:${getPersonalEventColor(pe)}" onclick="event.stopPropagation();openCalendarDayDetail('${dk}')" onmouseenter="_calHoverEnter(event,'pe-${pe.id}','${dk}')" onmouseleave="_calHoverLeave()">${esc(ownerLabel + label)}</div>`;
+        return `<div class="mcal-month-event mcal-month-event-personal" style="background:${getPersonalEventColor(pe)}1F;border-color:${getPersonalEventColor(pe)};color:${getPersonalEventColor(pe)}" onclick="event.stopPropagation();openCalendarDayDetail('${dk}')" onmouseenter="_calHoverEnter(event,'pe-${pe.id}','${dk}')" onmouseleave="_calHoverLeave()">${esc(ownerLabel + label)}</div>`;
       }).join('');
 
       const taskHTML = taskShown.map(({ task, subtask }) => {
@@ -9279,17 +9279,17 @@ function renderCalendar(c) {
         const isMile = !subtask && task.isMilestone;
         const stepLabel = subtask ? subtask.title : task.title;
         const chipText = clientName ? `${clientName} · ${stepLabel}` : stepLabel;
-        return `<div class="cal-event" style="background:transparent;border:1px solid ${cc};color:${cc}" onclick="event.stopPropagation();openProject(${task.projectId})" onmouseenter="_calHoverEnter(event,'install-${task.projectId}','${dk}')" onmouseleave="_calHoverLeave()">${isMile ? '🚩 ' : '◷ '}${esc(chipText)}</div>`;
+        return `<div class="mcal-month-event" style="background:transparent;border:1px solid ${cc};color:${cc}" onclick="event.stopPropagation();openProject(${task.projectId})" onmouseenter="_calHoverEnter(event,'install-${task.projectId}','${dk}')" onmouseleave="_calHoverLeave()">${isMile ? '🚩 ' : '◷ '}${esc(chipText)}</div>`;
       }).join('');
 
       const overflowCount = totalCount - (projShown.length + meetingShown.length + personalShown.length + taskShown.length);
 
       cellsHTML.push(`
-        <div class="cal2-cell${inMonth ? '' : ' is-other-month'}${isToday ? ' is-today' : ''}" data-date="${dk}" onclick="${inMonth ? `openCalendarDayDetail('${dk}')` : 'void(0)'}">
-          <div class="cal2-daynum">${dayNum}</div>
-          <div class="cal2-events" style="margin-top:${maxLane * PER_LANE}px">
+        <div class="mcal-month-cell${inMonth ? '' : ' is-other-month'}${isToday ? ' is-today' : ''}" data-date="${dk}" onclick="${inMonth ? `openCalendarDayDetail('${dk}')` : 'void(0)'}">
+          <div class="mcal-month-daynum">${dayNum}</div>
+          <div class="mcal-month-events" style="margin-top:${maxLane * PER_LANE}px">
             ${projHTML}${meetingHTML}${personalHTML}${taskHTML}
-            ${overflowCount > 0 ? `<div class="cal-event-overflow">+${overflowCount} more</div>` : ''}
+            ${overflowCount > 0 ? `<div class="mcal-month-overflow">+${overflowCount} more</div>` : ''}
           </div>
         </div>
       `);
@@ -9315,22 +9315,22 @@ function renderCalendar(c) {
         if (!m) return '';
         const memberColor = (DASHBOARD_ACCESS.find(d => d.key === m.primaryRole) || {}).color || '#6E7681';
         const ini = m.initials || (m.name || '').slice(0, 2).toUpperCase();
-        return `<span class="cal2-bar-initials" style="background:${memberColor}22;border-color:${memberColor};color:${memberColor}">${esc(ini)}</span>`;
+        return `<span class="mcal-initials-badge" style="background:${memberColor}22;border-color:${memberColor};color:${memberColor}">${esc(ini)}</span>`;
       }).join('');
       const hoverAttrs = `onmouseenter="_calHoverEnter(event,'install-${bar.projectId}','${runStartDate}')" onmouseleave="_calHoverLeave()"`;
       return `
-        <div class="cal2-bar" style="${st.css};${radiusStyle};left:${leftPct}%;width:${widthPct}%;top:${top}px;height:${BAR_HEIGHT}px"
+        <div class="mcal-month-bar" style="${st.css};${radiusStyle};left:${leftPct}%;width:${widthPct}%;top:${top}px;height:${BAR_HEIGHT}px"
              ${hoverAttrs}
              onclick="event.stopPropagation();openProject(${bar.projectId},'install')">
-          <span class="cal2-bar-label">${bar.hasNotes ? '📝 ' : ''}${esc(label)}</span>${initials}
+          <span class="mcal-month-bar-label">${bar.hasNotes ? '📝 ' : ''}${esc(label)}</span>${initials}
         </div>
       `;
     }).join('');
 
     weekRowsHTML.push(`
-      <div class="cal2-week">
-        <div class="cal2-week-cells">${cellsHTML.join('')}</div>
-        <div class="cal2-week-bars">${barsHTML}</div>
+      <div class="mcal-month-week">
+        <div class="mcal-month-week-cells">${cellsHTML.join('')}</div>
+        <div class="mcal-month-week-bars">${barsHTML}</div>
       </div>
     `);
   }
@@ -9354,9 +9354,9 @@ function renderCalendar(c) {
         </div>
       </div>
       ${renderCalendarFilters()}
-      <div class="cal2">
-        <div class="cal2-header">${days.map(d => `<div class="cal2-dow">${d}</div>`).join('')}</div>
-        <div class="cal2-grid">${weekRowsHTML.join('')}</div>
+      <div class="mcal-month">
+        <div class="mcal-month-header">${days.map(d => `<div class="mcal-month-dow">${d}</div>`).join('')}</div>
+        <div class="mcal-month-grid">${weekRowsHTML.join('')}</div>
       </div>
     </div>
   `;
