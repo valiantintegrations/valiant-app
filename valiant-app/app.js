@@ -1524,43 +1524,33 @@ function _subtaskDrop(ev, taskId, subtaskId) {
   _reorderSubtask(taskId, fromIdx, toIdx);
 }
 
-// Bulk-apply day picker: opens a date input prompt and applies to all selected
+// Bulk-apply day picker: opens the same calendar popup we use elsewhere,
+// commits the chosen date to every selected subtask at once.
 function _openBulkDayPicker(taskId) {
   if (window._selectedSubtaskIds.size === 0) {
     showToast('Select at least one step first', 'info');
     return;
   }
-  const html = `
-    <div class="modal-backdrop" onclick="_closeBulkPicker(event)" id="bulk-day-modal">
-      <div class="modal" style="max-width:340px" onclick="event.stopPropagation()">
-        <div class="modal-header">
-          <div class="modal-title">Set date on ${window._selectedSubtaskIds.size} steps</div>
-          <button class="modal-close" onclick="_closeBulkPicker()">×</button>
-        </div>
-        <div class="modal-body">
-          <input type="date" id="bulk-day-input" class="input" style="width:100%;font-size:14px;padding:8px" />
-        </div>
-        <div class="modal-footer">
-          <button class="btn" onclick="_closeBulkPicker()">Cancel</button>
-          <button class="btn btn-primary" onclick="_commitBulkDate(${taskId})">Apply</button>
-        </div>
-      </div>
-    </div>
-  `;
-  const wrap = document.createElement('div');
-  wrap.innerHTML = html;
-  document.body.appendChild(wrap.firstElementChild);
-  setTimeout(() => { const i = document.getElementById('bulk-day-input'); if (i) i.focus(); }, 0);
+  window._dayPickerState = {
+    mode: 'bulk',
+    bulkTaskId: taskId,
+    anchor: new Date()
+  };
+  document.getElementById('day-picker')?.remove();
+  const overlay = document.createElement('div');
+  overlay.id = 'day-picker';
+  overlay.className = 'modal-overlay';
+  overlay.style.zIndex = '10002';
+  overlay.onclick = (e) => { if (e.target === overlay) { overlay.remove(); window._dayPickerState = null; } };
+  overlay.innerHTML = _renderSubDayPickerContent();
+  document.body.appendChild(overlay);
 }
 function _closeBulkPicker() {
   const m = document.getElementById('bulk-day-modal'); if (m) m.remove();
   const p = document.getElementById('bulk-people-modal'); if (p) p.remove();
-}
-function _commitBulkDate(taskId) {
-  const i = document.getElementById('bulk-day-input');
-  if (!i || !i.value) { _closeBulkPicker(); return; }
-  _bulkSetDateOnSelected(taskId, i.value);
-  _closeBulkPicker();
+  const p2 = document.getElementById('bulk-people-dialog'); if (p2) p2.remove();
+  document.getElementById('day-picker')?.remove();
+  window._dayPickerState = null;
 }
 
 // Bulk-apply people picker
@@ -1571,54 +1561,56 @@ function _openBulkPeoplePicker(taskId) {
   }
   const t = getInstallTaskById(taskId);
   if (!t) return;
-  // Available people: install crew on this project, plus any install-role team
-  const proj = state.projects.find(p => p.id === t.projectId);
-  const assignment = proj ? getProjectAssignment(proj.id) : null;
-  const crewIds = new Set();
-  if (assignment) {
-    (assignment.install || []).forEach(x => crewIds.add(x.id));
-    (assignment.pm || []).forEach(x => crewIds.add(x.id));
-  }
-  // Fallback: all installers
-  if (crewIds.size === 0) {
-    state.teamMembers.forEach(m => {
-      if (['installer','install_admin','master_admin'].includes(m.primaryRole)) crewIds.add(m.id);
-    });
-  }
-  const people = [...crewIds].map(id => state.teamMembers.find(m => m.id === id)).filter(Boolean);
+  // Available people: install crew + PM on this project, then everyone else.
+  // Same pool as the per-subtask dialog so users see a consistent picker.
+  const projId = t.projectId;
+  const crew = projId != null ? getProjectAssignment(projId) : { install: [], pm: [] };
+  const crewIds = new Set([...(crew.install || []).map(x => x.id), ...(crew.pm || []).map(x => x.id)]);
+  const pool = state.team || [];
+  const sortedPool = [...pool].sort((a, b) => {
+    const aOn = crewIds.has(a.id) ? 0 : 1;
+    const bOn = crewIds.has(b.id) ? 0 : 1;
+    if (aOn !== bOn) return aOn - bOn;
+    return a.name.localeCompare(b.name);
+  });
   window._bulkPeopleSelectedIds = new Set();
-  const html = `
-    <div class="modal-backdrop" onclick="_closeBulkPicker(event)" id="bulk-people-modal">
-      <div class="modal" style="max-width:340px" onclick="event.stopPropagation()">
-        <div class="modal-header">
-          <div class="modal-title">Assign people to ${window._selectedSubtaskIds.size} steps</div>
-          <button class="modal-close" onclick="_closeBulkPicker()">×</button>
+  window._bulkPeopleTaskId = taskId;
+
+  document.getElementById('bulk-people-dialog')?.remove();
+  const overlay = document.createElement('div');
+  overlay.id = 'bulk-people-dialog';
+  overlay.className = 'modal-overlay';
+  overlay.style.zIndex = '10002';
+  overlay.onclick = (e) => { if (e.target === overlay) _closeBulkPicker(); };
+  overlay.innerHTML = `
+    <div class="modal-container" style="max-width:420px;display:flex;flex-direction:column">
+      <div class="modal-header">
+        <div class="modal-title">Assign to ${window._selectedSubtaskIds.size} steps</div>
+        <button class="modal-close" onclick="_closeBulkPicker()">&times;</button>
+      </div>
+      <div class="modal-body" style="display:flex;flex-direction:column;gap:10px">
+        <div style="font-size:11px;color:#8B949E">Replaces existing assignees on selected steps.</div>
+        <div class="itask-assignee-pick" id="bulk-people-list">
+          ${sortedPool.map(m => `
+            <label class="itask-assignee-chip">
+              <input type="checkbox" value="${m.id}" onchange="_bulkTogglePeople(${m.id},this.checked)">
+              <span>${esc(m.name)}${crewIds.has(m.id) ? '' : ' <span style="font-size:9px;color:#D29922">(not on crew)</span>'}</span>
+            </label>
+          `).join('')}
         </div>
-        <div class="modal-body">
-          <div style="font-size:11px;color:#6E7681;margin-bottom:8px">Select who's doing these steps. Replaces existing assignees.</div>
-          <div id="bulk-people-list" style="display:flex;flex-direction:column;gap:6px">
-            ${people.map(m => `
-              <label style="display:flex;align-items:center;gap:8px;padding:6px 8px;background:#0D1117;border:1px solid #30363D;border-radius:4px;cursor:pointer">
-                <input type="checkbox" data-mid="${m.id}" onchange="_bulkTogglePeople(${m.id})" />
-                <span>${esc(m.name)}</span>
-              </label>
-            `).join('')}
-          </div>
-        </div>
-        <div class="modal-footer">
-          <button class="btn" onclick="_closeBulkPicker()">Cancel</button>
-          <button class="btn btn-primary" onclick="_commitBulkPeople(${taskId})">Apply</button>
-        </div>
+      </div>
+      <div class="modal-footer" style="display:flex;gap:8px;justify-content:flex-end;padding:12px 16px;border-top:1px solid #30363D">
+        <button class="btn btn-sm" onclick="_closeBulkPicker()">Cancel</button>
+        <button class="btn btn-sm btn-primary" onclick="_commitBulkPeople(${taskId})">Apply</button>
       </div>
     </div>
   `;
-  const wrap = document.createElement('div');
-  wrap.innerHTML = html;
-  document.body.appendChild(wrap.firstElementChild);
+  document.body.appendChild(overlay);
 }
-function _bulkTogglePeople(id) {
-  if (window._bulkPeopleSelectedIds.has(id)) window._bulkPeopleSelectedIds.delete(id);
-  else window._bulkPeopleSelectedIds.add(id);
+function _bulkTogglePeople(id, checked) {
+  if (!window._bulkPeopleSelectedIds) window._bulkPeopleSelectedIds = new Set();
+  if (checked) window._bulkPeopleSelectedIds.add(id);
+  else window._bulkPeopleSelectedIds.delete(id);
 }
 function _commitBulkPeople(taskId) {
   const ids = [...(window._bulkPeopleSelectedIds || new Set())];
@@ -7076,8 +7068,11 @@ function _renderSubDayPickerContent() {
   const counts = _getAllEventCountsForRange(_ymd(gridStart), _ymd(gridEnd));
   const todayStr = _ymd(new Date());
 
-  // The currently-selected date from the row, if any (highlight it)
+  // The currently-selected date from the row, if any (highlight it).
+  // In bulk mode there's no row — no pre-selected date.
   const selectedDate = (() => {
+    const ps2 = window._dayPickerState;
+    if (ps2 && ps2.mode === 'bulk') return null;
     const ds = window._subDialogState;
     if (!ds) return null;
     const row = ds.rows[ps.rowIdx];
@@ -7090,10 +7085,11 @@ function _renderSubDayPickerContent() {
   let cur = new Date(gridStart);
   // Days already used by other rows in this in-progress dialog — highlight them
   // so the user can see the pattern they're building across this batch.
+  // (Skipped in bulk mode — no in-progress row pattern there.)
   const batchDays = new Set();
   const editingRowIdx = ps.rowIdx;
   const ds = window._subDialogState;
-  if (ds) {
+  if (ds && ps.mode !== 'bulk') {
     ds.rows.forEach((r, i) => { if (i !== editingRowIdx && r.date) batchDays.add(r.date); });
   }
 
@@ -7124,10 +7120,14 @@ function _renderSubDayPickerContent() {
     cur.setDate(cur.getDate() + 1);
   }
 
+  const titleText = (ps.mode === 'bulk')
+    ? `Set date on ${window._selectedSubtaskIds ? window._selectedSubtaskIds.size : 0} steps`
+    : 'Pick a day';
+
   return `
     <div class="modal-container" style="max-width:420px;display:flex;flex-direction:column">
       <div class="modal-header">
-        <div class="modal-title">Pick a day</div>
+        <div class="modal-title">${titleText}</div>
         <button class="modal-close" onclick="document.getElementById('day-picker')?.remove();window._dayPickerState=null">&times;</button>
       </div>
       <div class="modal-body" style="display:flex;flex-direction:column;gap:10px;position:relative">
@@ -7341,8 +7341,17 @@ function _calHoverLeave() {
 
 function _dayPickerCommit(dateStr) {
   const ps = window._dayPickerState;
+  if (!ps) return;
+  // Bulk mode: apply to all selected subtasks of the bulk task
+  if (ps.mode === 'bulk') {
+    const tid = ps.bulkTaskId;
+    document.getElementById('day-picker')?.remove();
+    window._dayPickerState = null;
+    if (tid != null) _bulkSetDateOnSelected(tid, dateStr || null);
+    return;
+  }
   const ds = window._subDialogState;
-  if (!ps || !ds) return;
+  if (!ds) return;
   const row = ds.rows[ps.rowIdx];
   if (!row) return;
   row.date = dateStr || '';
