@@ -5451,13 +5451,14 @@ td.today .cal-day-num {
 
 /* ── Month View ── */
 .mcal-month-header {
-  display: grid;
-  grid-template-columns: repeat(7, 1fr);
+  display: grid !important;
+  grid-template-columns: repeat(7, minmax(0, 1fr)) !important;
   gap: 1px;
   background: #161B22;
   border: 1px solid #30363D;
   border-radius: 6px 6px 0 0;
   padding: 8px 0;
+  width: 100%;
 }
 .mcal-month-dow {
   text-align: center;
@@ -6739,6 +6740,10 @@ html.text-large body {
    The bar layer overlays the cell row's top area, sized in % so the bar
    precisely spans the columns of its run. */
 
+.mcal-month {
+  width: 100%;
+  display: block;
+}
 .mcal-month-grid {
   display: flex !important;
   flex-direction: column !important;
