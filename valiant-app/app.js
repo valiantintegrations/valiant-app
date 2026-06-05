@@ -372,6 +372,8 @@ const state = {
   installChangeRequests: JSON.parse(localStorage.getItem('vi_install_change_requests') || '{}'),
   installTasks: JSON.parse(localStorage.getItem('vi_install_tasks') || '[]'),
   installTaskTemplates: JSON.parse(localStorage.getItem('vi_install_task_templates') || '{}'),
+  designTasks: JSON.parse(localStorage.getItem('vi_design_tasks') || '[]'),
+  designTaskTemplates: JSON.parse(localStorage.getItem('vi_design_task_templates') || '{}'),
   textSize: localStorage.getItem('vi_text_size') || 'normal',
   personalEvents: JSON.parse(localStorage.getItem('vi_personal_events') || '[]'),
   userLayouts: JSON.parse(localStorage.getItem('vi_user_layouts') || '{}'),
@@ -1261,6 +1263,61 @@ function _migrateInstallSubtasksToTasks() {
   }
 }
 
+// ── Migrate legacy design sub-tasks → new design tasks (idempotent) ──
+// state.subtasks[pid]['design'] is the legacy bucket. Each becomes a master
+// design task. Removes the design bucket after migration to prevent duplicates.
+function _migrateDesignSubtasksToTasks() {
+  const src = state.subtasks || {};
+  let migratedAny = false;
+  Object.keys(src).forEach(pidStr => {
+    const pid = parseInt(pidStr, 10);
+    if (isNaN(pid)) return;
+    const bucket = src[pidStr] || {};
+    const oldList = bucket.design || [];
+    if (oldList.length === 0) return;
+    oldList.forEach(old => {
+      if (old._migrated) return;
+      const assignees = (old.assignee_id != null) ? [old.assignee_id] : [];
+      const isMilestone = !!old.due_date && assignees.length === 0;
+      if (isMilestone) {
+        addDesignTask({
+          projectId: pid,
+          system: null,
+          title: old.text || 'Task',
+          assigneeIds: [],
+          isMilestone: true,
+          dueDate: old.due_date
+        });
+      } else {
+        const master = addDesignTask({
+          projectId: pid,
+          system: null,
+          title: old.text || 'Task',
+          assigneeIds: assignees,
+          isMilestone: false
+        });
+        if (old.status === 'done') {
+          master.done = true;
+        }
+        if (old.due_date) {
+          addDesignSubtask(master.id, {
+            title: old.text || 'Task',
+            date: old.due_date,
+            assigneeIds: assignees,
+            notes: ''
+          });
+        }
+      }
+      migratedAny = true;
+    });
+    delete bucket.design;
+  });
+  if (migratedAny) {
+    save('vi_subtasks', state.subtasks);
+    save('vi_design_tasks', state.designTasks);
+  }
+}
+
 
 function _migrateInstallTaskShape() {
   const all = state.installTasks || [];
@@ -1432,6 +1489,136 @@ function toggleInstallSubtaskDone(taskId, subtaskId) {
   save('vi_install_tasks', state.installTasks);
 }
 
+// ────────────────────────────────────────────────────────────────────────────
+// DESIGN TASKS — parallel system to install tasks. Same shape, separate store.
+// Storage: state.designTasks (array of task objects). Each task has:
+//   id, projectId, system, title, assigneeIds[], isMilestone, dueDate,
+//   done, subtasks[], templateKey, createdAt
+// Same shape as install tasks but stored separately so we can filter, render,
+// and migrate independently. Renderer is shared via a `phase` parameter.
+// ────────────────────────────────────────────────────────────────────────────
+
+function getDesignTaskById(taskId) {
+  return (state.designTasks || []).find(t => t.id === taskId) || null;
+}
+
+function addDesignTask({ projectId, system, title, assigneeIds, isMilestone, dueDate, templateKey }) {
+  if (!state.designTasks) state.designTasks = [];
+  const ids = Array.isArray(assigneeIds) ? assigneeIds.filter(x => x != null) : [];
+  const task = {
+    id: _nextTaskId(),
+    projectId: projectId != null ? projectId : null,
+    system: system || null,
+    title: title || 'Task',
+    assigneeIds: isMilestone ? [] : ids,
+    isMilestone: !!isMilestone,
+    dueDate: isMilestone ? (dueDate || null) : null,
+    done: false,
+    subtasks: [],
+    templateKey: templateKey || null,
+    createdAt: new Date().toISOString()
+  };
+  state.designTasks.push(task);
+  save('vi_design_tasks', state.designTasks);
+  return task;
+}
+
+function updateDesignTask(taskId, patch) {
+  const t = getDesignTaskById(taskId);
+  if (!t) return;
+  Object.assign(t, patch);
+  if (t.isMilestone) t.assigneeIds = [];
+  save('vi_design_tasks', state.designTasks);
+}
+
+function deleteDesignTask(taskId) {
+  state.designTasks = (state.designTasks || []).filter(t => t.id !== taskId);
+  save('vi_design_tasks', state.designTasks);
+}
+
+function toggleDesignTaskDone(taskId) {
+  const t = getDesignTaskById(taskId);
+  if (!t) return;
+  t.done = !t.done;
+  save('vi_design_tasks', state.designTasks);
+}
+
+function addDesignSubtask(taskId, { title, date, assigneeIds, notes }) {
+  const t = getDesignTaskById(taskId);
+  if (!t) return;
+  if (!t.subtasks) t.subtasks = [];
+  const ids = Array.isArray(assigneeIds) ? assigneeIds.filter(x => x != null) : [];
+  t.subtasks.push({
+    id: _nextTaskId(),
+    title: title || 'Subtask',
+    date: date || null,
+    assigneeIds: ids,
+    notes: notes || '',
+    done: false
+  });
+  save('vi_design_tasks', state.designTasks);
+}
+
+function updateDesignSubtask(taskId, subtaskId, patch) {
+  const t = getDesignTaskById(taskId);
+  if (!t) return;
+  const s = (t.subtasks || []).find(x => x.id === subtaskId);
+  if (!s) return;
+  Object.assign(s, patch);
+  if (!Array.isArray(s.assigneeIds)) s.assigneeIds = [];
+  save('vi_design_tasks', state.designTasks);
+}
+
+function deleteDesignSubtask(taskId, subtaskId) {
+  const t = getDesignTaskById(taskId);
+  if (!t) return;
+  t.subtasks = (t.subtasks || []).filter(x => x.id !== subtaskId);
+  save('vi_design_tasks', state.designTasks);
+}
+
+function toggleDesignSubtaskDone(taskId, subtaskId) {
+  const t = getDesignTaskById(taskId);
+  if (!t) return;
+  const s = (t.subtasks || []).find(x => x.id === subtaskId);
+  if (!s) return;
+  s.done = !s.done;
+  save('vi_design_tasks', state.designTasks);
+}
+
+// ── Phase router — given a task id, return which phase it belongs to ──
+// Used by the shared task UI / edit-mode functions so they can route writes
+// to the correct store (install vs design). Returns 'install' | 'design' | null.
+function _getTaskPhase(taskId) {
+  if ((state.installTasks || []).some(t => t.id === taskId)) return 'install';
+  if ((state.designTasks || []).some(t => t.id === taskId)) return 'design';
+  return null;
+}
+function _getTaskByIdAnyPhase(taskId) {
+  return getInstallTaskById(taskId) || getDesignTaskById(taskId);
+}
+// Phase-aware CRUD wrappers — UI code calls these without knowing the phase
+function toggleTaskDone(taskId) {
+  return _getTaskPhase(taskId) === 'design' ? toggleDesignTaskDone(taskId) : toggleInstallTaskDone(taskId);
+}
+function deleteTask(taskId) {
+  return _getTaskPhase(taskId) === 'design' ? deleteDesignTask(taskId) : deleteInstallTask(taskId);
+}
+function toggleSubtaskDone(taskId, subtaskId) {
+  return _getTaskPhase(taskId) === 'design' ? toggleDesignSubtaskDone(taskId, subtaskId) : toggleInstallSubtaskDone(taskId, subtaskId);
+}
+function deleteSubtask(taskId, subtaskId) {
+  return _getTaskPhase(taskId) === 'design' ? deleteDesignSubtask(taskId, subtaskId) : deleteInstallSubtask(taskId, subtaskId);
+}
+function addSubtaskAnyPhase(taskId, payload) {
+  return _getTaskPhase(taskId) === 'design' ? addDesignSubtask(taskId, payload) : addInstallSubtask(taskId, payload);
+}
+function updateSubtaskAnyPhase(taskId, subtaskId, patch) {
+  return _getTaskPhase(taskId) === 'design' ? updateDesignSubtask(taskId, subtaskId, patch) : updateInstallSubtask(taskId, subtaskId, patch);
+}
+function updateTaskAnyPhase(taskId, patch) {
+  return _getTaskPhase(taskId) === 'design' ? updateDesignTask(taskId, patch) : updateInstallTask(taskId, patch);
+}
+
 // ── Install task EDIT MODE ──
 // Per-task edit mode state. window._editingTaskId holds the task that's
 // currently in edit mode (only one at a time across all cards). The companion
@@ -1461,7 +1648,7 @@ function _toggleSubtaskSelected(taskId, subtaskId) {
 }
 
 function _selectAllSubtasks(taskId) {
-  const t = getInstallTaskById(taskId);
+  const t = _getTaskByIdAnyPhase(taskId);
   if (!t) return;
   const all = (t.subtasks || []).map(s => s.id);
   if (window._selectedSubtaskIds.size === all.length && all.every(id => window._selectedSubtaskIds.has(id))) {
@@ -1473,33 +1660,36 @@ function _selectAllSubtasks(taskId) {
 }
 
 function _bulkSetDateOnSelected(taskId, dateStr) {
-  const t = getInstallTaskById(taskId);
+  const t = _getTaskByIdAnyPhase(taskId);
   if (!t) return;
   const targets = (t.subtasks || []).filter(s => window._selectedSubtaskIds.has(s.id));
   targets.forEach(s => { s.date = dateStr || null; });
-  save('vi_install_tasks', state.installTasks);
+  const phase = _getTaskPhase(taskId);
+  save(phase === 'design' ? 'vi_design_tasks' : 'vi_install_tasks', phase === 'design' ? state.designTasks : state.installTasks);
   renderCurrentPage();
 }
 
 function _bulkSetAssigneesOnSelected(taskId, ids) {
-  const t = getInstallTaskById(taskId);
+  const t = _getTaskByIdAnyPhase(taskId);
   if (!t) return;
   const cleanIds = (ids || []).filter(id => id != null);
   const targets = (t.subtasks || []).filter(s => window._selectedSubtaskIds.has(s.id));
   targets.forEach(s => { s.assigneeIds = [...cleanIds]; });
   if (t.projectId != null && cleanIds.length > 0) ensureOnProjectCrew(t.projectId, cleanIds);
-  save('vi_install_tasks', state.installTasks);
+  const phase = _getTaskPhase(taskId);
+  save(phase === 'design' ? 'vi_design_tasks' : 'vi_install_tasks', phase === 'design' ? state.designTasks : state.installTasks);
   renderCurrentPage();
 }
 
 function _reorderSubtask(taskId, fromIdx, toIdx) {
-  const t = getInstallTaskById(taskId);
+  const t = _getTaskByIdAnyPhase(taskId);
   if (!t || !t.subtasks) return;
   if (fromIdx === toIdx || fromIdx < 0 || toIdx < 0) return;
   if (fromIdx >= t.subtasks.length || toIdx >= t.subtasks.length) return;
   const [moved] = t.subtasks.splice(fromIdx, 1);
   t.subtasks.splice(toIdx, 0, moved);
-  save('vi_install_tasks', state.installTasks);
+  const phase = _getTaskPhase(taskId);
+  save(phase === 'design' ? 'vi_design_tasks' : 'vi_install_tasks', phase === 'design' ? state.designTasks : state.installTasks);
   renderCurrentPage();
 }
 
@@ -1517,7 +1707,7 @@ function _subtaskDrop(ev, taskId, subtaskId) {
   const src = window._subtaskDragSrc;
   window._subtaskDragSrc = null;
   if (!src || src.taskId !== taskId || src.subtaskId === subtaskId) return;
-  const t = getInstallTaskById(taskId);
+  const t = _getTaskByIdAnyPhase(taskId);
   if (!t) return;
   const fromIdx = t.subtasks.findIndex(s => s.id === src.subtaskId);
   const toIdx = t.subtasks.findIndex(s => s.id === subtaskId);
@@ -1700,6 +1890,80 @@ function deleteInstallTaskTemplate(systemKey) {
   if (!state.installTaskTemplates) return;
   delete state.installTaskTemplates[systemKey];
   save('vi_install_task_templates', state.installTaskTemplates);
+}
+
+// ── Design task templates — mirrors install template system, separate store ──
+function _migrateDesignTaskTemplates() {
+  if (state.designTaskTemplates && Object.keys(state.designTaskTemplates).length) return;
+  const seeded = {};
+  const src = (typeof TEMPLATES !== 'undefined' && TEMPLATES && TEMPLATES.design) ? TEMPLATES.design : {};
+  Object.keys(src).forEach(sysKey => {
+    const t = src[sysKey];
+    seeded[sysKey] = {
+      systemKey: sysKey,
+      label: t.name || sysKey,
+      subtasks: (t.items || []).map(item => ({ title: item, notes: '' }))
+    };
+  });
+  state.designTaskTemplates = seeded;
+  save('vi_design_task_templates', seeded);
+}
+
+function getDesignTaskTemplate(systemKey) {
+  return (state.designTaskTemplates || {})[systemKey] || null;
+}
+
+function getAllDesignTaskTemplates() {
+  return Object.values(state.designTaskTemplates || {}).sort((a, b) => a.label.localeCompare(b.label));
+}
+
+function upsertDesignTaskTemplate(systemKey, { label, subtasks }) {
+  if (!state.designTaskTemplates) state.designTaskTemplates = {};
+  state.designTaskTemplates[systemKey] = {
+    systemKey,
+    label: label || systemKey,
+    subtasks: (subtasks || []).map(s => ({ title: s.title || '', notes: s.notes || '' }))
+  };
+  save('vi_design_task_templates', state.designTaskTemplates);
+}
+
+function deleteDesignTaskTemplate(systemKey) {
+  if (!state.designTaskTemplates) return;
+  delete state.designTaskTemplates[systemKey];
+  save('vi_design_task_templates', state.designTaskTemplates);
+}
+
+// Seed design tasks from a project's scope. Mirrors _seedTasksFromScope but for
+// design phase. If reseed=true, deletes existing template-seeded design tasks
+// first (preserves manual tasks).
+function _seedDesignTasksFromScope(projectId, reseed) {
+  const p = state.projects.find(pp => pp.id === projectId);
+  if (!p) return;
+  if (reseed) {
+    state.designTasks = (state.designTasks || []).filter(t => !(t.projectId === projectId && t.templateKey));
+  }
+  const existing = new Set((state.designTasks || [])
+    .filter(t => t.projectId === projectId && t.templateKey)
+    .map(t => t.templateKey));
+  const systemKeys = getProjectSystemKeys(p);
+  let added = 0;
+  systemKeys.forEach(sysKey => {
+    if (existing.has(sysKey)) return;
+    const tpl = getDesignTaskTemplate(sysKey);
+    if (!tpl) return;
+    const newTask = addDesignTask({
+      projectId,
+      system: sysKey,
+      title: tpl.label,
+      templateKey: sysKey
+    });
+    (tpl.subtasks || []).forEach(s => addDesignSubtask(newTask.id, { title: s.title, notes: s.notes }));
+    added++;
+  });
+  if (added > 0) showToast(`Seeded ${added} design task${added > 1 ? 's' : ''}`, 'success');
+  else if (reseed) showToast('Design tasks re-seeded', 'success');
+  else showToast('No new design tasks to seed', 'info');
+  renderCurrentPage();
 }
 
 // Which systemKeys does this project's scope cover? Reads from project.systems
@@ -6562,9 +6826,203 @@ function _seedTasksFromScope(projectId, overwrite) {
   renderCurrentPage();
 }
 
+// ── Design Tasks renderer — mirrors renderProjectTasksSection for design phase ──
+// Same UI/edit-mode/bulk-ops as install tasks, sourced from state.designTasks +
+// state.designTaskTemplates. All shared helpers (_toggleTaskEditMode, etc.) are
+// phase-aware so they route to the correct store automatically.
+function getDesignTasksForProject(projectId) {
+  return (state.designTasks || []).filter(t => t.projectId === projectId);
+}
+function getSeededDesignSystemKeysForProject(projectId) {
+  return (state.designTasks || [])
+    .filter(t => t.projectId === projectId && t.templateKey)
+    .map(t => t.templateKey);
+}
+
+function renderProjectDesignTasksSection(p) {
+  const tasks = getDesignTasksForProject(p.id).slice().sort((a, b) => {
+    if (a.isMilestone !== b.isMilestone) return a.isMilestone ? -1 : 1;
+    return (a.title || '').localeCompare(b.title || '');
+  });
+
+  const seededKeys = getSeededDesignSystemKeysForProject(p.id);
+  const projectSystems = getProjectSystemKeys(p);
+  const seedable = projectSystems.filter(sk => !seededKeys.includes(sk) && getDesignTaskTemplate(sk));
+  const hasAnyTemplate = projectSystems.some(sk => getDesignTaskTemplate(sk));
+
+  function assigneeChips(ids) {
+    if (!ids || ids.length === 0) return '<span class="itask-unassigned">Unassigned</span>';
+    return ids.map(id => {
+      const m = getTeamMember(id);
+      if (!m) return '';
+      const memberColor = (DASHBOARD_ACCESS.find(d => d.key === m.primaryRole) || {}).color || '#6E7681';
+      const initials = m.initials || (m.name || '').slice(0, 2).toUpperCase();
+      const first = (m.name || '').split(' ')[0];
+      return `<span class="itask-assignee-chipv2" title="${esc(m.name)}">
+        <span class="itask-assignee-badge" style="background:${memberColor}22;border-color:${memberColor};color:${memberColor}">${esc(initials)}</span>
+        <span class="itask-assignee-name">${esc(first)}</span>
+      </span>`;
+    }).join('');
+  }
+
+  function subtaskRow(t, s, rowIdx) {
+    const isEditing = window._editingTaskId === t.id;
+    const isSelected = isEditing && window._selectedSubtaskIds.has(s.id);
+    const photoGated = s.photoRequired && !s.photo;
+    const checkClickHandler = photoGated
+      ? `event.stopPropagation();showToast('Upload a completion photo first','info')`
+      : `event.stopPropagation();toggleSubtaskDone(${t.id},${s.id});renderCurrentPage()`;
+    const checkClasses = `itask-check${photoGated ? ' is-gated' : ''}`;
+    const photoBadge = s.photoRequired
+      ? (s.photo
+          ? `<span class="itask-photo-badge has-photo" title="Photo attached">📷</span>`
+          : `<button class="itask-photo-btn" onclick="event.stopPropagation();_uploadSubtaskPhoto(${t.id},${s.id})" title="Upload completion photo">📷 Upload photo</button>`)
+      : '';
+
+    if (!isEditing) {
+      return `
+        <div class="itask-sub${s.done ? ' is-done' : ''}${s.photoRequired ? ' has-photo-req' : ''}">
+          <span class="${checkClasses}" onclick="${checkClickHandler}">${s.done ? '✓' : ''}</span>
+          <div class="itask-sub-body" onclick="openSubtaskDialog(${t.id},${s.id})">
+            <div class="itask-sub-title">${esc(s.title)}</div>
+            <div class="itask-sub-meta">
+              ${s.date ? esc(fmtDateLocal(s.date)) : '<span class="itask-nodate">No date</span>'}
+              <span class="itask-sub-assignees">${assigneeChips(s.assigneeIds)}</span>
+              ${photoBadge}
+            </div>
+            ${s.notes ? `<div class="itask-sub-notes">${esc(s.notes)}</div>` : ''}
+          </div>
+          <span class="itask-del" onclick="event.stopPropagation();if(confirm('Delete this step?')){deleteSubtask(${t.id},${s.id});renderCurrentPage();}">×</span>
+        </div>
+      `;
+    }
+
+    const dateBtn = `<button class="itask-edit-daybtn" onclick="event.stopPropagation();openSubtaskDialog(${t.id},${s.id})">${s.date ? esc(fmtDateLocal(s.date)) : '+ Day'}</button>`;
+    const peopleBtn = `<button class="itask-edit-peoplebtn" onclick="event.stopPropagation();openSubtaskDialog(${t.id},${s.id})">${(s.assigneeIds && s.assigneeIds.length > 0) ? assigneeChips(s.assigneeIds) : '+ Assign'}</button>`;
+
+    return `
+      <div class="itask-sub itask-sub-editing${isSelected ? ' is-selected' : ''}${s.done ? ' is-done' : ''}"
+           draggable="true"
+           ondragstart="_subtaskDragStart(event,${t.id},${s.id})"
+           ondragover="_subtaskDragOver(event)"
+           ondrop="_subtaskDrop(event,${t.id},${s.id})">
+        <span class="itask-drag-handle" title="Drag to reorder">⋮⋮</span>
+        <span class="itask-select-box${isSelected ? ' is-selected' : ''}" onclick="event.stopPropagation();_toggleSubtaskSelected(${t.id},${s.id})">${isSelected ? '✓' : ''}</span>
+        <div class="itask-sub-body">
+          <div class="itask-sub-title">${esc(s.title)}</div>
+          <div class="itask-edit-row">
+            ${dateBtn}
+            ${peopleBtn}
+          </div>
+        </div>
+        <span class="itask-del" onclick="event.stopPropagation();if(confirm('Delete this step?')){deleteSubtask(${t.id},${s.id});renderCurrentPage();}">×</span>
+      </div>
+    `;
+  }
+
+  function taskCard(t) {
+    const sys = t.system ? `<span class="itask-sys">${esc(t.system)}</span>` : '';
+    const subDone = (t.subtasks || []).filter(s => s.done).length;
+    const subTotal = (t.subtasks || []).length;
+    const isEditing = window._editingTaskId === t.id;
+    // For design phase, re-seed is admin-gated. Reuse design.manage permission;
+    // fall back to admin.system or master_admin role check.
+    const isDesignAdmin = currentUserHasPermission('design.manage_crew') || currentUserHasPermission('admin.system');
+    let dateLabel;
+    if (t.isMilestone) {
+      dateLabel = t.dueDate ? 'Due ' + fmtDateLocal(t.dueDate) : 'No due date';
+    } else {
+      const range = getTaskDateRange(t);
+      dateLabel = range
+        ? (range.start === range.end ? fmtDateLocal(range.start) : `${fmtDateLocal(range.start)} – ${fmtDateLocal(range.end)}`)
+        : 'No dates set';
+    }
+
+    const orderedSubs = isEditing
+      ? (t.subtasks || [])
+      : (t.subtasks || []).slice().sort((a,b) => (a.date || '9999').localeCompare(b.date || '9999'));
+
+    const editBtnLabel = isEditing ? 'Done' : 'Edit';
+    const editBtnStyle = isEditing
+      ? 'background:#0D1F0D;border-color:#3FB950;color:#3FB950'
+      : 'background:#161B22;border-color:#30363D;color:#C9D1D9';
+    const editBtn = `<button class="itask-editbtn" style="${editBtnStyle}" onclick="event.stopPropagation();_toggleTaskEditMode(${t.id})">${editBtnLabel}</button>`;
+    const showReseed = isEditing && isDesignAdmin && t.templateKey && hasAnyTemplate;
+    const reseedBtn = showReseed
+      ? `<button class="itask-reseedbtn" onclick="event.stopPropagation();if(confirm('Re-seed will delete all template-seeded design tasks on this project (manual tasks preserved) and reseed from current templates. Continue?'))_seedDesignTasksFromScope(${p.id},true)">Re-seed</button>`
+      : '';
+
+    const selectedCount = isEditing ? window._selectedSubtaskIds.size : 0;
+    const bulkPanel = (isEditing && selectedCount > 0)
+      ? `<div class="itask-bulk-panel">
+           <div class="itask-bulk-info">${selectedCount} selected</div>
+           <button class="itask-bulk-btn" onclick="event.stopPropagation();_openBulkDayPicker(${t.id})">Set date</button>
+           <button class="itask-bulk-btn" onclick="event.stopPropagation();_openBulkPeoplePicker(${t.id})">Assign people</button>
+           <button class="itask-bulk-btn itask-bulk-clear" onclick="event.stopPropagation();window._selectedSubtaskIds = new Set();renderCurrentPage()">Clear</button>
+         </div>`
+      : '';
+
+    const selectAllUI = (isEditing && subTotal > 0)
+      ? `<span class="itask-selectall" onclick="event.stopPropagation();_selectAllSubtasks(${t.id})" title="Select all steps">
+           ${(window._selectedSubtaskIds.size === subTotal && subTotal > 0) ? '☑' : '☐'} All
+         </span>`
+      : '';
+
+    return `
+      <div class="itask-card${t.done ? ' is-done' : ''}${t.isMilestone ? ' is-milestone' : ''}${isEditing ? ' is-editing' : ''}">
+        <div class="itask-head">
+          <span class="itask-check itask-check-main" onclick="event.stopPropagation();toggleTaskDone(${t.id});renderCurrentPage()">${t.done ? '✓' : ''}</span>
+          <div class="itask-head-body" ${isEditing ? '' : `onclick="openTaskDialog(${p.id},${t.id},'design')"`}>
+            <div class="itask-title">${t.isMilestone ? '🚩 ' : ''}${esc(t.title)} ${sys}${t.templateKey ? '<span class="itask-tplbadge">from template</span>' : ''}</div>
+            <div class="itask-meta">
+              ${esc(dateLabel)}
+              ${t.isMilestone ? '' : ` · ${subDone}/${subTotal} steps`}
+              ${selectAllUI}
+            </div>
+          </div>
+          <div class="itask-head-actions">
+            ${reseedBtn}${editBtn}
+            <span class="itask-del" onclick="event.stopPropagation();if(confirm('Delete this task and all its steps?')){deleteTask(${t.id});renderCurrentPage();}">×</span>
+          </div>
+        </div>
+        ${bulkPanel}
+        ${subTotal > 0 ? `<div class="itask-subs">${orderedSubs.map((s,i) => subtaskRow(t, s, i)).join('')}</div>` : ''}
+        ${!t.isMilestone ? `<button class="itask-add-sub" onclick="openSubtaskDialog(${t.id},null)">+ Add day / step</button>` : ''}
+      </div>
+    `;
+  }
+
+  const seedBtn = seedable.length > 0
+    ? `<button class="btn btn-sm" style="font-size:11px;padding:6px 12px;background:#0D1F3D;border-color:#1565C0;color:#58A6FF" onclick="_seedDesignTasksFromScope(${p.id},false)">Seed ${seedable.length} from scope</button>`
+    : '';
+
+  return `
+    <div class="dashboard-card" style="margin-bottom:14px">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;gap:8px;flex-wrap:wrap">
+        <div style="font-size:11px;font-weight:600;color:#6E7681;text-transform:uppercase;letter-spacing:0.08em">Design Tasks</div>
+        <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap">
+          ${seedBtn}
+          <button class="btn btn-sm" style="font-size:11px;padding:6px 12px" onclick="openTaskDialog(${p.id},null,'design')">+ Add Task</button>
+        </div>
+      </div>
+      ${tasks.length === 0
+        ? `<div style="font-size:12px;color:#6E7681;font-style:italic;padding:4px 0">
+            No design tasks yet. ${seedable.length > 0
+              ? `Click <strong>Seed from scope</strong> to create standard design tasks for ${seedable.map(k => getDesignTaskTemplate(k).label).join(', ')}, or add a custom task.`
+              : 'Add a custom task, or set this project\'s scope tags to seed standard tasks from templates.'}
+          </div>`
+        : tasks.map(taskCard).join('')}
+    </div>
+  `;
+}
+
 // Task create/edit dialog — handles work tasks (multi-assignee) and milestones
-function openTaskDialog(projectId, taskId) {
-  const existing = taskId != null ? getInstallTaskById(taskId) : null;
+// phase: 'install' | 'design' — controls which store to write into. When editing
+// an existing task, phase is auto-detected from where the task lives.
+function openTaskDialog(projectId, taskId, phase) {
+  const existing = taskId != null ? _getTaskByIdAnyPhase(taskId) : null;
+  const effectivePhase = phase || (existing ? _getTaskPhase(taskId) : 'install') || 'install';
+  window._taskDialogPhase = effectivePhase;
   const p = state.projects.find(x => x.id === projectId);
   const projTags = (p && Array.isArray(p.scope_tags) && p.scope_tags.length) ? p.scope_tags : SCOPE_TAGS;
   const crew = getProjectAssignment(projectId);
@@ -6654,10 +7112,15 @@ function _saveTaskDialog(projectId, taskId) {
   if (isMilestone && !dueDate) { showToast('Milestone needs a due date', 'info'); return; }
 
   if (taskId != null) {
-    updateInstallTask(taskId, { title, system, isMilestone, assigneeIds, dueDate });
+    updateTaskAnyPhase(taskId, { title, system, isMilestone, assigneeIds, dueDate });
     showToast('Task updated', 'success');
   } else {
-    addInstallTask({ projectId, system, title, assigneeIds, isMilestone, dueDate });
+    const phase = window._taskDialogPhase || 'install';
+    if (phase === 'design') {
+      addDesignTask({ projectId, system, title, assigneeIds, isMilestone, dueDate });
+    } else {
+      addInstallTask({ projectId, system, title, assigneeIds, isMilestone, dueDate });
+    }
     showToast('Task added', 'success');
   }
   document.getElementById('task-dialog')?.remove();
@@ -6673,7 +7136,7 @@ function _saveTaskDialog(projectId, taskId) {
 // already on this project's crew. Picking someone not on the crew auto-adds
 // them on save — a note in the dialog tells the user so they're not surprised.
 function openSubtaskDialog(taskId, subtaskId) {
-  const t = getInstallTaskById(taskId);
+  const t = _getTaskByIdAnyPhase(taskId);
   if (!t) return;
   const existing = subtaskId != null ? (t.subtasks || []).find(s => s.id === subtaskId) : null;
   const projId = t.projectId;
@@ -6950,10 +7413,10 @@ function _saveSubtaskDialog() {
 
   if (s.mode === 'edit' && s.subtaskId != null) {
     const r = valid[0];
-    updateInstallSubtask(s.taskId, s.subtaskId, r);
+    updateSubtaskAnyPhase(s.taskId, s.subtaskId, r);
     showToast('Step updated', 'success');
   } else {
-    valid.forEach(r => addInstallSubtask(s.taskId, r));
+    valid.forEach(r => addSubtaskAnyPhase(s.taskId, r));
     showToast(`Added ${valid.length} step${valid.length === 1 ? '' : 's'}`, 'success');
   }
 
@@ -7563,59 +8026,23 @@ function renderProjectProgressHTML(p) {
 }
 
 function renderChecklistTab(container, project, phase) {
-  // Sub-tasks section — kept ONLY on Design. Install tab now uses the unified
-  // Install Tasks system below; the old install sub-tasks were migrated into
-  // it on first load (see _migrateInstallSubtasksToTasks).
-  const subtasksHTML = (phase === 'design') ? renderSubtasksSection(project, phase) : '';
   // Scheduling notes — only on Install tab. Provides quick visibility into
   // logistical detail like "out of building by 4pm Wed" set during install window pick.
   const schedNotesHTML = (phase === 'install') ? renderSchedulingNotesCard(project) : '';
 
-  // Install tab — unified Install Tasks system (replaces the old per-system checklist)
+  // Install tab — unified Install Tasks system
   if (phase === 'install') {
     container.innerHTML = schedNotesHTML + renderProjectTasksSection(project);
     return;
   }
 
-  const systems = project.systems.filter(s => TEMPLATES[phase]?.[s]);
-  if (systems.length === 0) {
-    container.innerHTML = schedNotesHTML + subtasksHTML + `<div class="empty-state"><span class="empty-icon">📐</span>No design checklists — scope tags haven't been detected for this project.<br><br><span style="font-size:11px;color:#6E7681">Checklists auto-generate from scope tags: LED Wall, PA/Audio, Lighting, Control, Streaming, Camera</span></div>`;
+  // Design tab — unified Design Tasks system (replaces old per-system checklist + sub-tasks)
+  if (phase === 'design') {
+    container.innerHTML = renderProjectDesignTasksSection(project);
     return;
   }
-  container.innerHTML = schedNotesHTML + subtasksHTML + systems.map(sys => {
-    const template = TEMPLATES[phase][sys];
-    const items = getTemplateItems(phase, sys);
-    const checkKey = `${project.id}_${phase}_${sys}`;
-    const checks = state.checklists[checkKey] || {};
-    const total = items.length;
-    const done = Object.values(checks).filter(Boolean).length;
-    const pct = total > 0 ? Math.round((done / total) * 100) : 0;
-    const origCount = template.items.length;
-    return `
-      <div class="dashboard-card" style="margin-bottom:14px">
-        <div class="dashboard-card-title">
-          <span>${template.name}</span>
-          <span style="font-size:12px;color:${pct === 100 ? '#3FB950' : '#8B949E'}">${done}/${total} (${pct}%)</span>
-        </div>
-        <div class="timeline-bar">
-          ${items.map((_, i) => `<div class="timeline-segment ${checks[i] ? 'done' : ''}"></div>`).join('')}
-        </div>
-        ${items.map((item, i) => {
-          const isCustom = i >= origCount;
-          return `
-          <div class="checklist-item ${checks[i] ? 'checked' : ''}" onclick="toggleCheck(${project.id}, '${phase}', '${sys}', ${i})">
-            <div class="checklist-box">
-              <svg class="checklist-check" width="10" height="10" viewBox="0 0 10 10" fill="none">
-                <path d="M2 5l2.5 2.5L8 3" stroke="#fff" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
-              </svg>
-            </div>
-            <span class="checklist-label">${esc(item)}${isCustom ? ' <span style="font-size:9px;color:#58A6FF;padding:1px 5px;border-radius:3px;background:#0D1626;border:1px solid #1565C0;margin-left:4px;vertical-align:middle">ADDED</span>' : ''}</span>
-          </div>
-        `;
-        }).join('')}
-      </div>
-    `;
-  }).join('');
+
+  container.innerHTML = '';
 }
 
 // Returns the effective items for a template: base items plus any accepted customizations
@@ -8848,14 +9275,58 @@ function setMilestone(projectId, phaseKey, milestoneKey, value) {
 function milestoneProgress(p, phase, milestone) {
   const done = getMilestone(p.id, phase.key, milestone.key);
   if (done) return 1;
-  // Priority 1: Sub-tasks for the phase — if any exist, they drive progress for linkedChecklist milestones
+
+  // Priority 1: New unified task systems
+  if (milestone.linkedChecklist === 'design') {
+    const designTasks = (state.designTasks || []).filter(t => t.projectId === p.id);
+    if (designTasks.length > 0) {
+      // Count subtasks across all design tasks. If a task has no subtasks but is
+      // itself marked done (e.g. a milestone task), count it as one done unit.
+      let total = 0, doneCount = 0;
+      designTasks.forEach(t => {
+        if (t.isMilestone) {
+          total += 1;
+          if (t.done) doneCount += 1;
+        } else if ((t.subtasks || []).length > 0) {
+          total += t.subtasks.length;
+          doneCount += t.subtasks.filter(s => s.done).length;
+        } else {
+          // Task with no subtasks — count the task itself
+          total += 1;
+          if (t.done) doneCount += 1;
+        }
+      });
+      return total > 0 ? doneCount / total : 0;
+    }
+  }
+  if (milestone.linkedChecklist === 'install') {
+    const installTasks = (state.installTasks || []).filter(t => t.projectId === p.id);
+    if (installTasks.length > 0) {
+      let total = 0, doneCount = 0;
+      installTasks.forEach(t => {
+        if (t.isMilestone) {
+          total += 1;
+          if (t.done) doneCount += 1;
+        } else if ((t.subtasks || []).length > 0) {
+          total += t.subtasks.length;
+          doneCount += t.subtasks.filter(s => s.done).length;
+        } else {
+          total += 1;
+          if (t.done) doneCount += 1;
+        }
+      });
+      return total > 0 ? doneCount / total : 0;
+    }
+  }
+
+  // Priority 2: Legacy sub-tasks (kept for backwards compat — most will be empty after migration)
   if (milestone.linkedChecklist) {
     const subtasks = getSubtasks(p.id, milestone.linkedChecklist);
     if (subtasks.length > 0) {
       const doneCount = subtasks.filter(t => t.status === 'done').length;
       return doneCount / subtasks.length;
     }
-    // Priority 2: Fall back to linked scope checklists
+    // Priority 3: Legacy scope checklists
     const relevantSystems = p.systems.filter(s => TEMPLATES[milestone.linkedChecklist]?.[s]);
     if (relevantSystems.length === 0) return 0;
     let totalItems = 0;
@@ -16479,6 +16950,8 @@ async function init() {
   _migrateInstallTaskShape();
   _migrateInstallTaskTemplates();
   _migrateInstallSubtasksToTasks();
+  _migrateDesignTaskTemplates();
+  _migrateDesignSubtasksToTasks();
   try {
     renderCurrentPage();
   } catch (e) {
