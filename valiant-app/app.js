@@ -9157,6 +9157,9 @@ function renderCalendar(c) {
   // Add install_task masters whose dates aren't fully covered by an install
   // window. Mirrors the Operations Master Calendar surfacing so the same task
   // bar appears in both places.
+  const taskIdsWithBar = new Set();
+  const projectIdsWithInstallBar = new Set();
+  installBars.forEach(b => { if (b.type === 'install') projectIdsWithInstallBar.add(b.projectId); });
   (state.installTasks || []).forEach(t => {
     if (t.projectId == null) return;
     const proj = state.projects.find(p => p.id === t.projectId);
@@ -9194,6 +9197,7 @@ function renderCalendar(c) {
       isMilestone: !!t.isMilestone,
       titleOverride: `${proj.client_name || proj.name} · ${t.title}`
     });
+    taskIdsWithBar.add(t.id);
   });
 
   // Does the install bar render on a given date? (handles weekend skip)
@@ -9279,6 +9283,13 @@ function renderCalendar(c) {
       if (inMonth) {
         (state.installTasks || []).forEach(t => {
           if (t.projectId == null) return;
+          // Skip — its parent task bar already covers this day, or its
+          // project's install window does
+          if (taskIdsWithBar.has(t.id)) return;
+          if (projectIdsWithInstallBar.has(t.projectId)) {
+            const win = getInstallWindow(state.projects.find(p => p.id === t.projectId));
+            if (win && win.start <= dk && win.end >= dk) return;
+          }
           (t.subtasks || []).forEach(s => { if (s.date === dk) taskItems.push({ task: t, subtask: s }); });
           if (t.isMilestone && t.dueDate === dk) taskItems.push({ task: t, subtask: null });
         });
