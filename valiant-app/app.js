@@ -1432,6 +1432,200 @@ function toggleInstallSubtaskDone(taskId, subtaskId) {
   save('vi_install_tasks', state.installTasks);
 }
 
+// ── Install task EDIT MODE ──
+// Per-task edit mode state. window._editingTaskId holds the task that's
+// currently in edit mode (only one at a time across all cards). The companion
+// Set tracks which subtask rows are selected for bulk-apply.
+window._editingTaskId = null;
+window._selectedSubtaskIds = new Set();
+
+function _toggleTaskEditMode(taskId) {
+  if (window._editingTaskId === taskId) {
+    window._editingTaskId = null;
+    window._selectedSubtaskIds = new Set();
+  } else {
+    window._editingTaskId = taskId;
+    window._selectedSubtaskIds = new Set();
+  }
+  renderCurrentPage();
+}
+
+function _toggleSubtaskSelected(taskId, subtaskId) {
+  if (window._editingTaskId !== taskId) return;
+  if (window._selectedSubtaskIds.has(subtaskId)) {
+    window._selectedSubtaskIds.delete(subtaskId);
+  } else {
+    window._selectedSubtaskIds.add(subtaskId);
+  }
+  renderCurrentPage();
+}
+
+function _selectAllSubtasks(taskId) {
+  const t = getInstallTaskById(taskId);
+  if (!t) return;
+  const all = (t.subtasks || []).map(s => s.id);
+  if (window._selectedSubtaskIds.size === all.length && all.every(id => window._selectedSubtaskIds.has(id))) {
+    window._selectedSubtaskIds = new Set(); // toggle off if all already selected
+  } else {
+    window._selectedSubtaskIds = new Set(all);
+  }
+  renderCurrentPage();
+}
+
+function _bulkSetDateOnSelected(taskId, dateStr) {
+  const t = getInstallTaskById(taskId);
+  if (!t) return;
+  const targets = (t.subtasks || []).filter(s => window._selectedSubtaskIds.has(s.id));
+  targets.forEach(s => { s.date = dateStr || null; });
+  save('vi_install_tasks', state.installTasks);
+  renderCurrentPage();
+}
+
+function _bulkSetAssigneesOnSelected(taskId, ids) {
+  const t = getInstallTaskById(taskId);
+  if (!t) return;
+  const cleanIds = (ids || []).filter(id => id != null);
+  const targets = (t.subtasks || []).filter(s => window._selectedSubtaskIds.has(s.id));
+  targets.forEach(s => { s.assigneeIds = [...cleanIds]; });
+  if (t.projectId != null && cleanIds.length > 0) ensureOnProjectCrew(t.projectId, cleanIds);
+  save('vi_install_tasks', state.installTasks);
+  renderCurrentPage();
+}
+
+function _reorderSubtask(taskId, fromIdx, toIdx) {
+  const t = getInstallTaskById(taskId);
+  if (!t || !t.subtasks) return;
+  if (fromIdx === toIdx || fromIdx < 0 || toIdx < 0) return;
+  if (fromIdx >= t.subtasks.length || toIdx >= t.subtasks.length) return;
+  const [moved] = t.subtasks.splice(fromIdx, 1);
+  t.subtasks.splice(toIdx, 0, moved);
+  save('vi_install_tasks', state.installTasks);
+  renderCurrentPage();
+}
+
+// Drag tracking for subtask reorder
+window._subtaskDragSrc = null;
+function _subtaskDragStart(ev, taskId, subtaskId) {
+  window._subtaskDragSrc = { taskId, subtaskId };
+  try { ev.dataTransfer.effectAllowed = 'move'; ev.dataTransfer.setData('text/plain', String(subtaskId)); } catch(e){}
+}
+function _subtaskDragOver(ev) {
+  if (window._subtaskDragSrc) { ev.preventDefault(); try{ ev.dataTransfer.dropEffect = 'move'; }catch(e){} }
+}
+function _subtaskDrop(ev, taskId, subtaskId) {
+  ev.preventDefault();
+  const src = window._subtaskDragSrc;
+  window._subtaskDragSrc = null;
+  if (!src || src.taskId !== taskId || src.subtaskId === subtaskId) return;
+  const t = getInstallTaskById(taskId);
+  if (!t) return;
+  const fromIdx = t.subtasks.findIndex(s => s.id === src.subtaskId);
+  const toIdx = t.subtasks.findIndex(s => s.id === subtaskId);
+  _reorderSubtask(taskId, fromIdx, toIdx);
+}
+
+// Bulk-apply day picker: opens a date input prompt and applies to all selected
+function _openBulkDayPicker(taskId) {
+  if (window._selectedSubtaskIds.size === 0) {
+    showToast('Select at least one step first', 'info');
+    return;
+  }
+  const html = `
+    <div class="modal-backdrop" onclick="_closeBulkPicker(event)" id="bulk-day-modal">
+      <div class="modal" style="max-width:340px" onclick="event.stopPropagation()">
+        <div class="modal-header">
+          <div class="modal-title">Set date on ${window._selectedSubtaskIds.size} steps</div>
+          <button class="modal-close" onclick="_closeBulkPicker()">×</button>
+        </div>
+        <div class="modal-body">
+          <input type="date" id="bulk-day-input" class="input" style="width:100%;font-size:14px;padding:8px" />
+        </div>
+        <div class="modal-footer">
+          <button class="btn" onclick="_closeBulkPicker()">Cancel</button>
+          <button class="btn btn-primary" onclick="_commitBulkDate(${taskId})">Apply</button>
+        </div>
+      </div>
+    </div>
+  `;
+  const wrap = document.createElement('div');
+  wrap.innerHTML = html;
+  document.body.appendChild(wrap.firstElementChild);
+  setTimeout(() => { const i = document.getElementById('bulk-day-input'); if (i) i.focus(); }, 0);
+}
+function _closeBulkPicker() {
+  const m = document.getElementById('bulk-day-modal'); if (m) m.remove();
+  const p = document.getElementById('bulk-people-modal'); if (p) p.remove();
+}
+function _commitBulkDate(taskId) {
+  const i = document.getElementById('bulk-day-input');
+  if (!i || !i.value) { _closeBulkPicker(); return; }
+  _bulkSetDateOnSelected(taskId, i.value);
+  _closeBulkPicker();
+}
+
+// Bulk-apply people picker
+function _openBulkPeoplePicker(taskId) {
+  if (window._selectedSubtaskIds.size === 0) {
+    showToast('Select at least one step first', 'info');
+    return;
+  }
+  const t = getInstallTaskById(taskId);
+  if (!t) return;
+  // Available people: install crew on this project, plus any install-role team
+  const proj = state.projects.find(p => p.id === t.projectId);
+  const assignment = proj ? getProjectAssignment(proj.id) : null;
+  const crewIds = new Set();
+  if (assignment) {
+    (assignment.install || []).forEach(x => crewIds.add(x.id));
+    (assignment.pm || []).forEach(x => crewIds.add(x.id));
+  }
+  // Fallback: all installers
+  if (crewIds.size === 0) {
+    state.teamMembers.forEach(m => {
+      if (['installer','install_admin','master_admin'].includes(m.primaryRole)) crewIds.add(m.id);
+    });
+  }
+  const people = [...crewIds].map(id => state.teamMembers.find(m => m.id === id)).filter(Boolean);
+  window._bulkPeopleSelectedIds = new Set();
+  const html = `
+    <div class="modal-backdrop" onclick="_closeBulkPicker(event)" id="bulk-people-modal">
+      <div class="modal" style="max-width:340px" onclick="event.stopPropagation()">
+        <div class="modal-header">
+          <div class="modal-title">Assign people to ${window._selectedSubtaskIds.size} steps</div>
+          <button class="modal-close" onclick="_closeBulkPicker()">×</button>
+        </div>
+        <div class="modal-body">
+          <div style="font-size:11px;color:#6E7681;margin-bottom:8px">Select who's doing these steps. Replaces existing assignees.</div>
+          <div id="bulk-people-list" style="display:flex;flex-direction:column;gap:6px">
+            ${people.map(m => `
+              <label style="display:flex;align-items:center;gap:8px;padding:6px 8px;background:#0D1117;border:1px solid #30363D;border-radius:4px;cursor:pointer">
+                <input type="checkbox" data-mid="${m.id}" onchange="_bulkTogglePeople(${m.id})" />
+                <span>${esc(m.name)}</span>
+              </label>
+            `).join('')}
+          </div>
+        </div>
+        <div class="modal-footer">
+          <button class="btn" onclick="_closeBulkPicker()">Cancel</button>
+          <button class="btn btn-primary" onclick="_commitBulkPeople(${taskId})">Apply</button>
+        </div>
+      </div>
+    </div>
+  `;
+  const wrap = document.createElement('div');
+  wrap.innerHTML = html;
+  document.body.appendChild(wrap.firstElementChild);
+}
+function _bulkTogglePeople(id) {
+  if (window._bulkPeopleSelectedIds.has(id)) window._bulkPeopleSelectedIds.delete(id);
+  else window._bulkPeopleSelectedIds.add(id);
+}
+function _commitBulkPeople(taskId) {
+  const ids = [...(window._bulkPeopleSelectedIds || new Set())];
+  _bulkSetAssigneesOnSelected(taskId, ids);
+  _closeBulkPicker();
+}
+
 // Tasks (and subtasks) that fall on a given date — used by calendar surfacing.
 function getInstallTasksForDate(dateStr, projectId) {
   const out = [];
@@ -6204,7 +6398,9 @@ function renderProjectTasksSection(p) {
     }).join('');
   }
 
-  function subtaskRow(t, s) {
+  function subtaskRow(t, s, rowIdx) {
+    const isEditing = window._editingTaskId === t.id;
+    const isSelected = isEditing && window._selectedSubtaskIds.has(s.id);
     const photoGated = s.photoRequired && !s.photo;
     const checkClickHandler = photoGated
       ? `event.stopPropagation();showToast('Upload a completion photo first','info')`
@@ -6215,17 +6411,46 @@ function renderProjectTasksSection(p) {
           ? `<span class="itask-photo-badge has-photo" title="Photo attached">📷</span>`
           : `<button class="itask-photo-btn" onclick="event.stopPropagation();_uploadSubtaskPhoto(${t.id},${s.id})" title="Upload completion photo">📷 Upload photo</button>`)
       : '';
-    return `
-      <div class="itask-sub${s.done ? ' is-done' : ''}${s.photoRequired ? ' has-photo-req' : ''}">
-        <span class="${checkClasses}" onclick="${checkClickHandler}">${s.done ? '✓' : ''}</span>
-        <div class="itask-sub-body" onclick="openSubtaskDialog(${t.id},${s.id})">
-          <div class="itask-sub-title">${esc(s.title)}</div>
-          <div class="itask-sub-meta">
-            ${s.date ? esc(fmtDateLocal(s.date)) : '<span class="itask-nodate">No date</span>'}
-            <span class="itask-sub-assignees">${assigneeChips(s.assigneeIds)}</span>
-            ${photoBadge}
+
+    if (!isEditing) {
+      // Normal display mode
+      return `
+        <div class="itask-sub${s.done ? ' is-done' : ''}${s.photoRequired ? ' has-photo-req' : ''}">
+          <span class="${checkClasses}" onclick="${checkClickHandler}">${s.done ? '✓' : ''}</span>
+          <div class="itask-sub-body" onclick="openSubtaskDialog(${t.id},${s.id})">
+            <div class="itask-sub-title">${esc(s.title)}</div>
+            <div class="itask-sub-meta">
+              ${s.date ? esc(fmtDateLocal(s.date)) : '<span class="itask-nodate">No date</span>'}
+              <span class="itask-sub-assignees">${assigneeChips(s.assigneeIds)}</span>
+              ${photoBadge}
+            </div>
+            ${s.notes ? `<div class="itask-sub-notes">${esc(s.notes)}</div>` : ''}
           </div>
-          ${s.notes ? `<div class="itask-sub-notes">${esc(s.notes)}</div>` : ''}
+          <span class="itask-del" onclick="event.stopPropagation();if(confirm('Delete this step?')){deleteInstallSubtask(${t.id},${s.id});renderCurrentPage();}">×</span>
+        </div>
+      `;
+    }
+
+    // Edit mode: drag handle + selection checkbox + inline editors
+    // Inline date/people buttons open the existing subtask edit dialog —
+    // which has full day picker + people picker. Avoids duplicate picker UI.
+    const dateBtn = `<button class="itask-edit-daybtn" onclick="event.stopPropagation();openSubtaskDialog(${t.id},${s.id})">${s.date ? esc(fmtDateLocal(s.date)) : '+ Day'}</button>`;
+    const peopleBtn = `<button class="itask-edit-peoplebtn" onclick="event.stopPropagation();openSubtaskDialog(${t.id},${s.id})">${(s.assigneeIds && s.assigneeIds.length > 0) ? assigneeChips(s.assigneeIds) : '+ Assign'}</button>`;
+
+    return `
+      <div class="itask-sub itask-sub-editing${isSelected ? ' is-selected' : ''}${s.done ? ' is-done' : ''}"
+           draggable="true"
+           ondragstart="_subtaskDragStart(event,${t.id},${s.id})"
+           ondragover="_subtaskDragOver(event)"
+           ondrop="_subtaskDrop(event,${t.id},${s.id})">
+        <span class="itask-drag-handle" title="Drag to reorder">⋮⋮</span>
+        <span class="itask-select-box${isSelected ? ' is-selected' : ''}" onclick="event.stopPropagation();_toggleSubtaskSelected(${t.id},${s.id})">${isSelected ? '✓' : ''}</span>
+        <div class="itask-sub-body">
+          <div class="itask-sub-title">${esc(s.title)}</div>
+          <div class="itask-edit-row">
+            ${dateBtn}
+            ${peopleBtn}
+          </div>
         </div>
         <span class="itask-del" onclick="event.stopPropagation();if(confirm('Delete this step?')){deleteInstallSubtask(${t.id},${s.id});renderCurrentPage();}">×</span>
       </div>
@@ -6236,6 +6461,8 @@ function renderProjectTasksSection(p) {
     const sys = t.system ? `<span class="itask-sys">${esc(t.system)}</span>` : '';
     const subDone = (t.subtasks || []).filter(s => s.done).length;
     const subTotal = (t.subtasks || []).length;
+    const isEditing = window._editingTaskId === t.id;
+    const isInstallAdmin = currentUserHasPermission('install.manage_crew');
     let dateLabel;
     if (t.isMilestone) {
       dateLabel = t.dueDate ? 'Due ' + fmtDateLocal(t.dueDate) : 'No due date';
@@ -6245,20 +6472,61 @@ function renderProjectTasksSection(p) {
         ? (range.start === range.end ? fmtDateLocal(range.start) : `${fmtDateLocal(range.start)} – ${fmtDateLocal(range.end)}`)
         : 'No dates set';
     }
+
+    // In edit mode, subtasks render in stored order (no auto-sort by date) so
+    // drag-reorder reflects what the user sees.
+    const orderedSubs = isEditing
+      ? (t.subtasks || [])
+      : (t.subtasks || []).slice().sort((a,b) => (a.date || '9999').localeCompare(b.date || '9999'));
+
+    // Edit button (always visible) + Re-seed button (only inside edit mode, admin only, and only if template-seeded)
+    const editBtnLabel = isEditing ? 'Done' : 'Edit';
+    const editBtnStyle = isEditing
+      ? 'background:#0D1F0D;border-color:#3FB950;color:#3FB950'
+      : 'background:#161B22;border-color:#30363D;color:#C9D1D9';
+    const editBtn = `<button class="itask-editbtn" style="${editBtnStyle}" onclick="event.stopPropagation();_toggleTaskEditMode(${t.id})">${editBtnLabel}</button>`;
+    const showReseed = isEditing && isInstallAdmin && t.templateKey && hasAnyTemplate;
+    const reseedBtn = showReseed
+      ? `<button class="itask-reseedbtn" onclick="event.stopPropagation();if(confirm('Re-seed will delete all template-seeded tasks on this project (manual tasks preserved) and reseed from current templates. Continue?'))_seedTasksFromScope(${p.id},true)">Re-seed</button>`
+      : '';
+
+    // Bulk action panel (only when something selected)
+    const selectedCount = isEditing ? window._selectedSubtaskIds.size : 0;
+    const bulkPanel = (isEditing && selectedCount > 0)
+      ? `<div class="itask-bulk-panel">
+           <div class="itask-bulk-info">${selectedCount} selected</div>
+           <button class="itask-bulk-btn" onclick="event.stopPropagation();_openBulkDayPicker(${t.id})">Set date</button>
+           <button class="itask-bulk-btn" onclick="event.stopPropagation();_openBulkPeoplePicker(${t.id})">Assign people</button>
+           <button class="itask-bulk-btn itask-bulk-clear" onclick="event.stopPropagation();window._selectedSubtaskIds = new Set();renderCurrentPage()">Clear</button>
+         </div>`
+      : '';
+
+    // Select all checkbox in header (edit mode only, when subtasks exist)
+    const selectAllUI = (isEditing && subTotal > 0)
+      ? `<span class="itask-selectall" onclick="event.stopPropagation();_selectAllSubtasks(${t.id})" title="Select all steps">
+           ${(window._selectedSubtaskIds.size === subTotal && subTotal > 0) ? '☑' : '☐'} All
+         </span>`
+      : '';
+
     return `
-      <div class="itask-card${t.done ? ' is-done' : ''}${t.isMilestone ? ' is-milestone' : ''}">
+      <div class="itask-card${t.done ? ' is-done' : ''}${t.isMilestone ? ' is-milestone' : ''}${isEditing ? ' is-editing' : ''}">
         <div class="itask-head">
           <span class="itask-check itask-check-main" onclick="event.stopPropagation();toggleInstallTaskDone(${t.id});renderCurrentPage()">${t.done ? '✓' : ''}</span>
-          <div class="itask-head-body" onclick="openTaskDialog(${p.id},${t.id})">
+          <div class="itask-head-body" ${isEditing ? '' : `onclick="openTaskDialog(${p.id},${t.id})"`}>
             <div class="itask-title">${t.isMilestone ? '🚩 ' : ''}${esc(t.title)} ${sys}${t.templateKey ? '<span class="itask-tplbadge">from template</span>' : ''}</div>
             <div class="itask-meta">
               ${esc(dateLabel)}
               ${t.isMilestone ? '' : ` · ${subDone}/${subTotal} steps`}
+              ${selectAllUI}
             </div>
           </div>
-          <span class="itask-del" onclick="event.stopPropagation();if(confirm('Delete this task and all its steps?')){deleteInstallTask(${t.id});renderCurrentPage();}">×</span>
+          <div class="itask-head-actions">
+            ${reseedBtn}${editBtn}
+            <span class="itask-del" onclick="event.stopPropagation();if(confirm('Delete this task and all its steps?')){deleteInstallTask(${t.id});renderCurrentPage();}">×</span>
+          </div>
         </div>
-        ${subTotal > 0 ? `<div class="itask-subs">${t.subtasks.slice().sort((a,b)=>(a.date||'9999').localeCompare(b.date||'9999')).map(s => subtaskRow(t, s)).join('')}</div>` : ''}
+        ${bulkPanel}
+        ${subTotal > 0 ? `<div class="itask-subs">${orderedSubs.map((s,i) => subtaskRow(t, s, i)).join('')}</div>` : ''}
         ${!t.isMilestone ? `<button class="itask-add-sub" onclick="openSubtaskDialog(${t.id},null)">+ Add day / step</button>` : ''}
       </div>
     `;
@@ -6268,9 +6536,7 @@ function renderProjectTasksSection(p) {
   const seedBtn = seedable.length > 0
     ? `<button class="btn btn-sm" style="font-size:11px;padding:6px 12px;background:#0D1F3D;border-color:#1565C0;color:#58A6FF" onclick="_seedTasksFromScope(${p.id},false)">Seed ${seedable.length} from scope</button>`
     : '';
-  const reseedBtn = (tasks.some(t => t.templateKey) && hasAnyTemplate)
-    ? `<button class="btn btn-sm" style="font-size:11px;padding:6px 12px;background:#1A0D0D;border-color:#DA3633;color:#F85149;margin-left:6px" onclick="if(confirm('Re-seed will delete all template-seeded tasks on this project (manual tasks preserved) and reseed from current templates. Continue?'))_seedTasksFromScope(${p.id},true)">Re-seed</button>`
-    : '';
+  const reseedBtn = ''; // Re-seed moved inside per-task Edit mode (admin-only)
 
   return `
     <div class="dashboard-card" style="margin-bottom:14px">
