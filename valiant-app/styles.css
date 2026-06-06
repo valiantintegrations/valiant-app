@@ -6968,3 +6968,13 @@ html.text-large body {
 }
 .itask-edit-daybtn:hover,
 .itask-edit-peoplebtn:hover { background: #1F2530; }
+
+/* Role chip next to the "My Work" tab label — shows the active user's bundle. */
+.dash-mywork-role {
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  margin-left: 4px;
+  opacity: 0.9;
+}
