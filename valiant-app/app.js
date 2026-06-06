@@ -109,8 +109,8 @@ const DEFAULT_BUNDLES = {
     permissions: PERMISSION_KEYS.filter(k => k !== 'admin.system' && k !== 'admin.edit_users.master_admin')
   },
   'install_admin': {
-    label: 'Install Admin',
-    desc: 'Manage install + warehouse users, assign install/warehouse teams, basic project financials',
+    label: 'Install Manager',
+    desc: 'Runs the install crew: tasking, scheduling, tools, trucks, safety, trainings. Asset & people-centric.',
     color: '#FF7B72',
     permissions: [
       'admin.view_users','admin.assign_permissions',
@@ -128,9 +128,43 @@ const DEFAULT_BUNDLES = {
       'dashboards.install_mgmt',
     ]
   },
+  'system_architect': {
+    label: 'System Architect',
+    desc: 'Designs systems in Vectorworks, then programs and builds onsite. Sees BOTH design and install work.',
+    color: '#A371F7',
+    permissions: [
+      'projects.view_all','projects.edit',
+      'projects.assign_team.design',
+      'design.view','design.edit','design.assign_tasks',
+      'install.view','install.edit',
+      'purchasing.view','purchasing.edit',
+      'vendors.view','vendors.manage',
+      'financials.view_project_totals',
+      'client.view_contact',
+      'templates.review',
+      'dashboards.design_mgmt',
+    ]
+  },
+  'project_coordinator': {
+    label: 'Project Coordinator',
+    desc: 'Owns each project from sold through commissioned. Ensures design + install + client are aligned.',
+    color: '#58A6FF',
+    permissions: [
+      'projects.view_all','projects.edit','projects.change_stage',
+      ..._ALL_ASSIGN_TEAM_PERMS,
+      'design.view','design.assign_tasks',
+      'install.view','install.edit',
+      'calendar.edit_all_events',
+      'purchasing.view','warehouse.view_inventory',
+      'vendors.view',
+      'financials.view_project_totals',
+      'client.view_contact',
+      'dashboards.install_mgmt','dashboards.design_mgmt',
+    ]
+  },
   'design_admin': {
-    label: 'Design Admin',
-    desc: 'Manage designers, assign design teams, design oversight, project financials (no margins)',
+    label: 'System Architect (legacy alias)',
+    desc: 'Legacy — migrated to System Architect on next load.',
     color: '#D29922',
     permissions: [
       'admin.view_users','admin.assign_permissions',
@@ -201,6 +235,15 @@ const DEFAULT_BUNDLES = {
       'design.view'
     ]
   },
+  'install_assistant': {
+    label: 'Install Assistant',
+    desc: 'Helps with installs; sees install work on assigned projects only.',
+    color: '#F0883E',
+    permissions: [
+      'install.view',
+      'design.view'
+    ]
+  },
   'warehouse': {
     label: 'Warehouse',
     desc: 'Receive equipment, manage inventory, no financials',
@@ -256,6 +299,20 @@ function currentUserHasPermission(permKey) {
   const id = getActiveTeamMemberId();
   if (!id) return false;
   return hasPermission(id, permKey);
+}
+
+// Returns the active user's bundle key (e.g. 'system_architect') or null.
+// Used to drive role-aware tab visibility + My Work content selection.
+function getActiveUserBundleKey() {
+  const id = getActiveTeamMemberId();
+  if (!id) return null;
+  const up = state.userPermissions[id];
+  return up ? up.bundle : null;
+}
+function getActiveUserBundle() {
+  const key = getActiveUserBundleKey();
+  if (!key) return null;
+  return state.bundles[key] || null;
 }
 
 function setUserBundle(memberId, bundleKey) {
@@ -1200,12 +1257,46 @@ function _nextTaskId() {
   return max + 1;
 }
 
-// One-time fix: design tasks were created before _nextTaskId considered the
-// design store. Two flavors of breakage are possible:
-//   (a) design ids collide with install ids
-//   (b) MULTIPLE design subtasks share the same id (because _nextTaskId
-//       returned the same value for every addDesignSubtask call in a batch)
-// Renumber any colliding ids — both flavors — to globally unique values.
+// ── Role bundle migration ──
+// Ensures the three new bundles (system_architect, project_coordinator,
+// install_assistant) exist in state.bundles even when the user already has a
+// saved bundles map from a previous version. Also retires the design_admin
+// label to "System Architect (legacy alias)" by mapping any user on
+// design_admin → system_architect. Idempotent.
+function _migrateRoles() {
+  let changed = false;
+  if (!state.bundles) state.bundles = {};
+
+  // Ensure new bundles exist by copying from DEFAULT_BUNDLES when missing
+  ['system_architect','project_coordinator','install_assistant','install_admin','design_admin'].forEach(k => {
+    if (!state.bundles[k]) {
+      state.bundles[k] = JSON.parse(JSON.stringify(DEFAULT_BUNDLES[k]));
+      changed = true;
+    }
+  });
+  // Refresh the install_admin label/desc on existing installs (renamed from
+  // "Install Admin" → "Install Manager") so the UI matches the new vocabulary.
+  if (state.bundles.install_admin && state.bundles.install_admin.label !== DEFAULT_BUNDLES.install_admin.label) {
+    state.bundles.install_admin.label = DEFAULT_BUNDLES.install_admin.label;
+    state.bundles.install_admin.desc = DEFAULT_BUNDLES.install_admin.desc;
+    changed = true;
+  }
+
+  if (changed) save('vi_bundles', state.bundles);
+
+  // Migrate users on design_admin → system_architect. Keep design_admin around
+  // as an alias bundle but move active users off it.
+  let userChanged = false;
+  Object.keys(state.userPermissions || {}).forEach(memberId => {
+    const up = state.userPermissions[memberId];
+    if (up && up.bundle === 'design_admin') {
+      up.bundle = 'system_architect';
+      userChanged = true;
+    }
+  });
+  if (userChanged) save('vi_user_perms', state.userPermissions);
+}
+
 function _fixDesignTaskIdCollisions() {
   const seen = new Set();
   // Reserve all install ids first — they keep theirs
@@ -4041,26 +4132,45 @@ function renderDashboard(c) {
   if (dashboardMode === 'install_mgmt' && !canSeeInstallMgmt) dashboardMode = 'mine';
   if (dashboardMode === 'design_mgmt' && !canSeeDesignMgmt) dashboardMode = 'mine';
   if (dashboardMode === 'sales_mgmt' && !canSeeSalesMgmt) dashboardMode = 'mine';
+  if (dashboardMode === 'crew_manager' && !(getActiveUserBundleKey() === 'install_admin' || isMasterAdmin)) dashboardMode = 'mine';
 
   const activeProjects = state.projects.filter(p => !p.archived);
   const myAssignments = computeMyAssignments(memberId, activeProjects);
   const totalMyWork = Object.values(myAssignments).reduce((n, arr) => n + arr.length, 0);
   const myCloseoutCount = getMyCloseoutProjects(memberId).length;
 
+  // Bundle-aware tab visibility — see role table in Drop B3a.
+  const bundleKey = getActiveUserBundleKey();
+  const activeBundle = getActiveUserBundle();
+  const isInstallManager = bundleKey === 'install_admin' || isMasterAdmin;
+  const isProjectCoord = bundleKey === 'project_coordinator' || isMasterAdmin;
+  const isInstaller = bundleKey === 'installer' || bundleKey === 'install_assistant';
+  const isSystemArchitect = bundleKey === 'system_architect';
+  // Pipeline (search across all projects) is for coordinators + install managers
+  // + admins — not installers or system architects.
+  const showPipelineTab = canSeeAllProjects && !isInstaller && !isSystemArchitect;
+
   // Build mode tabs
   const tabs = [];
   if (isMasterAdmin) tabs.push({ key: 'executive', label: 'Executive' });
-  tabs.push({ key: 'mine', label: 'My Work', badge: totalMyWork });
+  // My Work — role chip rendered alongside via dash-mywork-role span
+  const myWorkLabel = activeBundle
+    ? `My Work · <span class="dash-mywork-role" style="color:${activeBundle.color}">${esc(activeBundle.label)}</span>`
+    : 'My Work';
+  tabs.push({ key: 'mine', label: myWorkLabel, badge: totalMyWork, _allowHTML: true });
   if (canSeeSalesMgmt) {
     tabs.push({ key: 'sales_mgmt', label: 'Sales Dept' });
   }
   if (canSeeDesignMgmt) {
     tabs.push({ key: 'design_mgmt', label: 'Design Dept' });
   }
-  if (canSeeInstallMgmt) {
-    tabs.push({ key: 'install_mgmt', label: 'Operations' });
+  if (canSeeInstallMgmt && isProjectCoord) {
+    tabs.push({ key: 'install_mgmt', label: 'Project Coordination' });
   }
-  if (canSeeAllProjects) tabs.push({ key: 'pipeline', label: 'Full Pipeline' });
+  if (isInstallManager) {
+    tabs.push({ key: 'crew_manager', label: 'Crew Manager' });
+  }
+  if (showPipelineTab) tabs.push({ key: 'pipeline', label: 'Full Pipeline' });
 
   // Dept meta — title + accent color, used to render an inline title to
   // the right of the tab strip. Only dept-management dashboards have this;
@@ -4068,7 +4178,8 @@ function renderDashboard(c) {
   const DEPT_META = {
     sales_mgmt:   { title: 'Sales Department Management',        color: '#3FB950' },
     design_mgmt:  { title: 'Design Department Management',       color: '#A371F7' },
-    install_mgmt: { title: 'Installation Department Management', color: '#F0883E' }
+    install_mgmt: { title: 'Project Coordination',               color: '#F0883E' },
+    crew_manager: { title: 'Crew Manager — Install Department',  color: '#FF7B72' }
   };
   const deptMeta = DEPT_META[dashboardMode] || null;
   const deptInline = deptMeta ? `
@@ -4098,6 +4209,8 @@ function renderDashboard(c) {
     c.innerHTML = modeToggle + renderExecutiveDashboard(activeProjects);
   } else if (dashboardMode === 'install_mgmt') {
     c.innerHTML = modeToggle + renderInstallMgmtDashboard(activeProjects);
+  } else if (dashboardMode === 'crew_manager') {
+    c.innerHTML = modeToggle + renderCrewManagerDashboard(activeProjects);
   } else if (dashboardMode === 'design_mgmt') {
     c.innerHTML = modeToggle + renderDesignMgmtDashboard(activeProjects);
   } else if (dashboardMode === 'sales_mgmt') {
@@ -11595,6 +11708,71 @@ function getThisWeekActivity(activeProjects) {
   return { weekStart: sunday, weekEnd: saturday, days };
 }
 
+// ════════════════════════════════════════════════════════════════════════════
+// CREW MANAGER DASHBOARD — Install Manager's home (Drop B3a stub)
+// Asset & people-centric: crew scheduling, tools, trucks/cases, safety,
+// trainings, oil changes. Widgets populated in Drop B3c.
+// ════════════════════════════════════════════════════════════════════════════
+function renderCrewManagerDashboard(activeProjects) {
+  // Crew snapshot: install team members + their current assignments
+  const allInstallers = (state.team || []).filter(m => {
+    const up = state.userPermissions[m.id];
+    const bk = up ? up.bundle : null;
+    return bk === 'installer' || bk === 'install_assistant' || bk === 'install_admin' || bk === 'system_architect';
+  });
+  const crewCount = allInstallers.length;
+  // Active installs this week
+  const today = new Date();
+  const weekEnd = new Date(today); weekEnd.setDate(weekEnd.getDate() + 7);
+  const todayStr = _ymd(today);
+  const weekEndStr = _ymd(weekEnd);
+  const activeInstalls = activeProjects.filter(p => {
+    const win = getInstallWindow(p);
+    return win && win.start <= weekEndStr && win.end >= todayStr;
+  });
+
+  return `
+    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:10px;margin-bottom:18px">
+      <div class="metric-card">
+        <div class="metric-label">Crew</div>
+        <div class="metric-value">${crewCount}</div>
+        <div class="metric-sub">install + assist + architects</div>
+      </div>
+      <div class="metric-card">
+        <div class="metric-label">This Week</div>
+        <div class="metric-value">${activeInstalls.length}</div>
+        <div class="metric-sub">active installs</div>
+      </div>
+      <div class="metric-card">
+        <div class="metric-label">Tools</div>
+        <div class="metric-value" style="color:#6E7681">—</div>
+        <div class="metric-sub">tracking coming soon</div>
+      </div>
+      <div class="metric-card">
+        <div class="metric-label">Trucks</div>
+        <div class="metric-value" style="color:#6E7681">—</div>
+        <div class="metric-sub">tracking coming soon</div>
+      </div>
+    </div>
+
+    <div class="dashboard-card" style="margin-bottom:14px">
+      <div style="font-size:11px;font-weight:600;color:#6E7681;text-transform:uppercase;letter-spacing:0.08em;margin-bottom:10px">Crew Manager — Coming Together</div>
+      <div style="font-size:13px;color:#C9D1D9;line-height:1.6">
+        This is your home base for managing the install crew. Coming widgets:
+      </div>
+      <ul style="font-size:12px;color:#8B949E;margin-top:10px;line-height:1.8;padding-left:20px">
+        <li><strong style="color:#C9D1D9">Crew schedule</strong> — who's on what install this week / next</li>
+        <li><strong style="color:#C9D1D9">Tools & cases</strong> — what's checked out, what's missing, what needs service</li>
+        <li><strong style="color:#C9D1D9">Trucks</strong> — assignment, mileage, oil changes due, maintenance schedule</li>
+        <li><strong style="color:#C9D1D9">Safety & trainings</strong> — certifications expiring, required trainings due</li>
+        <li><strong style="color:#C9D1D9">Crew workload</strong> — open tasks per installer, who's overloaded, who's free</li>
+      </ul>
+      <div style="font-size:11px;color:#6E7681;margin-top:14px;font-style:italic">Drop B3c will fill these in.</div>
+    </div>
+  `;
+}
+
+
 function renderInstallMgmtDashboard(activeProjects) {
   // Two sub-tabs: 'overview' (the existing dashboard) and 'master_calendar'.
   // Persist the active sub-tab so navigating away and back returns to the same view.
@@ -17098,6 +17276,7 @@ async function init() {
     }
   } catch(e) { console.warn('Cache load failed:', e); }
   applyTextSize(state.textSize);
+  _migrateRoles();
   _migrateInstallTaskShape();
   _migrateInstallTaskTemplates();
   _migrateInstallSubtasksToTasks();
