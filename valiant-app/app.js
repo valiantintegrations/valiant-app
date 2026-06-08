@@ -4133,6 +4133,7 @@ function renderDashboard(c) {
   if (dashboardMode === 'design_mgmt' && !canSeeDesignMgmt) dashboardMode = 'mine';
   if (dashboardMode === 'sales_mgmt' && !canSeeSalesMgmt) dashboardMode = 'mine';
   if (dashboardMode === 'crew_manager' && !(getActiveUserBundleKey() === 'install_admin' || isMasterAdmin)) dashboardMode = 'mine';
+  if (dashboardMode === 'all_open' && !(getActiveUserBundleKey() === 'project_coordinator' || getActiveUserBundleKey() === 'install_admin' || isMasterAdmin)) dashboardMode = 'mine';
 
   const activeProjects = state.projects.filter(p => !p.archived);
   const myAssignments = computeMyAssignments(memberId, activeProjects);
@@ -4153,11 +4154,11 @@ function renderDashboard(c) {
   // Build mode tabs
   const tabs = [];
   if (isMasterAdmin) tabs.push({ key: 'executive', label: 'Executive' });
-  // My Work — role chip rendered alongside via dash-mywork-role span
-  const myWorkLabel = activeBundle
-    ? `My Work · <span class="dash-mywork-role" style="color:${activeBundle.color}">${esc(activeBundle.label)}</span>`
-    : 'My Work';
-  tabs.push({ key: 'mine', label: myWorkLabel, badge: totalMyWork, _allowHTML: true });
+  // My Work tab — appends viewer's first name to confirm which account they're in.
+  // Role identification stays on the sidebar (bottom-left) where it's always visible.
+  const viewerName = activeMember ? (activeMember.name || '').split(' ')[0] : '';
+  const myWorkLabel = viewerName ? `My Work — ${esc(viewerName)}` : 'My Work';
+  tabs.push({ key: 'mine', label: myWorkLabel, badge: totalMyWork });
   if (canSeeSalesMgmt) {
     tabs.push({ key: 'sales_mgmt', label: 'Sales Dept' });
   }
@@ -4166,6 +4167,13 @@ function renderDashboard(c) {
   }
   if (canSeeInstallMgmt && isProjectCoord) {
     tabs.push({ key: 'install_mgmt', label: 'Project Coordination' });
+  }
+  // All Open Projects — single tab visible to PC + Install Manager + admin.
+  // Shows project cards from contract through closeout (anything not archived
+  // and past contract stage). Distinct from the sidebar Projects tab (which is
+  // a lookup tool for everyone — past, current, anyone's projects).
+  if (isProjectCoord || isInstallManager) {
+    tabs.push({ key: 'all_open', label: 'All Open Projects' });
   }
   if (isInstallManager) {
     tabs.push({ key: 'crew_manager', label: 'Crew Manager' });
@@ -4211,6 +4219,8 @@ function renderDashboard(c) {
     c.innerHTML = modeToggle + renderInstallMgmtDashboard(activeProjects);
   } else if (dashboardMode === 'crew_manager') {
     c.innerHTML = modeToggle + renderCrewManagerDashboard(activeProjects);
+  } else if (dashboardMode === 'all_open') {
+    c.innerHTML = modeToggle + renderAllOpenProjectsDashboard(activeProjects);
   } else if (dashboardMode === 'design_mgmt') {
     c.innerHTML = modeToggle + renderDesignMgmtDashboard(activeProjects);
   } else if (dashboardMode === 'sales_mgmt') {
@@ -11706,6 +11716,162 @@ function getThisWeekActivity(activeProjects) {
   });
 
   return { weekStart: sunday, weekEnd: saturday, days };
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+// ALL OPEN PROJECTS DASHBOARD — Project Coordinator + Install Manager (B3a-v2)
+// Project-centric card view. Each card shows planning readiness for install:
+// progress bar, install window status, blockers, assigned crew.
+// Includes projects from contract stage through closeout (not yet archived).
+// ════════════════════════════════════════════════════════════════════════════
+function renderAllOpenProjectsDashboard(activeProjects) {
+  // Stages that count as "open": contract through closeout. Excludes lead/proposal
+  // (not yet signed). Excludes archived. Sales hasn't-mobilized-yet projects also
+  // show here (the contract stage covers them) so they stay visible for chasing.
+  const openStages = new Set(['contract','design','purchasing','install','closeout','warranty']);
+  const open = activeProjects.filter(p => openStages.has(p.stage));
+
+  // Sort by install window start ascending (soonest first), unscheduled last
+  open.sort((a, b) => {
+    const wa = getInstallWindow(a);
+    const wb = getInstallWindow(b);
+    const aStart = wa ? wa.start : '9999';
+    const bStart = wb ? wb.start : '9999';
+    return aStart.localeCompare(bStart);
+  });
+
+  // Per-project blocker detection — surfaces the next-action that's missing
+  function getBlockers(p) {
+    const blockers = [];
+    const win = getInstallWindow(p);
+    if (!win) blockers.push({ kind: 'no-window', label: 'No install window set', urgency: 'high' });
+    else if (win.source !== 'booked') blockers.push({ kind: 'estimated', label: 'Window estimated, not booked', urgency: 'med' });
+
+    // Design kickoff not yet
+    const designPhase = PHASES.find(ph => ph.key === 'design');
+    if (designPhase) {
+      const kickoff = designPhase.milestones.find(m => m.key === 'design_kickoff');
+      if (kickoff && milestoneProgress(p, designPhase, kickoff) < 1) {
+        blockers.push({ kind: 'design-kickoff', label: 'Design kickoff not held', urgency: 'med' });
+      }
+    }
+
+    // Crew not assigned
+    const a = getProjectAssignment(p.id);
+    if (!a || !a.install || a.install.length === 0) {
+      blockers.push({ kind: 'no-crew', label: 'No install crew assigned', urgency: 'med' });
+    }
+
+    return blockers;
+  }
+
+  // Compute overall planning readiness — equal weight across each phase up
+  // through Install. Once the install phase begins (passed kickoff/setup),
+  // readiness should be 100%. Until then it reflects how prepared the job is.
+  function planningReadiness(p) {
+    const phasesInOrder = ['contract','design','purchasing'];
+    const total = phasesInOrder.length;
+    let sum = 0;
+    phasesInOrder.forEach(key => {
+      const ph = PHASES.find(x => x.key === key);
+      if (ph) sum += Math.min(1, phaseProgress(p, ph));
+    });
+    return total > 0 ? sum / total : 0;
+  }
+
+  function phaseChip(p) {
+    const ph = PHASES.find(x => x.key === p.stage);
+    if (!ph) return '';
+    return `<span class="aop-phase-chip" style="background:${ph.color}1F;border-color:${ph.color};color:${ph.color}">${esc(ph.label)}</span>`;
+  }
+
+  function installWindowLabel(p) {
+    const win = getInstallWindow(p);
+    if (!win) return '<span style="color:#F85149">No window</span>';
+    const start = fmtDateLocal(win.start);
+    const end = fmtDateLocal(win.end);
+    const label = start === end ? start : `${start} → ${end}`;
+    const tag = win.source === 'booked'
+      ? '<span style="color:#3FB950;font-weight:600;font-size:10px;text-transform:uppercase;letter-spacing:0.04em">Booked</span>'
+      : '<span style="color:#58A6FF;font-weight:600;font-size:10px;text-transform:uppercase;letter-spacing:0.04em">Estimated</span>';
+    return `${tag} ${esc(label)}`;
+  }
+
+  function crewBadges(p) {
+    const a = getProjectAssignment(p.id);
+    const ids = new Set();
+    (a?.pm || []).forEach(x => ids.add(x.id));
+    (a?.install || []).forEach(x => ids.add(x.id));
+    if (ids.size === 0) return '<span style="font-size:11px;color:#6E7681;font-style:italic">No crew</span>';
+    return [...ids].slice(0, 5).map(id => {
+      const m = getTeamMember(id);
+      if (!m) return '';
+      const color = (DASHBOARD_ACCESS.find(d => d.key === m.primaryRole) || {}).color || '#6E7681';
+      const init = m.initials || (m.name || '').slice(0,2).toUpperCase();
+      return `<span class="aop-crew-badge" title="${esc(m.name)}" style="background:${color}22;border-color:${color};color:${color}">${esc(init)}</span>`;
+    }).join('');
+  }
+
+  function projectCard(p) {
+    const readiness = planningReadiness(p);
+    const pct = Math.round(readiness * 100);
+    const projColor = getProjectColor(p.id);
+    const blockers = getBlockers(p);
+    const win = getInstallWindow(p);
+    return `
+      <div class="aop-card" onclick="openProject(${p.id})" style="border-left:3px solid ${projColor}">
+        <div class="aop-card-head">
+          <div class="aop-card-title">
+            <div class="aop-client">${esc(p.client_name || 'Unknown client')}</div>
+            <div class="aop-project">${esc(p.name || '—')}</div>
+          </div>
+          ${phaseChip(p)}
+        </div>
+        <div class="aop-progress-row">
+          <div class="aop-progress-bar">
+            <div class="aop-progress-fill" style="width:${pct}%;background:${pct >= 100 ? '#3FB950' : projColor}"></div>
+          </div>
+          <div class="aop-progress-pct" style="color:${pct >= 100 ? '#3FB950' : '#C9D1D9'}">${pct}%</div>
+        </div>
+        <div class="aop-progress-label">Planning readiness</div>
+        <div class="aop-window-row">${installWindowLabel(p)}</div>
+        <div class="aop-crew-row">${crewBadges(p)}</div>
+        ${blockers.length > 0
+          ? `<div class="aop-blockers">${blockers.map(b => `<div class="aop-blocker aop-blocker-${b.urgency}">${esc(b.label)}</div>`).join('')}</div>`
+          : '<div class="aop-blockers-clear">✓ Ready for install</div>'}
+      </div>
+    `;
+  }
+
+  if (open.length === 0) {
+    return `
+      <div style="text-align:center;padding:60px 20px;color:#6E7681">
+        <div style="font-size:14px;font-weight:500;color:#8B949E;margin-bottom:6px">No open projects</div>
+        <div style="font-size:12px">When a project moves to Contract stage, it'll appear here for coordination.</div>
+      </div>
+    `;
+  }
+
+  // Quick stats strip at top
+  const totalOpen = open.length;
+  const noWindow = open.filter(p => !getInstallWindow(p)).length;
+  const estimated = open.filter(p => { const w = getInstallWindow(p); return w && w.source !== 'booked'; }).length;
+  const booked = open.filter(p => { const w = getInstallWindow(p); return w && w.source === 'booked'; }).length;
+  const installReady = open.filter(p => planningReadiness(p) >= 1).length;
+
+  return `
+    <div class="aop-stats-row">
+      <div class="aop-stat"><div class="aop-stat-num">${totalOpen}</div><div class="aop-stat-label">Open</div></div>
+      <div class="aop-stat" style="${booked > 0 ? 'border-color:#3FB950' : ''}"><div class="aop-stat-num" style="${booked > 0 ? 'color:#3FB950' : ''}">${booked}</div><div class="aop-stat-label">Booked</div></div>
+      <div class="aop-stat" style="${estimated > 0 ? 'border-color:#58A6FF' : ''}"><div class="aop-stat-num" style="${estimated > 0 ? 'color:#58A6FF' : ''}">${estimated}</div><div class="aop-stat-label">Estimated</div></div>
+      <div class="aop-stat" style="${noWindow > 0 ? 'border-color:#F85149' : ''}"><div class="aop-stat-num" style="${noWindow > 0 ? 'color:#F85149' : ''}">${noWindow}</div><div class="aop-stat-label">No Window</div></div>
+      <div class="aop-stat" style="${installReady > 0 ? 'border-color:#3FB950' : ''}"><div class="aop-stat-num" style="${installReady > 0 ? 'color:#3FB950' : ''}">${installReady}</div><div class="aop-stat-label">Install Ready</div></div>
+    </div>
+
+    <div class="aop-grid">
+      ${open.map(projectCard).join('')}
+    </div>
+  `;
 }
 
 // ════════════════════════════════════════════════════════════════════════════
