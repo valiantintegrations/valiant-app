@@ -6978,3 +6978,182 @@ html.text-large body {
   margin-left: 4px;
   opacity: 0.9;
 }
+
+/* ── All Open Projects dashboard ── */
+.aop-stats-row {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+  gap: 8px;
+  margin-bottom: 18px;
+}
+.aop-stat {
+  background: #161B22;
+  border: 1px solid #30363D;
+  border-radius: 6px;
+  padding: 12px 14px;
+  text-align: center;
+}
+.aop-stat-num {
+  font-size: 22px;
+  font-weight: 600;
+  color: #C9D1D9;
+  line-height: 1.1;
+}
+.aop-stat-label {
+  font-size: 10px;
+  font-weight: 600;
+  color: #8B949E;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  margin-top: 4px;
+}
+
+.aop-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+  gap: 12px;
+}
+.aop-card {
+  background: #161B22;
+  border: 1px solid #30363D;
+  border-radius: 8px;
+  padding: 14px;
+  cursor: pointer;
+  transition: border-color 0.15s, background 0.15s;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.aop-card:hover {
+  background: #1C2128;
+  border-color: #58A6FF;
+}
+.aop-card-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 8px;
+}
+.aop-card-title {
+  flex: 1;
+  min-width: 0;
+}
+.aop-client {
+  font-size: 14px;
+  font-weight: 600;
+  color: #C9D1D9;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.aop-project {
+  font-size: 11px;
+  color: #8B949E;
+  margin-top: 2px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.aop-phase-chip {
+  font-size: 9px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  padding: 3px 8px;
+  border: 1px solid;
+  border-radius: 3px;
+  white-space: nowrap;
+}
+
+.aop-progress-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 2px;
+}
+.aop-progress-bar {
+  flex: 1;
+  height: 6px;
+  background: #0D1117;
+  border-radius: 3px;
+  overflow: hidden;
+}
+.aop-progress-fill {
+  height: 100%;
+  transition: width 0.3s;
+}
+.aop-progress-pct {
+  font-size: 11px;
+  font-weight: 600;
+  min-width: 32px;
+  text-align: right;
+}
+.aop-progress-label {
+  font-size: 9px;
+  color: #6E7681;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  margin-top: -4px;
+}
+
+.aop-window-row {
+  font-size: 11px;
+  color: #C9D1D9;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.aop-crew-row {
+  display: flex;
+  gap: 4px;
+  flex-wrap: wrap;
+}
+.aop-crew-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  border: 1px solid;
+  font-size: 9px;
+  font-weight: 700;
+}
+
+.aop-blockers {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-top: 4px;
+}
+.aop-blocker {
+  font-size: 10px;
+  padding: 4px 8px;
+  border-radius: 3px;
+  display: flex;
+  align-items: center;
+}
+.aop-blocker::before {
+  content: "⚠";
+  margin-right: 6px;
+}
+.aop-blocker-high {
+  background: #2A0D0D;
+  border: 1px solid #DA3633;
+  color: #F85149;
+}
+.aop-blocker-med {
+  background: #1F1A0D;
+  border: 1px solid #D29922;
+  color: #D29922;
+}
+.aop-blockers-clear {
+  font-size: 11px;
+  color: #3FB950;
+  padding: 6px 8px;
+  background: #0D1F0D;
+  border: 1px solid #2A4D2A;
+  border-radius: 3px;
+  font-weight: 500;
+}
