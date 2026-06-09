@@ -2739,6 +2739,7 @@ function navigate(page) {
   });
   const titles = {
     dashboard: 'Dashboard', calendar: 'Calendar', projects: 'Projects',
+    'schedule-builder': 'Schedule Builder',
     'open-projects': 'Open Projects',
     shopwork: 'Shop Work', vendors: 'Vendors', intake: 'New Intake', team: 'Team'
   };
@@ -2761,6 +2762,7 @@ function renderCurrentPage() {
     switch (state.currentPage) {
       case 'dashboard': renderDashboard(c); break;
       case 'calendar': renderCalendar(c); break;
+      case 'schedule-builder': renderScheduleBuilder(c); break;
       case 'projects': renderProjects(c); break;
       case 'open-projects': renderOpenProjects(c); break;
       case 'shopwork': renderShopWork(c); break;
@@ -17351,6 +17353,25 @@ function refreshAdminNav() {
     openProjectsBadge.style.display = count > 0 ? '' : 'none';
   }
 
+  // Schedule Builder nav item — sits directly ABOVE Calendar in the sidebar.
+  // Gated to Project Coordinator + Install Manager + master_admin (sbCanAccess).
+  // Re-evaluated on every refresh so role-switching test logins add/remove it.
+  (function() {
+    const existing = document.querySelector('.nav-item[data-page="schedule-builder"]');
+    const allowed = (typeof sbCanAccess === 'function') && sbCanAccess();
+    if (!allowed) { if (existing) existing.remove(); return; }
+    if (existing) return;
+    const calLink = document.querySelector('.nav-item[data-page="calendar"]');
+    if (calLink && calLink.parentNode) {
+      const link = document.createElement('a');
+      link.className = 'nav-item';
+      link.dataset.page = 'schedule-builder';
+      link.onclick = () => navigate('schedule-builder');
+      link.innerHTML = '<svg width="16" height="16" viewBox="0 0 16 16" fill="none"><rect x="2" y="3" width="12" height="11" rx="1.5" stroke="currentColor" stroke-width="1.2"/><path d="M2 6.5h12M5.5 1.5v3M10.5 1.5v3" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/><path d="M5 9.5l1.3 1.3L9 8.2" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/></svg><span>Schedule Builder</span>';
+      calLink.parentNode.insertBefore(link, calLink);
+    }
+  })();
+
   if (!toolsSection) return;
   const activeMember = getTeamMember(getActiveTeamMemberId());
   // Team nav — legacy admin gate
@@ -21027,4 +21048,601 @@ function renderPendingApprovalsCard() {
       ${installItems}
     </div>
   `;
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+// SCHEDULE BUILDER — Drop B3b
+// Sidebar tool (above Calendar). Split view: backlog (left) + month calendar
+// (right). Two-step UX: select tasks + assign people → Done → drag/tap onto a
+// date to set it. Projects without a booked window and next-frontier meetings
+// also live in the backlog; dropping those opens the relevant picker.
+// Visible to: project_coordinator + install_admin (Install Manager) + master_admin.
+// ════════════════════════════════════════════════════════════════════════════
+
+const SB_ALLOWED_BUNDLES = ['project_coordinator', 'install_admin', 'master_admin'];
+
+function sbCanAccess() {
+  if (currentUserHasPermission('admin.system')) return true;
+  const bk = getActiveUserBundleKey();
+  return SB_ALLOWED_BUNDLES.includes(bk);
+}
+
+// Meeting milestones, mapped to their meeting type. Order matters — these are
+// the only milestones that produce a schedulable meeting.
+const SB_MEETING_MILESTONES = {
+  'lead.walkthrough_sched': 'walkthrough',
+  'design.design_kickoff':  'design_kickoff',
+  'design.design_handoff':  'handoff'
+};
+
+// Flat, ordered list of every milestone across all phases — the lifecycle
+// reference used to compute a project's "frontier" (next actionable milestone).
+function _sbFlatMilestones() {
+  if (window.__sbFlatMs) return window.__sbFlatMs;
+  const flat = [];
+  PHASES.forEach(ph => (ph.milestones || []).forEach(m => {
+    flat.push({ phaseKey: ph.key, milestoneKey: m.key, label: m.label });
+  }));
+  window.__sbFlatMs = flat;
+  return flat;
+}
+
+// Index of the first incomplete milestone for a project (the frontier). If every
+// milestone is done, returns the list length.
+function _sbFrontierIndex(projectId) {
+  const flat = _sbFlatMilestones();
+  for (let i = 0; i < flat.length; i++) {
+    const m = flat[i];
+    if (!getMilestone(projectId, m.phaseKey, m.milestoneKey)) return i;
+  }
+  return flat.length;
+}
+
+// Meetings that belong in the backlog. Rule (per Jacob): include a milestone
+// meeting only if it is the next-in-line meeting OR we're already past that
+// section and it was never scheduled. Computationally: unscheduled + incomplete
+// + its flat index <= the project's frontier index. Anything further out than
+// "next" is excluded.
+function _sbBacklogMeetings() {
+  const flat = _sbFlatMilestones();
+  const meetingIdx = {};
+  flat.forEach((m, i) => {
+    const key = `${m.phaseKey}.${m.milestoneKey}`;
+    if (SB_MEETING_MILESTONES[key]) meetingIdx[key] = i;
+  });
+  const out = [];
+  (state.projects || []).forEach(p => {
+    if (p.archived) return;
+    const frontier = _sbFrontierIndex(p.id);
+    Object.keys(SB_MEETING_MILESTONES).forEach(key => {
+      const idx = meetingIdx[key];
+      if (idx == null) return;
+      if (idx > frontier) return;                          // further out than next — skip
+      const [phaseKey, milestoneKey] = key.split('.');
+      if (getMilestone(p.id, phaseKey, milestoneKey)) return; // already done
+      const type = SB_MEETING_MILESTONES[key];
+      if (getExistingProjectMeeting(p.id, type)) return;      // already on the books
+      const preset = getProjectMeetingPreset(p.id, type);
+      out.push({
+        projectId: p.id,
+        phaseKey, milestoneKey, type,
+        title: (preset && preset.title) || _meetingTypeLabel(type),
+        overdue: idx < frontier
+      });
+    });
+  });
+  return out;
+}
+
+// Tasks split by whether they currently carry any date. A non-milestone task
+// with zero subtasks has nothing to schedule, so it's excluded from the backlog.
+function _sbTaskHasDate(t) {
+  if (t.isMilestone) return !!t.dueDate;
+  return !!getTaskDateRange(t);
+}
+function _sbSchedulableTask(t) {
+  if (t.projectId == null) return false;
+  if (!state.projects.some(p => p.id === t.projectId && !p.archived)) return false;
+  if (t.isMilestone) return true;
+  return (t.subtasks || []).length > 0;
+}
+function _sbCollectTasks(phase, wantDated) {
+  const store = phase === 'design' ? (state.designTasks || []) : (state.installTasks || []);
+  return store.filter(t => _sbSchedulableTask(t) && _sbTaskHasDate(t) === wantDated);
+}
+
+// Open projects (Contract→Install) that have no BOOKED install window yet.
+function _sbProjectsNeedingWindow() {
+  return (state.projects || []).filter(p =>
+    !p.archived && OPEN_PROJECT_STAGES.includes(p.stage) && !getBookedTimeline(p.id)
+  );
+}
+
+// ── Schedule Builder state ──
+window._sbState = window._sbState || null;
+function _sbInit() {
+  if (window._sbState) return;
+  const now = new Date();
+  window._sbState = {
+    month: { year: now.getFullYear(), month: now.getMonth() },
+    filter: 'all',                 // all | install | design | meeting
+    selected: new Set(),           // selected TASK ids (numeric, any phase)
+    armed: false,                  // step 2 — selection armed for placing
+    placing: null,                 // { kind:'taskset' } | { kind:'task', id } | null (tap-to-place)
+    openUnbooked: true,
+    openBooked: false
+  };
+}
+
+function _sbPhaseOf(taskId) { return _getTaskPhase(taskId); }
+
+// ── Mutations ──
+function _sbApplyDateToTask(taskId, dateStr) {
+  const phase = _getTaskPhase(taskId);
+  const t = _getTaskByIdAnyPhase(taskId);
+  if (!t) return;
+  if (t.isMilestone) {
+    t.dueDate = dateStr;
+  } else {
+    (t.subtasks || []).forEach(s => { s.date = dateStr; });
+  }
+  save(phase === 'design' ? 'vi_design_tasks' : 'vi_install_tasks',
+       phase === 'design' ? state.designTasks : state.installTasks);
+}
+function _sbApplyAssignees(taskId, ids) {
+  const phase = _getTaskPhase(taskId);
+  const t = _getTaskByIdAnyPhase(taskId);
+  if (!t) return;
+  const clean = (ids || []).filter(x => x != null);
+  (t.subtasks || []).forEach(s => { s.assigneeIds = [...clean]; });
+  if (t.projectId != null && clean.length) ensureOnProjectCrew(t.projectId, clean);
+  save(phase === 'design' ? 'vi_design_tasks' : 'vi_install_tasks',
+       phase === 'design' ? state.designTasks : state.installTasks);
+}
+
+// ── Selection / step handlers ──
+function _sbToggleSelect(taskId) {
+  _sbInit();
+  if (window._sbState.armed) return; // locked after Done; use Edit to change
+  if (window._sbState.selected.has(taskId)) window._sbState.selected.delete(taskId);
+  else window._sbState.selected.add(taskId);
+  renderCurrentPage();
+}
+function _sbClearSelect() {
+  _sbInit();
+  window._sbState.selected = new Set();
+  window._sbState.armed = false;
+  window._sbState.placing = null;
+  renderCurrentPage();
+}
+function _sbDone() {
+  _sbInit();
+  if (window._sbState.selected.size === 0) { showToast('Select at least one task first', 'info'); return; }
+  window._sbState.armed = true;
+  window._sbState.placing = { kind: 'taskset' };
+  renderCurrentPage();
+}
+function _sbEditSelection() {
+  _sbInit();
+  window._sbState.armed = false;
+  window._sbState.placing = null;
+  renderCurrentPage();
+}
+function _sbSetFilter(f) { _sbInit(); window._sbState.filter = f; renderCurrentPage(); }
+function _sbNavMonth(delta) {
+  _sbInit();
+  let { year, month } = window._sbState.month;
+  month += delta;
+  if (month < 0) { month = 11; year--; }
+  if (month > 11) { month = 0; year++; }
+  window._sbState.month = { year, month };
+  renderCurrentPage();
+}
+function _sbToday() {
+  _sbInit();
+  const now = new Date();
+  window._sbState.month = { year: now.getFullYear(), month: now.getMonth() };
+  renderCurrentPage();
+}
+function _sbToggleSection(which) {
+  _sbInit();
+  if (which === 'unbooked') window._sbState.openUnbooked = !window._sbState.openUnbooked;
+  else window._sbState.openBooked = !window._sbState.openBooked;
+  renderCurrentPage();
+}
+
+// Arm a single task for tap-to-place (mobile path, no drag needed).
+function _sbArmSingle(taskId) {
+  _sbInit();
+  window._sbState.placing = { kind: 'task', id: taskId };
+  showToast('Tap a date to schedule this task', 'info');
+  renderCurrentPage();
+}
+
+// ── Assign-people picker (applies to all selected tasks) ──
+function _sbOpenAssignPicker() {
+  _sbInit();
+  if (window._sbState.selected.size === 0) { showToast('Select at least one task first', 'info'); return; }
+  // Pool = everyone, with people already on any selected task's project crew floated up.
+  const crewIds = new Set();
+  window._sbState.selected.forEach(tid => {
+    const t = _getTaskByIdAnyPhase(tid);
+    if (t && t.projectId != null) {
+      const a = getProjectAssignment(t.projectId);
+      (a.install || []).forEach(x => crewIds.add(x.id));
+      (a.pm || []).forEach(x => crewIds.add(x.id));
+    }
+  });
+  const pool = [...(state.team || [])].sort((a, b) => {
+    const aOn = crewIds.has(a.id) ? 0 : 1, bOn = crewIds.has(b.id) ? 0 : 1;
+    if (aOn !== bOn) return aOn - bOn;
+    return a.name.localeCompare(b.name);
+  });
+  window._sbAssignIds = new Set();
+  document.getElementById('sb-assign-dialog')?.remove();
+  const overlay = document.createElement('div');
+  overlay.id = 'sb-assign-dialog';
+  overlay.className = 'modal-overlay';
+  overlay.style.zIndex = '10002';
+  overlay.onclick = (e) => { if (e.target === overlay) overlay.remove(); };
+  overlay.innerHTML = `
+    <div class="modal-container" style="max-width:420px;display:flex;flex-direction:column">
+      <div class="modal-header">
+        <div class="modal-title">Assign to ${window._sbState.selected.size} task${window._sbState.selected.size === 1 ? '' : 's'}</div>
+        <button class="modal-close" onclick="document.getElementById('sb-assign-dialog').remove()">&times;</button>
+      </div>
+      <div class="modal-body" style="display:flex;flex-direction:column;gap:10px">
+        <div style="font-size:11px;color:#8B949E">Replaces existing assignees on every step of the selected tasks.</div>
+        <div class="itask-assignee-pick">
+          ${pool.map(m => `
+            <label class="itask-assignee-chip">
+              <input type="checkbox" value="${m.id}" onchange="_sbToggleAssignPerson(${m.id},this.checked)">
+              <span>${esc(m.name)}${crewIds.has(m.id) ? '' : ' <span style="font-size:9px;color:#D29922">(not on crew)</span>'}</span>
+            </label>`).join('')}
+        </div>
+      </div>
+      <div class="modal-footer" style="display:flex;gap:8px;justify-content:flex-end;padding:12px 16px;border-top:1px solid #30363D">
+        <button class="btn btn-sm" onclick="document.getElementById('sb-assign-dialog').remove()">Cancel</button>
+        <button class="btn btn-sm btn-primary" onclick="_sbCommitAssign()">Apply</button>
+      </div>
+    </div>`;
+  document.body.appendChild(overlay);
+}
+function _sbToggleAssignPerson(id, checked) {
+  if (!window._sbAssignIds) window._sbAssignIds = new Set();
+  if (checked) window._sbAssignIds.add(id); else window._sbAssignIds.delete(id);
+}
+function _sbCommitAssign() {
+  const ids = [...(window._sbAssignIds || new Set())];
+  window._sbState.selected.forEach(tid => _sbApplyAssignees(tid, ids));
+  document.getElementById('sb-assign-dialog')?.remove();
+  showToast(`Assigned ${ids.length} ${ids.length === 1 ? 'person' : 'people'}`, 'success');
+  renderCurrentPage();
+}
+
+// ── Drag + tap-to-place ──
+function _sbDragStart(ev, payload) {
+  try { ev.dataTransfer.effectAllowed = 'move'; ev.dataTransfer.setData('text/plain', payload); } catch (e) {}
+  window._sbDragPayload = payload;
+}
+function _sbCellDragOver(ev) {
+  if (window._sbDragPayload || window._sbState?.placing) {
+    ev.preventDefault();
+    try { ev.dataTransfer.dropEffect = 'move'; } catch (e) {}
+  }
+}
+function _sbCellDrop(ev, dateStr) {
+  ev.preventDefault();
+  const payload = (() => { try { return ev.dataTransfer.getData('text/plain'); } catch (e) { return null; } })() || window._sbDragPayload;
+  window._sbDragPayload = null;
+  _sbCommitPlace(dateStr, payload);
+}
+function _sbCellTap(dateStr) {
+  _sbInit();
+  if (!window._sbState.placing) return; // only acts when something is armed
+  _sbCommitPlace(dateStr, null);
+}
+
+// payloadOverride: drag payload string ("taskset" | "task:ID" | "project:ID" | "meeting:ID:type")
+// When null, fall back to the armed placing state (tap path).
+function _sbCommitPlace(dateStr, payloadOverride) {
+  _sbInit();
+  let kind, id, mtype;
+  if (payloadOverride) {
+    const parts = payloadOverride.split(':');
+    kind = parts[0]; id = parts[1] ? Number(parts[1]) : null; mtype = parts[2] || null;
+  } else if (window._sbState.placing) {
+    kind = window._sbState.placing.kind;
+    id = window._sbState.placing.id != null ? window._sbState.placing.id : null;
+  } else { return; }
+
+  if (kind === 'taskset') {
+    const ids = [...window._sbState.selected];
+    if (ids.length === 0) return;
+    ids.forEach(tid => _sbApplyDateToTask(tid, dateStr));
+    showToast(`Scheduled ${ids.length} task${ids.length === 1 ? '' : 's'} for ${fmtDateLocal(dateStr)}`, 'success');
+    window._sbState.selected = new Set();
+    window._sbState.armed = false;
+    window._sbState.placing = null;
+    renderCurrentPage();
+  } else if (kind === 'task') {
+    _sbApplyDateToTask(id, dateStr);
+    showToast(`Scheduled for ${fmtDateLocal(dateStr)}`, 'success');
+    window._sbState.placing = null;
+    renderCurrentPage();
+  } else if (kind === 'project') {
+    window._sbState.placing = null;
+    openInstallWindowPicker({
+      projectId: id, mode: 'booked',
+      initialStart: dateStr, initialEnd: dateStr,
+      onConfirm: () => renderCurrentPage()
+    });
+  } else if (kind === 'meeting') {
+    window._sbState.placing = null;
+    openProjectMeetingPicker(id, mtype, () => renderCurrentPage());
+  }
+}
+
+// Project / meeting tap path (no date needed up front — picker owns the date).
+function _sbScheduleProject(projectId) {
+  openInstallWindowPicker({ projectId, mode: 'booked', onConfirm: () => renderCurrentPage() });
+}
+function _sbScheduleMeeting(projectId, type) {
+  openProjectMeetingPicker(projectId, type, () => renderCurrentPage());
+}
+
+// ── Calendar context: tiny chips of what's already on a day ──
+function _sbDayItems(dateStr) {
+  const items = [];
+  // Install windows covering this working day
+  (state.projects || []).forEach(p => {
+    if (p.archived) return;
+    const win = getInstallWindow(p);
+    if (win && isWorkingDayInWindow(win, dateStr)) {
+      items.push({ color: getProjectColor(p.id), solid: win.source === 'booked', label: p.name });
+    }
+  });
+  // Install task subtasks on this date
+  (getInstallTasksForDate(dateStr) || []).forEach(({ task }) => {
+    const p = state.projects.find(x => x.id === task.projectId);
+    items.push({ color: p ? getProjectColor(p.id) : '#8B949E', solid: false, label: task.title });
+  });
+  // Design task subtasks on this date
+  (state.designTasks || []).forEach(t => {
+    if (t.projectId == null) return;
+    const hit = (t.subtasks || []).some(s => s.date === dateStr) || (t.isMilestone && t.dueDate === dateStr);
+    if (hit) {
+      const p = state.projects.find(x => x.id === t.projectId);
+      items.push({ color: p ? getProjectColor(p.id) : '#8B949E', solid: false, label: '📐 ' + t.title });
+    }
+  });
+  // Meetings on this date
+  (state.meetings || []).forEach(m => {
+    if (m.date === dateStr && (m.status === 'confirmed' || m.status === 'pending_approval' || !m.status)) {
+      const p = m.projectId != null ? state.projects.find(x => x.id === m.projectId) : null;
+      items.push({ color: p ? getProjectColor(p.id) : '#58A6FF', solid: true, label: m.title || 'Meeting' });
+    }
+  });
+  return items;
+}
+
+// ── Backlog item renderers ──
+function _sbAssigneeChips(t) {
+  const ids = new Set();
+  (t.subtasks || []).forEach(s => (s.assigneeIds || []).forEach(id => ids.add(id)));
+  (t.assigneeIds || []).forEach(id => ids.add(id));
+  const arr = [...ids].slice(0, 4);
+  if (arr.length === 0) return '';
+  return `<span class="sb-avatars">${arr.map(id => {
+    const m = getTeamMember(id);
+    return m ? `<span class="sb-avatar" title="${esc(m.name)}">${esc(getInitials(m.name))}</span>` : '';
+  }).join('')}</span>`;
+}
+
+function _sbTaskRow(t, phase, dated) {
+  _sbInit();
+  const p = state.projects.find(x => x.id === t.projectId);
+  const color = p ? getProjectColor(p.id) : '#8B949E';
+  const selected = window._sbState.selected.has(t.id);
+  const armed = window._sbState.armed;
+  const draggable = dated ? true : (armed ? selected : true); // unbooked: drag single anytime; set: drag when armed+selected
+  const prefix = phase === 'design' ? '📐 ' : '';
+  const sub = (t.subtasks || []).length;
+  const range = _sbTaskHasDate(t) ? getTaskDateRange(t) : null;
+  const dateLabel = range ? (range.start === range.end ? fmtDateLocal(range.start) : `${fmtDateLocal(range.start)} → ${fmtDateLocal(range.end)}`) : '';
+  const payload = (armed && selected) ? 'taskset' : ('task:' + t.id);
+  return `
+    <div class="sb-item sb-item-task ${selected ? 'sb-sel' : ''}"
+         draggable="${draggable}"
+         ondragstart="_sbDragStart(event,'${payload}')"
+         style="--sb-color:${color}">
+      ${!dated ? `<input type="checkbox" class="sb-check" ${selected ? 'checked' : ''} ${armed ? 'disabled' : ''} onclick="event.stopPropagation();_sbToggleSelect(${t.id})">` : '<span class="sb-check-spacer"></span>'}
+      <div class="sb-item-body">
+        <div class="sb-item-title">${prefix}${esc(t.title)}</div>
+        <div class="sb-item-meta">${p ? esc(p.name) : 'Unassigned'}${sub ? ` · ${sub} step${sub === 1 ? '' : 's'}` : (t.isMilestone ? ' · milestone' : '')}${dateLabel ? ` · ${dateLabel}` : ''}</div>
+      </div>
+      ${_sbAssigneeChips(t)}
+      ${!dated ? `<button class="sb-mini-btn" title="Schedule" onclick="event.stopPropagation();_sbArmSingle(${t.id})">📅</button>` : ''}
+    </div>`;
+}
+
+function _sbProjectRow(p) {
+  const color = getProjectColor(p.id);
+  const win = getInstallWindow(p);
+  const sub = win ? `Est. ${fmtDateLocal(win.start)}` : 'No install window';
+  return `
+    <div class="sb-item sb-item-project" draggable="true"
+         ondragstart="_sbDragStart(event,'project:${p.id}')" style="--sb-color:${color}">
+      <span class="sb-check-spacer"></span>
+      <div class="sb-item-body">
+        <div class="sb-item-title">🏗️ ${esc(p.name)}</div>
+        <div class="sb-item-meta">Needs booked window · ${sub}</div>
+      </div>
+      <button class="sb-mini-btn" title="Book window" onclick="event.stopPropagation();_sbScheduleProject(${p.id})">📅</button>
+    </div>`;
+}
+
+function _sbMeetingRow(mtg) {
+  const p = state.projects.find(x => x.id === mtg.projectId);
+  const color = p ? getProjectColor(p.id) : '#58A6FF';
+  return `
+    <div class="sb-item sb-item-meeting" draggable="true"
+         ondragstart="_sbDragStart(event,'meeting:${mtg.projectId}:${mtg.type}')" style="--sb-color:${color}">
+      <span class="sb-check-spacer"></span>
+      <div class="sb-item-body">
+        <div class="sb-item-title">🤝 ${esc(mtg.title)}${mtg.overdue ? ' <span class="sb-tag-overdue">overdue</span>' : ''}</div>
+        <div class="sb-item-meta">${p ? esc(p.name) : ''} · meeting</div>
+      </div>
+      <button class="sb-mini-btn" title="Schedule meeting" onclick="event.stopPropagation();_sbScheduleMeeting(${mtg.projectId},'${mtg.type}')">📅</button>
+    </div>`;
+}
+
+// ── Calendar grid ──
+function _sbRenderCalendar() {
+  _sbInit();
+  const { year, month } = window._sbState.month;
+  const months = ['January','February','March','April','May','June','July','August','September','October','November','December'];
+  const dows = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];
+  const firstDow = new Date(year, month, 1).getDay();
+  const gridStart = _addDays(new Date(year, month, 1), -firstDow);
+  const todayStr = _ymd(new Date());
+  const placing = !!window._sbState.placing;
+
+  let cells = '';
+  for (let i = 0; i < 42; i++) {
+    const dt = _addDays(gridStart, i);
+    const ds = _ymd(dt);
+    const inMonth = dt.getMonth() === month;
+    const isToday = ds === todayStr;
+    const dow = dt.getDay();
+    const weekend = dow === 0 || dow === 6;
+    const dayItems = _sbDayItems(ds);
+    const shown = dayItems.slice(0, 2);
+    const extra = dayItems.length - shown.length;
+    cells += `
+      <div class="sb-cell ${inMonth ? '' : 'sb-cell-out'} ${isToday ? 'sb-cell-today' : ''} ${weekend ? 'sb-cell-weekend' : ''}"
+           ondragover="_sbCellDragOver(event)" ondrop="_sbCellDrop(event,'${ds}')" onclick="_sbCellTap('${ds}')">
+        <div class="sb-cell-num">${dt.getDate()}</div>
+        <div class="sb-cell-chips">
+          ${shown.map(it => `<div class="sb-chip ${it.solid ? 'sb-chip-solid' : 'sb-chip-outline'}" style="--sb-color:${it.color}" title="${esc(it.label)}">${esc(it.label)}</div>`).join('')}
+          ${extra > 0 ? `<div class="sb-chip-more">+${extra}</div>` : ''}
+        </div>
+      </div>`;
+  }
+
+  return `
+    <div class="sb-cal-head">
+      <div class="sb-cal-title">${months[month]} ${year}</div>
+      <div class="sb-cal-nav">
+        <button class="sb-navbtn" onclick="_sbNavMonth(-1)" aria-label="Previous month">‹</button>
+        <button class="sb-navbtn sb-today" onclick="_sbToday()">Today</button>
+        <button class="sb-navbtn" onclick="_sbNavMonth(1)" aria-label="Next month">›</button>
+      </div>
+    </div>
+    ${placing ? '<div class="sb-place-hint">Drop on a date — or tap a date — to schedule.</div>' : ''}
+    <div class="sb-grid ${placing ? 'sb-grid-armed' : ''}">
+      ${dows.map(d => `<div class="sb-dow">${d}</div>`).join('')}
+      ${cells}
+    </div>`;
+}
+
+// ── Backlog panel ──
+function _sbRenderBacklog() {
+  _sbInit();
+  const f = window._sbState.filter;
+  const wantInstall = f === 'all' || f === 'install';
+  const wantDesign = f === 'all' || f === 'design';
+  const wantMeeting = f === 'all' || f === 'meeting';
+  // Projects-needing-window group with the install filter (and All).
+
+  // Unbooked
+  const unbookedTasks = []
+    .concat(wantInstall ? _sbCollectTasks('install', false).map(t => ({ t, phase: 'install' })) : [])
+    .concat(wantDesign ? _sbCollectTasks('design', false).map(t => ({ t, phase: 'design' })) : []);
+  const projects = wantInstall ? _sbProjectsNeedingWindow() : [];
+  const meetings = wantMeeting ? _sbBacklogMeetings() : [];
+
+  // Booked
+  const bookedTasks = []
+    .concat(wantInstall ? _sbCollectTasks('install', true).map(t => ({ t, phase: 'install' })) : [])
+    .concat(wantDesign ? _sbCollectTasks('design', true).map(t => ({ t, phase: 'design' })) : []);
+
+  const unbookedCount = unbookedTasks.length + projects.length + meetings.length;
+  const bookedCount = bookedTasks.length;
+
+  const sortTasks = arr => arr.sort((a, b) => {
+    const pa = state.projects.find(x => x.id === a.t.projectId);
+    const pb = state.projects.find(x => x.id === b.t.projectId);
+    return ((pa && pa.name) || '').localeCompare((pb && pb.name) || '');
+  });
+  sortTasks(unbookedTasks); sortTasks(bookedTasks);
+
+  const pill = (key, label) => `<button class="sb-pill ${f === key ? 'sb-pill-on' : ''}" onclick="_sbSetFilter('${key}')">${label}</button>`;
+
+  const sel = window._sbState.selected.size;
+  const armed = window._sbState.armed;
+  const bulkBar = sel > 0 ? `
+    <div class="sb-bulkbar">
+      <span class="sb-bulkn">${sel} selected</span>
+      ${armed
+        ? `<button class="btn btn-sm" onclick="_sbEditSelection()">Edit</button>
+           <span class="sb-bulk-hint">Drag onto a date →</span>`
+        : `<button class="btn btn-sm" onclick="_sbOpenAssignPicker()">Assign people</button>
+           <button class="btn btn-sm btn-primary" onclick="_sbDone()">Done</button>`}
+      <button class="sb-bulk-clear" onclick="_sbClearSelect()" title="Clear">✕</button>
+    </div>` : '';
+
+  const unbookedBody = window._sbState.openUnbooked ? `
+    <div class="sb-list">
+      ${unbookedTasks.map(x => _sbTaskRow(x.t, x.phase, false)).join('')}
+      ${projects.map(p => _sbProjectRow(p)).join('')}
+      ${meetings.map(m => _sbMeetingRow(m)).join('')}
+      ${unbookedCount === 0 ? '<div class="sb-empty">Nothing unscheduled here.</div>' : ''}
+    </div>` : '';
+
+  const bookedBody = window._sbState.openBooked ? `
+    <div class="sb-list">
+      ${bookedTasks.map(x => _sbTaskRow(x.t, x.phase, true)).join('')}
+      ${bookedCount === 0 ? '<div class="sb-empty">Nothing scheduled yet.</div>' : ''}
+    </div>` : '';
+
+  return `
+    <div class="sb-filters">
+      ${pill('all', 'All')}${pill('install', 'Installs')}${pill('design', 'Design')}${pill('meeting', 'Meetings')}
+    </div>
+    ${bulkBar}
+    <div class="sb-section">
+      <button class="sb-section-head" onclick="_sbToggleSection('unbooked')">
+        <span class="sb-caret">${window._sbState.openUnbooked ? '▾' : '▸'}</span>
+        <span>Unbooked</span><span class="sb-count">${unbookedCount}</span>
+      </button>
+      ${unbookedBody}
+    </div>
+    <div class="sb-section">
+      <button class="sb-section-head" onclick="_sbToggleSection('booked')">
+        <span class="sb-caret">${window._sbState.openBooked ? '▾' : '▸'}</span>
+        <span>Booked</span><span class="sb-count">${bookedCount}</span>
+      </button>
+      ${bookedBody}
+    </div>`;
+}
+
+// ── Page entry ──
+function renderScheduleBuilder(c) {
+  document.getElementById('page-title').textContent = 'Schedule Builder';
+  if (!sbCanAccess()) {
+    c.innerHTML = `<div class="alert">Schedule Builder is available to Project Coordinators, the Install Manager, and admins.</div>`;
+    return;
+  }
+  _sbInit();
+  c.innerHTML = `
+    <div class="sb-wrap">
+      <div class="sb-backlog">
+        <div class="sb-panel-head">Backlog</div>
+        ${_sbRenderBacklog()}
+      </div>
+      <div class="sb-cal">
+        ${_sbRenderCalendar()}
+      </div>
+    </div>`;
 }
