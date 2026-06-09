@@ -7364,3 +7364,26 @@ html.text-large body {
   .sb-right { width: 100%; }
   .sb-panel2-body { max-height: none; }
 }
+
+/* ── Schedule Builder — visual polish (match in-project task builder) ── */
+.sb-tag {
+  display: inline-block; font-size: 10px; font-weight: 600; line-height: 1.6;
+  padding: 0 7px; border-radius: 5px; vertical-align: middle;
+  background: #0D1F3D; border: 1px solid #1565C0; color: #58A6FF;
+}
+.sb-item-title .sb-tag { margin-left: 4px; }
+
+.sb-iconbtn {
+  flex: 0 0 auto; display: inline-flex; align-items: center; justify-content: center;
+  width: 28px; height: 28px; background: transparent; border: 1px solid #30363D;
+  color: #8B949E; border-radius: 7px; cursor: pointer; transition: all .12s;
+}
+.sb-iconbtn:hover { border-color: #58A6FF; color: #58A6FF; }
+
+/* Panel reuses .itask-card styling; these just wire drag affordances + spacing */
+.sb-panel2-body .itask-card { margin: 0; }
+.sb-panel2-body .itask-head-body.sb-draggable { cursor: grab; }
+.sb-panel2-body .itask-sub.sb-draggable { cursor: grab; }
+.sb-panel2-body .sb-draggable:active { cursor: grabbing; }
+.sb-panel2-body .itask-drag-handle { cursor: grab; color: #6E7681; }
+.sb-panel2-body .itask-head-actions { display: flex; align-items: center; gap: 6px; }
