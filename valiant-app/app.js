@@ -21357,27 +21357,40 @@ function _sbRenderProjectPanel() {
 
   const taskBlocks = tasks.map(({ t, phase }) => {
     const range = getTaskDateRange(t);
-    const span = range ? (range.start === range.end ? fmtDateLocal(range.start) : `${fmtDateLocal(range.start)} → ${fmtDateLocal(range.end)}`) : 'unscheduled';
-    const subs = (t.subtasks || []).map(s => {
-      const sd = s.date ? fmtDateLocal(s.date) : 'unpinned';
-      return `
-        <div class="sb-psub" draggable="true" ondragstart="_sbDragStart(event,'subtask:${t.id}:${s.id}')">
-          <span class="sb-psub-grip">⠿</span>
-          <span class="sb-psub-title ${s.done ? 'sb-done' : ''}">${esc(s.title)}</span>
-          <span class="sb-psub-date ${s.date ? '' : 'sb-unpinned'}">${sd}</span>
-          ${_sbAssigneeChips(s)}
-          <button class="sb-mini-btn sb-mini-sm" title="Pin to a day" onclick="event.stopPropagation();_sbArmSubtask(${t.id},${s.id})">📅</button>
-        </div>`;
-    }).join('');
+    const dateLabel = range
+      ? (range.start === range.end ? fmtDateLocal(range.start) : `${fmtDateLocal(range.start)} – ${fmtDateLocal(range.end)}`)
+      : 'No dates set';
+    const subTotal = (t.subtasks || []).length;
+    const sys = t.system ? `<span class="itask-sys">${esc(t.system)}</span>` : '';
+    const phaseTag = phase === 'design' ? '<span class="itask-tplbadge">Design</span>' : '';
+    const tplTag = t.templateKey ? '<span class="itask-tplbadge">from template</span>' : '';
+    const subs = (t.subtasks || []).slice()
+      .sort((a, b) => (a.date || '9999').localeCompare(b.date || '9999'))
+      .map(s => `
+        <div class="itask-sub sb-draggable" draggable="true" ondragstart="_sbDragStart(event,'subtask:${t.id}:${s.id}')">
+          <span class="itask-drag-handle" title="Drag onto a date">⋮⋮</span>
+          <div class="itask-sub-body">
+            <div class="itask-sub-title">${esc(s.title)}</div>
+            <div class="itask-sub-meta">
+              ${s.date ? esc(fmtDateLocal(s.date)) : '<span class="itask-nodate">Unpinned</span>'}
+              <span class="itask-sub-assignees">${_sbAssigneeChipsV2(s.assigneeIds)}</span>
+            </div>
+            ${s.notes ? `<div class="itask-sub-notes">${esc(s.notes)}</div>` : ''}
+          </div>
+          <button class="sb-iconbtn" title="Pin to a day" onclick="event.stopPropagation();_sbArmSubtask(${t.id},${s.id})">${SB_SVG_CAL}</button>
+        </div>`).join('');
     return `
-      <div class="sb-ptask" style="--sb-color:${color}">
-        <div class="sb-ptask-head" draggable="true" ondragstart="_sbDragStart(event,'task:${t.id}')">
-          <span class="sb-psub-grip">⠿</span>
-          <span class="sb-ptask-title">${phase === 'design' ? '📐 ' : ''}${esc(t.title)}</span>
-          <span class="sb-ptask-span">${span}</span>
-          <button class="sb-mini-btn sb-mini-sm" title="Schedule task" onclick="event.stopPropagation();_sbArmPanelTask(${t.id})">📅</button>
+      <div class="itask-card${t.isMilestone ? ' is-milestone' : ''}">
+        <div class="itask-head">
+          <div class="itask-head-body sb-draggable" draggable="true" ondragstart="_sbDragStart(event,'task:${t.id}')">
+            <div class="itask-title">${esc(t.title)} ${sys}${phaseTag}${tplTag}</div>
+            <div class="itask-meta">${esc(dateLabel)}${t.isMilestone ? '' : ` · ${subTotal} step${subTotal === 1 ? '' : 's'}`}</div>
+          </div>
+          <div class="itask-head-actions">
+            <button class="sb-iconbtn" title="Schedule task" onclick="event.stopPropagation();_sbArmPanelTask(${t.id})">${SB_SVG_CAL}</button>
+          </div>
         </div>
-        ${subs ? `<div class="sb-psubs">${subs}</div>` : '<div class="sb-psubs sb-empty" style="padding:6px 8px">No steps.</div>'}
+        ${subTotal > 0 ? `<div class="itask-subs">${subs}</div>` : ''}
       </div>`;
   }).join('');
 
@@ -21385,7 +21398,7 @@ function _sbRenderProjectPanel() {
     <div class="sb-panel2" style="--sb-color:${color}">
       <div class="sb-panel2-head">
         <span class="sb-panel2-title">${esc(p.name)}</span>
-        <span class="sb-panel2-sub">drag a task or step onto a date ↑</span>
+        <span class="sb-panel2-sub">drag a task or step onto a date above</span>
         <button class="sb-bulk-clear" onclick="_sbCloseProject()" title="Close">✕</button>
       </div>
       <div class="sb-panel2-body">
@@ -21639,7 +21652,7 @@ function _sbDayItems(dateStr) {
     if (t.projectId == null) return;
     const p = state.projects.find(x => x.id === t.projectId);
     const color = p ? getProjectColor(p.id) : '#8B949E';
-    const pre = isDesign ? '📐 ' : '';
+    const pre = '';
     if (t.schedStart && dateStr >= t.schedStart && dateStr <= (t.schedEnd || t.schedStart)) {
       items.push({ color, solid: false, label: pre + t.title });
     } else if ((t.subtasks || []).some(s => s.date === dateStr)) {
@@ -21661,6 +21674,24 @@ function _sbDayItems(dateStr) {
 }
 
 // ── Backlog item renderers ──
+const SB_SVG_CAL = '<svg width="13" height="13" viewBox="0 0 16 16" fill="none"><rect x="2.5" y="3.5" width="11" height="10" rx="1.3" stroke="currentColor" stroke-width="1.2"/><path d="M2.5 6.5h11M5.5 2v2.2M10.5 2v2.2" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/></svg>';
+
+// Assignee chips matching the in-project task builder (colored badge + first name).
+function _sbAssigneeChipsV2(ids) {
+  if (!ids || ids.length === 0) return '';
+  return ids.map(id => {
+    const m = getTeamMember(id);
+    if (!m) return '';
+    const memberColor = (DASHBOARD_ACCESS.find(d => d.key === m.primaryRole) || {}).color || '#6E7681';
+    const initials = m.initials || (m.name || '').slice(0, 2).toUpperCase();
+    const first = (m.name || '').split(' ')[0];
+    return `<span class="itask-assignee-chipv2" title="${esc(m.name)}">
+      <span class="itask-assignee-badge" style="background:${memberColor}22;border-color:${memberColor};color:${memberColor}">${esc(initials)}</span>
+      <span class="itask-assignee-name">${esc(first)}</span>
+    </span>`;
+  }).join('');
+}
+
 function _sbAssigneeChips(t) {
   const ids = new Set();
   (t.subtasks || []).forEach(s => (s.assigneeIds || []).forEach(id => ids.add(id)));
@@ -21680,7 +21711,8 @@ function _sbTaskRow(t, phase, dated) {
   const selected = window._sbState.selected.has(t.id);
   const armed = window._sbState.armed;
   const draggable = dated ? true : (armed ? selected : true); // unbooked: drag single anytime; set: drag when armed+selected
-  const prefix = phase === 'design' ? '📐 ' : '';
+  const sysChip = t.system ? ` <span class="sb-tag">${esc(t.system)}</span>` : '';
+  const phaseChip = phase === 'design' ? ' <span class="sb-tag">Design</span>' : '';
   const sub = (t.subtasks || []).length;
   const range = _sbTaskHasDate(t) ? getTaskDateRange(t) : null;
   const dateLabel = range ? (range.start === range.end ? fmtDateLocal(range.start) : `${fmtDateLocal(range.start)} → ${fmtDateLocal(range.end)}`) : '';
@@ -21693,11 +21725,11 @@ function _sbTaskRow(t, phase, dated) {
          style="--sb-color:${color}">
       ${!dated ? `<input type="checkbox" class="sb-check" ${selected ? 'checked' : ''} ${armed ? 'disabled' : ''} onclick="event.stopPropagation();_sbToggleSelect(${t.id})">` : '<span class="sb-check-spacer"></span>'}
       <div class="sb-item-body" onclick="_sbOpenProject(${t.projectId})">
-        <div class="sb-item-title">${prefix}${esc(t.title)}</div>
+        <div class="sb-item-title">${esc(t.title)}${sysChip}${phaseChip}</div>
         <div class="sb-item-meta">${p ? esc(p.name) : 'Unassigned'}${sub ? ` · ${sub} step${sub === 1 ? '' : 's'}` : (t.isMilestone ? ' · milestone' : '')}${dateLabel ? ` · ${dateLabel}` : ''}</div>
       </div>
       ${_sbAssigneeChips(t)}
-      ${!dated ? `<button class="sb-mini-btn" title="Schedule" onclick="event.stopPropagation();_sbArmSingle(${t.id})">📅</button>` : ''}
+      ${!dated ? `<button class="sb-iconbtn" title="Schedule" onclick="event.stopPropagation();_sbArmSingle(${t.id})">${SB_SVG_CAL}</button>` : ''}
     </div>`;
 }
 
@@ -21710,10 +21742,10 @@ function _sbProjectRow(p) {
          ondragstart="_sbDragStart(event,'project:${p.id}')" style="--sb-color:${color}">
       <span class="sb-check-spacer"></span>
       <div class="sb-item-body" onclick="_sbOpenProject(${p.id})">
-        <div class="sb-item-title">🏗️ ${esc(p.name)}</div>
-        <div class="sb-item-meta">Needs booked window · ${sub}</div>
+        <div class="sb-item-title">${esc(p.name)} <span class="sb-tag">Needs window</span></div>
+        <div class="sb-item-meta">${sub}</div>
       </div>
-      <button class="sb-mini-btn" title="Book window" onclick="event.stopPropagation();_sbScheduleProject(${p.id})">📅</button>
+      <button class="sb-iconbtn" title="Book window" onclick="event.stopPropagation();_sbScheduleProject(${p.id})">${SB_SVG_CAL}</button>
     </div>`;
 }
 
@@ -21725,10 +21757,10 @@ function _sbMeetingRow(mtg) {
          ondragstart="_sbDragStart(event,'meeting:${mtg.projectId}:${mtg.type}')" style="--sb-color:${color}">
       <span class="sb-check-spacer"></span>
       <div class="sb-item-body" onclick="_sbOpenProject(${mtg.projectId})">
-        <div class="sb-item-title">🤝 ${esc(mtg.title)}${mtg.overdue ? ' <span class="sb-tag-overdue">overdue</span>' : ''}</div>
-        <div class="sb-item-meta">${p ? esc(p.name) : ''} · meeting</div>
+        <div class="sb-item-title">${esc(mtg.title)} <span class="sb-tag">Meeting</span>${mtg.overdue ? ' <span class="sb-tag-overdue">overdue</span>' : ''}</div>
+        <div class="sb-item-meta">${p ? esc(p.name) : ''}</div>
       </div>
-      <button class="sb-mini-btn" title="Schedule meeting" onclick="event.stopPropagation();_sbScheduleMeeting(${mtg.projectId},'${mtg.type}')">📅</button>
+      <button class="sb-iconbtn" title="Schedule meeting" onclick="event.stopPropagation();_sbScheduleMeeting(${mtg.projectId},'${mtg.type}')">${SB_SVG_CAL}</button>
     </div>`;
 }
 
@@ -21839,9 +21871,9 @@ function _sbRenderBacklog() {
         const ph = _getTaskPhase(tid);
         return `<div class="sb-tray-item" draggable="true"
                   ondragstart="_sbTrayDragStart(event,${tid})" ondragover="_sbTrayDragOver(event)" ondrop="_sbTrayDrop(event,${tid})">
-                  <span class="sb-tray-grip">⠿</span>
+                  <span class="sb-tray-grip">⋮⋮</span>
                   <span class="sb-tray-n">${i + 1}</span>
-                  <span class="sb-tray-title">${ph === 'design' ? '📐 ' : ''}${esc(t.title)}</span>
+                  <span class="sb-tray-title">${ph === 'design' ? 'Design · ' : ''}${esc(t.title)}</span>
                   <span class="sb-tray-proj">${p ? esc(p.name) : ''}</span>
                 </div>`;
       }).join('')}
