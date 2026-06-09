@@ -1503,6 +1503,10 @@ function getInstallTaskById(taskId) {
 // returns { start: dueDate, end: dueDate }.
 function getTaskDateRange(task) {
   if (!task) return null;
+  // Explicit scheduled range (set from Schedule Builder) wins — the task spans
+  // this window as a bar on all calendars; subtasks may still be pinned to
+  // specific days inside it.
+  if (task.schedStart) return { start: task.schedStart, end: task.schedEnd || task.schedStart };
   if (task.isMilestone) {
     return task.dueDate ? { start: task.dueDate, end: task.dueDate } : null;
   }
@@ -21171,9 +21175,12 @@ function _sbInit() {
   window._sbState = {
     month: { year: now.getFullYear(), month: now.getMonth() },
     filter: 'all',                 // all | install | design | meeting
-    selected: new Set(),           // selected TASK ids (numeric, any phase)
+    selected: new Set(),           // selected TASK ids (membership)
+    order: [],                     // selected TASK ids in chosen sequence
     armed: false,                  // step 2 — selection armed for placing
     placing: null,                 // { kind:'taskset' } | { kind:'task', id } | null (tap-to-place)
+    rangeStart: null,              // first cell tapped when picking a start→end range
+    activeProject: null,           // project id whose tasks/subtasks fill the panel below the calendar
     openUnbooked: true,
     openBooked: false
   };
@@ -21182,18 +21189,25 @@ function _sbInit() {
 function _sbPhaseOf(taskId) { return _getTaskPhase(taskId); }
 
 // ── Mutations ──
-function _sbApplyDateToTask(taskId, dateStr) {
+// Apply a scheduled range to a task. End defaults to start (single day). The
+// task spans this window on calendars; subtask-level day pinning (B3b.3) lives
+// inside it.
+function _sbApplyRangeToTask(taskId, startStr, endStr) {
   const phase = _getTaskPhase(taskId);
   const t = _getTaskByIdAnyPhase(taskId);
   if (!t) return;
+  let s = startStr, e = endStr || startStr;
+  if (s > e) { const tmp = s; s = e; e = tmp; } // normalize
   if (t.isMilestone) {
-    t.dueDate = dateStr;
+    t.dueDate = s;
   } else {
-    (t.subtasks || []).forEach(s => { s.date = dateStr; });
+    t.schedStart = s;
+    t.schedEnd = e;
   }
   save(phase === 'design' ? 'vi_design_tasks' : 'vi_install_tasks',
        phase === 'design' ? state.designTasks : state.installTasks);
 }
+function _sbApplyDateToTask(taskId, dateStr) { _sbApplyRangeToTask(taskId, dateStr, dateStr); }
 function _sbApplyAssignees(taskId, ids) {
   const phase = _getTaskPhase(taskId);
   const t = _getTaskByIdAnyPhase(taskId);
@@ -21209,15 +21223,18 @@ function _sbApplyAssignees(taskId, ids) {
 function _sbToggleSelect(taskId) {
   _sbInit();
   if (window._sbState.armed) return; // locked after Done; use Edit to change
-  if (window._sbState.selected.has(taskId)) window._sbState.selected.delete(taskId);
-  else window._sbState.selected.add(taskId);
+  const st = window._sbState;
+  if (st.selected.has(taskId)) { st.selected.delete(taskId); st.order = st.order.filter(x => x !== taskId); }
+  else { st.selected.add(taskId); st.order.push(taskId); }
   renderCurrentPage();
 }
 function _sbClearSelect() {
   _sbInit();
   window._sbState.selected = new Set();
+  window._sbState.order = [];
   window._sbState.armed = false;
   window._sbState.placing = null;
+  window._sbState.rangeStart = null;
   renderCurrentPage();
 }
 function _sbDone() {
@@ -21225,14 +21242,28 @@ function _sbDone() {
   if (window._sbState.selected.size === 0) { showToast('Select at least one task first', 'info'); return; }
   window._sbState.armed = true;
   window._sbState.placing = { kind: 'taskset' };
+  window._sbState.rangeStart = null;
   renderCurrentPage();
 }
 function _sbEditSelection() {
   _sbInit();
   window._sbState.armed = false;
   window._sbState.placing = null;
+  window._sbState.rangeStart = null;
   renderCurrentPage();
 }
+// Reorder within the armed selection tray (drag handle).
+function _sbReorder(fromId, toId) {
+  _sbInit();
+  const o = window._sbState.order;
+  const fi = o.indexOf(fromId), ti = o.indexOf(toId);
+  if (fi < 0 || ti < 0 || fi === ti) return;
+  o.splice(ti, 0, o.splice(fi, 1)[0]);
+  renderCurrentPage();
+}
+function _sbTrayDragStart(ev, id) { window._sbTrayDrag = id; try { ev.dataTransfer.effectAllowed = 'move'; } catch (e) {} }
+function _sbTrayDragOver(ev) { ev.preventDefault(); }
+function _sbTrayDrop(ev, id) { ev.preventDefault(); if (window._sbTrayDrag != null) { _sbReorder(window._sbTrayDrag, id); window._sbTrayDrag = null; } }
 function _sbSetFilter(f) { _sbInit(); window._sbState.filter = f; renderCurrentPage(); }
 function _sbNavMonth(delta) {
   _sbInit();
@@ -21260,8 +21291,107 @@ function _sbToggleSection(which) {
 function _sbArmSingle(taskId) {
   _sbInit();
   window._sbState.placing = { kind: 'task', id: taskId };
-  showToast('Tap a date to schedule this task', 'info');
+  window._sbState.rangeStart = null;
+  showToast('Tap a start then end date to schedule', 'info');
   renderCurrentPage();
+}
+
+// ── Project panel (below calendar): full task + subtask tree, drag onto calendar ──
+function _sbOpenProject(projectId) {
+  _sbInit();
+  window._sbState.activeProject = projectId;
+  renderCurrentPage();
+}
+function _sbCloseProject() {
+  _sbInit();
+  window._sbState.activeProject = null;
+  renderCurrentPage();
+}
+function _sbArmPanelTask(taskId) {
+  _sbInit();
+  window._sbState.placing = { kind: 'task', id: taskId };
+  window._sbState.rangeStart = null;
+  showToast('Tap a start then end date', 'info');
+  renderCurrentPage();
+}
+function _sbArmSubtask(taskId, subId) {
+  _sbInit();
+  window._sbState.placing = { kind: 'subtask', taskId, subId };
+  window._sbState.rangeStart = null;
+  showToast('Tap a date to pin this step', 'info');
+  renderCurrentPage();
+}
+// Pin a subtask to a specific day. If the task carries an explicit span, expand
+// it to keep the pinned day inside the bar.
+function _sbPinSubtask(taskId, subId, dateStr) {
+  const phase = _getTaskPhase(taskId);
+  const t = _getTaskByIdAnyPhase(taskId);
+  if (!t) return;
+  const s = (t.subtasks || []).find(x => x.id === subId);
+  if (!s) return;
+  s.date = dateStr;
+  if (t.schedStart) {
+    if (dateStr < t.schedStart) t.schedStart = dateStr;
+    if (dateStr > (t.schedEnd || t.schedStart)) t.schedEnd = dateStr;
+  }
+  save(phase === 'design' ? 'vi_design_tasks' : 'vi_install_tasks',
+       phase === 'design' ? state.designTasks : state.installTasks);
+}
+
+function _sbProjectTasks(projectId) {
+  const inst = (state.installTasks || []).filter(t => t.projectId === projectId).map(t => ({ t, phase: 'install' }));
+  const des = (state.designTasks || []).filter(t => t.projectId === projectId).map(t => ({ t, phase: 'design' }));
+  return inst.concat(des);
+}
+
+function _sbRenderProjectPanel() {
+  _sbInit();
+  const pid = window._sbState.activeProject;
+  if (pid == null) {
+    return `<div class="sb-panel2 sb-panel2-empty">Select a project from the backlog to plan its tasks &amp; steps here.</div>`;
+  }
+  const p = state.projects.find(x => x.id === pid);
+  if (!p) return `<div class="sb-panel2 sb-panel2-empty">Project not found.</div>`;
+  const color = getProjectColor(pid);
+  const tasks = _sbProjectTasks(pid);
+
+  const taskBlocks = tasks.map(({ t, phase }) => {
+    const range = getTaskDateRange(t);
+    const span = range ? (range.start === range.end ? fmtDateLocal(range.start) : `${fmtDateLocal(range.start)} → ${fmtDateLocal(range.end)}`) : 'unscheduled';
+    const subs = (t.subtasks || []).map(s => {
+      const sd = s.date ? fmtDateLocal(s.date) : 'unpinned';
+      return `
+        <div class="sb-psub" draggable="true" ondragstart="_sbDragStart(event,'subtask:${t.id}:${s.id}')">
+          <span class="sb-psub-grip">⠿</span>
+          <span class="sb-psub-title ${s.done ? 'sb-done' : ''}">${esc(s.title)}</span>
+          <span class="sb-psub-date ${s.date ? '' : 'sb-unpinned'}">${sd}</span>
+          ${_sbAssigneeChips(s)}
+          <button class="sb-mini-btn sb-mini-sm" title="Pin to a day" onclick="event.stopPropagation();_sbArmSubtask(${t.id},${s.id})">📅</button>
+        </div>`;
+    }).join('');
+    return `
+      <div class="sb-ptask" style="--sb-color:${color}">
+        <div class="sb-ptask-head" draggable="true" ondragstart="_sbDragStart(event,'task:${t.id}')">
+          <span class="sb-psub-grip">⠿</span>
+          <span class="sb-ptask-title">${phase === 'design' ? '📐 ' : ''}${esc(t.title)}</span>
+          <span class="sb-ptask-span">${span}</span>
+          <button class="sb-mini-btn sb-mini-sm" title="Schedule task" onclick="event.stopPropagation();_sbArmPanelTask(${t.id})">📅</button>
+        </div>
+        ${subs ? `<div class="sb-psubs">${subs}</div>` : '<div class="sb-psubs sb-empty" style="padding:6px 8px">No steps.</div>'}
+      </div>`;
+  }).join('');
+
+  return `
+    <div class="sb-panel2" style="--sb-color:${color}">
+      <div class="sb-panel2-head">
+        <span class="sb-panel2-title">${esc(p.name)}</span>
+        <span class="sb-panel2-sub">drag a task or step onto a date ↑</span>
+        <button class="sb-bulk-clear" onclick="_sbCloseProject()" title="Close">✕</button>
+      </div>
+      <div class="sb-panel2-body">
+        ${tasks.length ? taskBlocks : '<div class="sb-empty">No tasks on this project yet.</div>'}
+      </div>
+    </div>`;
 }
 
 // ── Assign-people picker (applies to all selected tasks) ──
@@ -21344,8 +21474,94 @@ function _sbCellDrop(ev, dateStr) {
 }
 function _sbCellTap(dateStr) {
   _sbInit();
-  if (!window._sbState.placing) return; // only acts when something is armed
-  _sbCommitPlace(dateStr, null);
+  const st = window._sbState;
+  if (!st.placing) return; // only acts when something is armed
+  const kind = st.placing.kind;
+  if (kind === 'taskset' || kind === 'task') {
+    // First tap sets the start; second tap sets the end and commits the range.
+    if (!st.rangeStart) {
+      st.rangeStart = dateStr;
+      renderCurrentPage();
+    } else {
+      _sbCommitRange(st.rangeStart, dateStr);
+    }
+  } else if (kind === 'subtask') {
+    // Steps are single-day — one tap pins them.
+    _sbPinSubtask(st.placing.taskId, st.placing.subId, dateStr);
+    showToast(`Step pinned to ${fmtDateLocal(dateStr)}`, 'success');
+    st.placing = null; st.rangeStart = null;
+    renderCurrentPage();
+  } else {
+    // project / meeting — single tap routes straight to its picker.
+    _sbCommitPlace(dateStr, null);
+  }
+}
+
+// Apply a start→end range to whatever is currently armed (taskset or single task).
+function _sbCommitRange(startStr, endStr) {
+  _sbInit();
+  const st = window._sbState;
+  const place = st.placing;
+  if (!place) return;
+  let s = startStr, e = endStr || startStr;
+  if (s > e) { const t = s; s = e; e = t; }
+  const span = (s === e) ? fmtDateLocal(s) : `${fmtDateLocal(s)} → ${fmtDateLocal(e)}`;
+  if (place.kind === 'taskset') {
+    const ids = [...st.order.length ? st.order : [...st.selected]];
+    if (ids.length === 0) return;
+    ids.forEach(tid => _sbApplyRangeToTask(tid, s, e));
+    showToast(`Scheduled ${ids.length} task${ids.length === 1 ? '' : 's'} — ${span}`, 'success');
+    st.selected = new Set(); st.order = []; st.armed = false;
+  } else if (place.kind === 'task') {
+    _sbApplyRangeToTask(place.id, s, e);
+    showToast(`Scheduled — ${span}`, 'success');
+  }
+  st.placing = null;
+  st.rangeStart = null;
+  renderCurrentPage();
+}
+
+// Bulk-bar "Set dates…" — explicit start/end inputs (the install-window gesture).
+function _sbOpenRangeDialog() {
+  _sbInit();
+  if (window._sbState.selected.size === 0) { showToast('Select at least one task first', 'info'); return; }
+  document.getElementById('sb-range-dialog')?.remove();
+  const today = _ymd(new Date());
+  const overlay = document.createElement('div');
+  overlay.id = 'sb-range-dialog';
+  overlay.className = 'modal-overlay';
+  overlay.style.zIndex = '10002';
+  overlay.onclick = (e) => { if (e.target === overlay) overlay.remove(); };
+  overlay.innerHTML = `
+    <div class="modal-container" style="max-width:360px">
+      <div class="modal-header">
+        <div class="modal-title">Set dates for ${window._sbState.selected.size} task${window._sbState.selected.size === 1 ? '' : 's'}</div>
+        <button class="modal-close" onclick="document.getElementById('sb-range-dialog').remove()">&times;</button>
+      </div>
+      <div class="modal-body" style="display:flex;flex-direction:column;gap:12px">
+        <label class="sb-field"><span>Start</span><input type="date" id="sb-range-start" value="${today}"></label>
+        <label class="sb-field"><span>End</span><input type="date" id="sb-range-end" value="${today}"></label>
+        <div style="font-size:11px;color:#8B949E">Each selected task spans this window. Pin individual steps to specific days later.</div>
+      </div>
+      <div class="modal-footer" style="display:flex;gap:8px;justify-content:flex-end;padding:12px 16px;border-top:1px solid #30363D">
+        <button class="btn btn-sm" onclick="document.getElementById('sb-range-dialog').remove()">Cancel</button>
+        <button class="btn btn-sm btn-primary" onclick="_sbApplyRangeDialog()">Apply</button>
+      </div>
+    </div>`;
+  document.body.appendChild(overlay);
+}
+function _sbApplyRangeDialog() {
+  const s = document.getElementById('sb-range-start')?.value;
+  const e = document.getElementById('sb-range-end')?.value;
+  if (!s) { showToast('Pick a start date', 'info'); return; }
+  const ids = [...(window._sbState.order.length ? window._sbState.order : [...window._sbState.selected])];
+  let a = s, b = e || s; if (a > b) { const t = a; a = b; b = t; }
+  ids.forEach(tid => _sbApplyRangeToTask(tid, a, b));
+  document.getElementById('sb-range-dialog')?.remove();
+  showToast(`Scheduled ${ids.length} task${ids.length === 1 ? '' : 's'}`, 'success');
+  window._sbState.selected = new Set(); window._sbState.order = [];
+  window._sbState.armed = false; window._sbState.placing = null; window._sbState.rangeStart = null;
+  renderCurrentPage();
 }
 
 // payloadOverride: drag payload string ("taskset" | "task:ID" | "project:ID" | "meeting:ID:type")
@@ -21361,6 +21577,16 @@ function _sbCommitPlace(dateStr, payloadOverride) {
     id = window._sbState.placing.id != null ? window._sbState.placing.id : null;
   } else { return; }
 
+  if (kind === 'subtask') {
+    // payload: subtask:taskId:subId — drop pins the step to that day.
+    const taskId = id, subId = mtype ? Number(mtype) : null;
+    if (taskId == null || subId == null) return;
+    _sbPinSubtask(taskId, subId, dateStr);
+    showToast(`Step pinned to ${fmtDateLocal(dateStr)}`, 'success');
+    window._sbState.placing = null;
+    renderCurrentPage();
+    return;
+  }
   if (kind === 'taskset') {
     const ids = [...window._sbState.selected];
     if (ids.length === 0) return;
@@ -21407,20 +21633,23 @@ function _sbDayItems(dateStr) {
       items.push({ color: getProjectColor(p.id), solid: win.source === 'booked', label: p.name });
     }
   });
-  // Install task subtasks on this date
-  (getInstallTasksForDate(dateStr) || []).forEach(({ task }) => {
-    const p = state.projects.find(x => x.id === task.projectId);
-    items.push({ color: p ? getProjectColor(p.id) : '#8B949E', solid: false, label: task.title });
-  });
-  // Design task subtasks on this date
-  (state.designTasks || []).forEach(t => {
+  // Tasks (install + design) — explicit scheduled span covering the day, or a
+  // pinned subtask on the day.
+  const scanTasks = (store, isDesign) => (store || []).forEach(t => {
     if (t.projectId == null) return;
-    const hit = (t.subtasks || []).some(s => s.date === dateStr) || (t.isMilestone && t.dueDate === dateStr);
-    if (hit) {
-      const p = state.projects.find(x => x.id === t.projectId);
-      items.push({ color: p ? getProjectColor(p.id) : '#8B949E', solid: false, label: '📐 ' + t.title });
+    const p = state.projects.find(x => x.id === t.projectId);
+    const color = p ? getProjectColor(p.id) : '#8B949E';
+    const pre = isDesign ? '📐 ' : '';
+    if (t.schedStart && dateStr >= t.schedStart && dateStr <= (t.schedEnd || t.schedStart)) {
+      items.push({ color, solid: false, label: pre + t.title });
+    } else if ((t.subtasks || []).some(s => s.date === dateStr)) {
+      items.push({ color, solid: false, label: pre + t.title });
+    } else if (t.isMilestone && t.dueDate === dateStr) {
+      items.push({ color, solid: false, label: pre + t.title });
     }
   });
+  scanTasks(state.installTasks, false);
+  scanTasks(state.designTasks, true);
   // Meetings on this date
   (state.meetings || []).forEach(m => {
     if (m.date === dateStr && (m.status === 'confirmed' || m.status === 'pending_approval' || !m.status)) {
@@ -21456,13 +21685,14 @@ function _sbTaskRow(t, phase, dated) {
   const range = _sbTaskHasDate(t) ? getTaskDateRange(t) : null;
   const dateLabel = range ? (range.start === range.end ? fmtDateLocal(range.start) : `${fmtDateLocal(range.start)} → ${fmtDateLocal(range.end)}`) : '';
   const payload = (armed && selected) ? 'taskset' : ('task:' + t.id);
+  const active = window._sbState.activeProject != null && window._sbState.activeProject === t.projectId;
   return `
-    <div class="sb-item sb-item-task ${selected ? 'sb-sel' : ''}"
+    <div class="sb-item sb-item-task ${selected ? 'sb-sel' : ''} ${active ? 'sb-active' : ''}"
          draggable="${draggable}"
          ondragstart="_sbDragStart(event,'${payload}')"
          style="--sb-color:${color}">
       ${!dated ? `<input type="checkbox" class="sb-check" ${selected ? 'checked' : ''} ${armed ? 'disabled' : ''} onclick="event.stopPropagation();_sbToggleSelect(${t.id})">` : '<span class="sb-check-spacer"></span>'}
-      <div class="sb-item-body">
+      <div class="sb-item-body" onclick="_sbOpenProject(${t.projectId})">
         <div class="sb-item-title">${prefix}${esc(t.title)}</div>
         <div class="sb-item-meta">${p ? esc(p.name) : 'Unassigned'}${sub ? ` · ${sub} step${sub === 1 ? '' : 's'}` : (t.isMilestone ? ' · milestone' : '')}${dateLabel ? ` · ${dateLabel}` : ''}</div>
       </div>
@@ -21479,7 +21709,7 @@ function _sbProjectRow(p) {
     <div class="sb-item sb-item-project" draggable="true"
          ondragstart="_sbDragStart(event,'project:${p.id}')" style="--sb-color:${color}">
       <span class="sb-check-spacer"></span>
-      <div class="sb-item-body">
+      <div class="sb-item-body" onclick="_sbOpenProject(${p.id})">
         <div class="sb-item-title">🏗️ ${esc(p.name)}</div>
         <div class="sb-item-meta">Needs booked window · ${sub}</div>
       </div>
@@ -21494,7 +21724,7 @@ function _sbMeetingRow(mtg) {
     <div class="sb-item sb-item-meeting" draggable="true"
          ondragstart="_sbDragStart(event,'meeting:${mtg.projectId}:${mtg.type}')" style="--sb-color:${color}">
       <span class="sb-check-spacer"></span>
-      <div class="sb-item-body">
+      <div class="sb-item-body" onclick="_sbOpenProject(${mtg.projectId})">
         <div class="sb-item-title">🤝 ${esc(mtg.title)}${mtg.overdue ? ' <span class="sb-tag-overdue">overdue</span>' : ''}</div>
         <div class="sb-item-meta">${p ? esc(p.name) : ''} · meeting</div>
       </div>
@@ -21512,6 +21742,8 @@ function _sbRenderCalendar() {
   const gridStart = _addDays(new Date(year, month, 1), -firstDow);
   const todayStr = _ymd(new Date());
   const placing = !!window._sbState.placing;
+  const rangeStart = window._sbState.rangeStart;
+  const placingTasks = placing && (window._sbState.placing.kind === 'taskset' || window._sbState.placing.kind === 'task');
 
   let cells = '';
   for (let i = 0; i < 42; i++) {
@@ -21521,11 +21753,12 @@ function _sbRenderCalendar() {
     const isToday = ds === todayStr;
     const dow = dt.getDay();
     const weekend = dow === 0 || dow === 6;
+    const isStart = rangeStart && ds === rangeStart;
     const dayItems = _sbDayItems(ds);
     const shown = dayItems.slice(0, 2);
     const extra = dayItems.length - shown.length;
     cells += `
-      <div class="sb-cell ${inMonth ? '' : 'sb-cell-out'} ${isToday ? 'sb-cell-today' : ''} ${weekend ? 'sb-cell-weekend' : ''}"
+      <div class="sb-cell ${inMonth ? '' : 'sb-cell-out'} ${isToday ? 'sb-cell-today' : ''} ${weekend ? 'sb-cell-weekend' : ''} ${isStart ? 'sb-cell-rangestart' : ''}"
            ondragover="_sbCellDragOver(event)" ondrop="_sbCellDrop(event,'${ds}')" onclick="_sbCellTap('${ds}')">
         <div class="sb-cell-num">${dt.getDate()}</div>
         <div class="sb-cell-chips">
@@ -21533,6 +21766,15 @@ function _sbRenderCalendar() {
           ${extra > 0 ? `<div class="sb-chip-more">+${extra}</div>` : ''}
         </div>
       </div>`;
+  }
+
+  let hint = '';
+  if (placingTasks) {
+    hint = rangeStart
+      ? `<div class="sb-place-hint">Start: <strong>${fmtDateLocal(rangeStart)}</strong> — tap the <strong>end</strong> date (same day = one day).</div>`
+      : `<div class="sb-place-hint">Tap a <strong>start</strong> date, then an <strong>end</strong> date. (Drag = quick single day.)</div>`;
+  } else if (placing) {
+    hint = `<div class="sb-place-hint">Tap a date to schedule.</div>`;
   }
 
   return `
@@ -21544,7 +21786,7 @@ function _sbRenderCalendar() {
         <button class="sb-navbtn" onclick="_sbNavMonth(1)" aria-label="Next month">›</button>
       </div>
     </div>
-    ${placing ? '<div class="sb-place-hint">Drop on a date — or tap a date — to schedule.</div>' : ''}
+    ${hint}
     <div class="sb-grid ${placing ? 'sb-grid-armed' : ''}">
       ${dows.map(d => `<div class="sb-dow">${d}</div>`).join('')}
       ${cells}
@@ -21586,16 +21828,37 @@ function _sbRenderBacklog() {
 
   const sel = window._sbState.selected.size;
   const armed = window._sbState.armed;
+  const orderIds = window._sbState.order.length ? window._sbState.order : [...window._sbState.selected];
+  const tray = armed ? `
+    <div class="sb-tray">
+      <div class="sb-tray-label">Order (drag to reorder)</div>
+      ${orderIds.map((tid, i) => {
+        const t = _getTaskByIdAnyPhase(tid);
+        if (!t) return '';
+        const p = state.projects.find(x => x.id === t.projectId);
+        const ph = _getTaskPhase(tid);
+        return `<div class="sb-tray-item" draggable="true"
+                  ondragstart="_sbTrayDragStart(event,${tid})" ondragover="_sbTrayDragOver(event)" ondrop="_sbTrayDrop(event,${tid})">
+                  <span class="sb-tray-grip">⠿</span>
+                  <span class="sb-tray-n">${i + 1}</span>
+                  <span class="sb-tray-title">${ph === 'design' ? '📐 ' : ''}${esc(t.title)}</span>
+                  <span class="sb-tray-proj">${p ? esc(p.name) : ''}</span>
+                </div>`;
+      }).join('')}
+    </div>` : '';
+
   const bulkBar = sel > 0 ? `
     <div class="sb-bulkbar">
       <span class="sb-bulkn">${sel} selected</span>
       ${armed
         ? `<button class="btn btn-sm" onclick="_sbEditSelection()">Edit</button>
-           <span class="sb-bulk-hint">Drag onto a date →</span>`
+           <button class="btn btn-sm" onclick="_sbOpenAssignPicker()">Assign people</button>
+           <button class="btn btn-sm" onclick="_sbOpenRangeDialog()">Set dates…</button>`
         : `<button class="btn btn-sm" onclick="_sbOpenAssignPicker()">Assign people</button>
            <button class="btn btn-sm btn-primary" onclick="_sbDone()">Done</button>`}
       <button class="sb-bulk-clear" onclick="_sbClearSelect()" title="Clear">✕</button>
-    </div>` : '';
+    </div>
+    ${tray}` : '';
 
   const unbookedBody = window._sbState.openUnbooked ? `
     <div class="sb-list">
@@ -21646,8 +21909,11 @@ function renderScheduleBuilder(c) {
         <div class="sb-panel-head">Backlog</div>
         ${_sbRenderBacklog()}
       </div>
-      <div class="sb-cal">
-        ${_sbRenderCalendar()}
+      <div class="sb-right">
+        <div class="sb-cal">
+          ${_sbRenderCalendar()}
+        </div>
+        ${_sbRenderProjectPanel()}
       </div>
     </div>`;
 }
