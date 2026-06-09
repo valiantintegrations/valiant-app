@@ -21062,9 +21062,14 @@ function renderPendingApprovalsCard() {
 const SB_ALLOWED_BUNDLES = ['project_coordinator', 'install_admin', 'master_admin'];
 
 function sbCanAccess() {
-  if (currentUserHasPermission('admin.system')) return true;
-  const bk = getActiveUserBundleKey();
-  return SB_ALLOWED_BUNDLES.includes(bk);
+  // Mirror the visibility of "Project Coordination" (dashboards.install_mgmt)
+  // and "Crew Manager" (install_admin bundle) tabs, plus master admin.
+  if (currentUserHasPermission('admin.system')) return true;     // master_admin
+  if (currentUserHasPermission('dashboards.install_mgmt')) return true; // PC + master
+  if (getActiveUserBundleKey() === 'install_admin') return true; // Install Manager
+  // Defensive: also honor the explicit B3a bundle keys directly.
+  if (SB_ALLOWED_BUNDLES.includes(getActiveUserBundleKey())) return true;
+  return false;
 }
 
 // Meeting milestones, mapped to their meeting type. Order matters — these are
