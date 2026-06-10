@@ -4288,10 +4288,19 @@ function renderProjectHealthDashboard(activeProjects) {
 
     const win = getInstallWindow(p);
     if (!win || win.source !== 'booked') notBooked++;
-    const winText = win
-      ? `${win.source === 'booked' ? 'Booked' : 'Est.'} · ${fmtCountdown(win.start)}`
-      : 'No window';
-    const winColor = !win ? '#6E7681' : (win.source === 'booked' ? '#3FB950' : '#D29922');
+    // Show booked and/or estimated install dates, like the Open Projects cards.
+    const booked = getBookedTimeline(p.id);
+    const winLines = [];
+    if (booked) {
+      const e = booked.end && booked.end !== booked.start ? ' – ' + shortDate(booked.end) : '';
+      winLines.push(`<div style="color:#3FB950">Booked: ${shortDate(booked.start)}${e}</div>`);
+    }
+    if (p.start_date) {
+      const e = p.end_date ? ' – ' + shortDate(p.end_date) : '';
+      winLines.push(`<div style="color:#8B949E">Est.: ${shortDate(p.start_date)}${e}</div>`);
+    }
+    if (!winLines.length) winLines.push('<div style="color:#6E7681">No dates set</div>');
+    const winHtml = winLines.join('');
 
     let badge, tip = '';
     if (items.length === 0) {
@@ -4309,7 +4318,7 @@ function renderProjectHealthDashboard(activeProjects) {
     const stgLabel = stg ? stg.label : (p.stage || '');
 
     return `
-      <div class="ph-row" onclick="openProject(${p.id})">
+      <div class="ph-row" onclick="openProject(${p.id})" style="box-shadow:inset 4px 0 0 ${color}">
         <div style="min-width:0">
           <div class="ph-name">${esc(p.name)}</div>
           <div class="ph-sub">${esc(p.client_name || 'No client')}${p.city ? ' · ' + esc(p.city) : ''} · ${esc(stgLabel)}</div>
@@ -4319,7 +4328,7 @@ function renderProjectHealthDashboard(activeProjects) {
           <div class="ph-pct">${pct}% complete</div>
         </div>
         <div class="ph-flags">${badge}${tip}</div>
-        <div class="ph-win" style="color:${winColor}">${winText}</div>
+        <div class="ph-win">${winHtml}</div>
       </div>`;
   }).join('');
 
@@ -4329,7 +4338,7 @@ function renderProjectHealthDashboard(activeProjects) {
     .ph-stat{flex:1;min-width:130px;background:#161B22;border:1px solid #30363D;border-radius:10px;padding:12px 14px}
     .ph-stat .n{font-size:24px;font-weight:600;color:#E6EDF3}
     .ph-stat .l{font-size:11px;color:#8B949E;margin-top:2px}
-    .ph-row{display:grid;grid-template-columns:1fr 170px 110px 110px;gap:14px;align-items:center;padding:12px 14px;border:1px solid #1C2333;border-radius:10px;background:#0D1117;cursor:pointer;margin-bottom:8px;transition:border-color .15s}
+    .ph-row{display:grid;grid-template-columns:1fr 160px 100px 150px;gap:14px;align-items:center;padding:12px 14px;border:1px solid #1C2333;border-radius:10px;background:#0D1117;cursor:pointer;margin-bottom:8px;transition:border-color .15s}
     .ph-row:hover{border-color:#30363D}
     .ph-name{font-size:14px;font-weight:600;color:#E6EDF3;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
     .ph-sub{font-size:11px;color:#6E7681;margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
@@ -4342,7 +4351,7 @@ function renderProjectHealthDashboard(activeProjects) {
     .ph-flags:hover .ph-tip{display:block}
     .ph-tip-item{display:flex;gap:8px;align-items:flex-start;font-size:11px;color:#C9D1D9;padding:3px 0}
     .ph-dot{width:7px;height:7px;border-radius:50%;margin-top:4px;flex:0 0 auto}
-    .ph-win{font-size:11px;justify-self:end;text-align:right;white-space:nowrap}
+    .ph-win{font-size:11px;justify-self:end;text-align:right;line-height:1.45}
     @media(max-width:760px){.ph-row{grid-template-columns:1fr auto}.ph-track-wrap,.ph-win{display:none}}
   </style>`;
 
