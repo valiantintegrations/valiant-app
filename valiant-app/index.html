@@ -7,6 +7,58 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@300;400;500;600&family=DM+Mono:wght@400;500&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="styles.css">
+<style>
+  /* Login + sync overlay (self-contained, doesn't touch styles.css) */
+  .vi-overlay {
+    position: fixed; inset: 0; z-index: 100000;
+    background: #0D1117; display: flex; align-items: center; justify-content: center;
+    font-family: 'DM Sans', sans-serif;
+  }
+  .vi-overlay .vi-card {
+    width: 320px; max-width: 90vw; background: #161B22; border: 1px solid #30363D;
+    border-radius: 14px; padding: 28px 26px; display: flex; flex-direction: column; gap: 14px;
+  }
+  .vi-overlay .vi-logo { display: flex; align-items: center; gap: 10px; margin-bottom: 4px; }
+  .vi-overlay .vi-mark {
+    width: 34px; height: 34px; border-radius: 9px; background: #1F6FEB; color: #fff;
+    font-weight: 700; display: flex; align-items: center; justify-content: center; font-size: 18px;
+  }
+  .vi-overlay .vi-name { color: #E6EDF3; font-weight: 600; font-size: 15px; line-height: 1.1; }
+  .vi-overlay .vi-sub { color: #6E7681; font-size: 11px; }
+  .vi-overlay label { color: #8B949E; font-size: 12px; display: flex; flex-direction: column; gap: 5px; }
+  .vi-overlay input {
+    background: #0D1117; border: 1px solid #30363D; color: #E6EDF3;
+    border-radius: 8px; padding: 9px 11px; font-size: 13px; font-family: inherit;
+  }
+  .vi-overlay input:focus { border-color: #58A6FF; outline: none; }
+  .vi-overlay button {
+    background: #1F6FEB; color: #fff; border: none; border-radius: 8px;
+    padding: 10px; font-size: 13px; font-weight: 600; cursor: pointer; font-family: inherit; margin-top: 4px;
+  }
+  .vi-overlay button:hover { background: #388BFD; }
+  .vi-overlay button:disabled { opacity: .6; cursor: default; }
+  .vi-overlay .vi-err { color: #F85149; font-size: 12px; min-height: 14px; }
+  .vi-overlay .vi-status { color: #8B949E; font-size: 12px; text-align: center; }
+  #vi-signout {
+    position: fixed; bottom: 10px; left: 10px; z-index: 9000; display: none;
+    background: #161B22; border: 1px solid #30363D; color: #8B949E;
+    font-family: 'DM Sans', sans-serif; font-size: 11px; padding: 5px 9px; border-radius: 7px; cursor: pointer;
+  }
+  #vi-signout:hover { color: #F85149; border-color: #F85149; }
+  #vi-refresh {
+    position: fixed; top: 14px; left: 50%; transform: translateX(-50%); z-index: 9500; display: none;
+    background: #1F6FEB; color: #fff; border: none; font-family: 'DM Sans', sans-serif;
+    font-size: 12px; padding: 8px 14px; border-radius: 999px; cursor: pointer; box-shadow: 0 4px 14px rgba(0,0,0,.4);
+  }
+  .vi-overlay button.vi-link { background: transparent; color: #58A6FF; padding: 2px; font-weight: 500; margin: 0; }
+  .vi-overlay button.vi-link:hover { background: transparent; color: #388BFD; text-decoration: underline; }
+  #vi-changepw {
+    position: fixed; bottom: 40px; left: 10px; z-index: 9000; display: none;
+    background: #161B22; border: 1px solid #30363D; color: #8B949E;
+    font-family: 'DM Sans', sans-serif; font-size: 11px; padding: 5px 9px; border-radius: 7px; cursor: pointer;
+  }
+  #vi-changepw:hover { color: #58A6FF; border-color: #58A6FF; }
+</style>
 </head>
 <body>
 <div id="app">
@@ -116,6 +168,229 @@
   </div>
 </div>
 
-<script src="app.js"></script>
+<!-- Login gate -->
+<div id="vi-auth" class="vi-overlay">
+  <div class="vi-card">
+    <div class="vi-logo">
+      <div class="vi-mark">V</div>
+      <div><div class="vi-name">Valiant Integrations</div><div class="vi-sub">Team sign-in</div></div>
+    </div>
+    <label>Email<input id="vi-email" type="email" autocomplete="username" placeholder="you@valiant.com"></label>
+    <label>Password<input id="vi-pass" type="password" autocomplete="current-password" placeholder="••••••••"></label>
+    <div class="vi-err" id="vi-err"></div>
+    <button id="vi-btn">Sign in</button>
+    <button type="button" id="vi-forgot" class="vi-link">Forgot password?</button>
+    <div class="vi-status" id="vi-status"></div>
+  </div>
+</div>
+<button id="vi-signout">Sign out</button>
+<button id="vi-refresh">Updates available — refresh</button>
+<button id="vi-changepw">Change password</button>
+<div id="vi-setpw" class="vi-overlay" style="display:none">
+  <div class="vi-card">
+    <div class="vi-logo">
+      <div class="vi-mark">V</div>
+      <div><div class="vi-name" id="vi-setpw-title">Set a new password</div><div class="vi-sub">Valiant Integrations</div></div>
+    </div>
+    <label>New password<input id="vi-newpw" type="password" autocomplete="new-password" placeholder="••••••••"></label>
+    <label>Confirm new password<input id="vi-newpw2" type="password" autocomplete="new-password" placeholder="••••••••"></label>
+    <div class="vi-err" id="vi-setpw-err"></div>
+    <button id="vi-setpw-btn">Save password</button>
+    <button type="button" id="vi-setpw-cancel" class="vi-link" style="display:none">Cancel</button>
+    <div class="vi-status" id="vi-setpw-status"></div>
+  </div>
+</div>
+
+<!-- Cloud sync + auth bootstrap. Loads BEFORE app.js so data is hydrated first. -->
+<script type="module">
+  const SB_URL = 'https://gjndbrboepbudpmeeeth.supabase.co';
+  const SB_KEY = 'sb_publishable_DyNIu6h1YuJzKnxxPmNz6Q_ygeTgEZw';
+
+  // Keys kept on this device only (not shared): the in-app identity picker.
+  const LOCAL_ONLY = new Set(['vi_role', 'vi_user']);
+  const isViKey = k => typeof k === 'string' && k.startsWith('vi_');
+  const shouldSync = k => isViKey(k) && !LOCAL_ONLY.has(k);
+
+  const rawSet = localStorage.setItem.bind(localStorage);
+  const rawRemove = localStorage.removeItem.bind(localStorage);
+  let hydrating = false;
+  let suppressUntil = 0;      // ignore realtime echoes of our own writes
+  let sb = null;
+
+  const $ = id => document.getElementById(id);
+  const setStatus = t => { const s = $('vi-status'); if (s) s.textContent = t || ''; };
+
+  async function mirrorSet(key, raw) {
+    if (!sb || !shouldSync(key)) return;
+    let value; try { value = JSON.parse(raw); } catch { value = raw; }
+    suppressUntil = Date.now() + 4000;
+    try { await sb.from('app_data').upsert({ key, value }, { onConflict: 'key' }); }
+    catch (e) { console.warn('sync up failed', key, e); }
+  }
+  async function mirrorRemove(key) {
+    if (!sb || !shouldSync(key)) return;
+    suppressUntil = Date.now() + 4000;
+    try { await sb.from('app_data').delete().eq('key', key); } catch (e) { console.warn('sync del failed', key, e); }
+  }
+
+  // Wrap writes so every change goes up to the cloud.
+  localStorage.setItem = function (k, v) { rawSet(k, v); if (!hydrating) mirrorSet(k, v); };
+  localStorage.removeItem = function (k) { rawRemove(k); if (!hydrating) mirrorRemove(k); };
+
+  function clearLocalViKeys() {
+    const kill = [];
+    for (let i = 0; i < localStorage.length; i++) {
+      const k = localStorage.key(i);
+      if (isViKey(k) && !LOCAL_ONLY.has(k)) kill.push(k);
+    }
+    kill.forEach(k => rawRemove(k));
+  }
+
+  async function hydrateFromCloud() {
+    const { data, error } = await sb.from('app_data').select('key,value');
+    if (error) throw error;
+    hydrating = true;
+    if (data && data.length) {
+      // Cloud is source of truth — mirror it exactly onto this device.
+      clearLocalViKeys();
+      data.forEach(row => {
+        const v = (typeof row.value === 'string') ? row.value : JSON.stringify(row.value);
+        rawSet(row.key, v);
+      });
+      hydrating = false;
+      return 'pulled';
+    }
+    hydrating = false;
+    return 'empty';
+  }
+
+  // First run only: push this device's existing data up to seed the cloud.
+  async function seedCloudFromLocal() {
+    const rows = [];
+    for (let i = 0; i < localStorage.length; i++) {
+      const k = localStorage.key(i);
+      if (!shouldSync(k)) continue;
+      const raw = localStorage.getItem(k);
+      let value; try { value = JSON.parse(raw); } catch { value = raw; }
+      rows.push({ key: k, value });
+    }
+    if (rows.length) {
+      suppressUntil = Date.now() + 6000;
+      const { error } = await sb.from('app_data').upsert(rows, { onConflict: 'key' });
+      if (error) console.warn('seed failed', error);
+    }
+    return rows.length;
+  }
+
+  function bootApp() {
+    $('vi-auth').style.display = 'none';
+    $('vi-signout').style.display = 'block';
+    $('vi-changepw').style.display = 'block';
+    const s = document.createElement('script');
+    s.src = 'app.js';
+    document.body.appendChild(s);
+  }
+
+  function subscribeRealtime() {
+    try {
+      sb.channel('app_data_rt')
+        .on('postgres_changes', { event: '*', schema: 'public', table: 'app_data' }, () => {
+          if (Date.now() < suppressUntil) return;          // our own change echoing back
+          $('vi-refresh').style.display = 'block';          // let the user choose when to refresh
+        })
+        .subscribe();
+    } catch (e) { console.warn('realtime off', e); }
+  }
+
+  async function startSession() {
+    setStatus('Loading your data…');
+    const result = await hydrateFromCloud();
+    if (result === 'empty') {
+      setStatus('Setting up shared data…');
+      await seedCloudFromLocal();
+    }
+    subscribeRealtime();
+    bootApp();
+  }
+
+  $('vi-refresh').onclick = () => location.reload();
+  $('vi-signout').onclick = async () => {
+    try { await sb.auth.signOut(); } catch {}
+    clearLocalViKeys();
+    location.reload();
+  };
+
+  async function doLogin() {
+    const email = $('vi-email').value.trim();
+    const password = $('vi-pass').value;
+    $('vi-err').textContent = '';
+    $('vi-btn').disabled = true;
+    const { data, error } = await sb.auth.signInWithPassword({ email, password });
+    if (error) { $('vi-err').textContent = error.message; $('vi-btn').disabled = false; return; }
+    await startSession();
+  }
+
+  function showSetPw(mode) {
+    window._viPwMode = mode;
+    $('vi-setpw-title').textContent = mode === 'recovery' ? 'Set a new password' : 'Change your password';
+    $('vi-setpw-cancel').style.display = mode === 'change' ? 'block' : 'none';
+    $('vi-setpw-err').textContent = ''; $('vi-setpw-status').textContent = '';
+    $('vi-newpw').value = ''; $('vi-newpw2').value = '';
+    $('vi-setpw').style.display = 'flex';
+    $('vi-newpw').focus();
+  }
+  async function doForgot() {
+    const email = $('vi-email').value.trim();
+    if (!email) { $('vi-err').textContent = 'Enter your email first, then tap Forgot password.'; $('vi-email').focus(); return; }
+    $('vi-err').textContent = '';
+    try {
+      const { error } = await sb.auth.resetPasswordForEmail(email, { redirectTo: window.location.origin + window.location.pathname });
+      if (error) { $('vi-err').textContent = error.message; return; }
+      setStatus('Reset link sent — check ' + email);
+    } catch (e) { $('vi-err').textContent = 'Could not send reset email.'; }
+  }
+  async function doSetPassword() {
+    const a = $('vi-newpw').value, b = $('vi-newpw2').value;
+    $('vi-setpw-err').textContent = '';
+    if (a.length < 6) { $('vi-setpw-err').textContent = 'Use at least 6 characters.'; return; }
+    if (a !== b) { $('vi-setpw-err').textContent = 'Passwords do not match.'; return; }
+    $('vi-setpw-btn').disabled = true;
+    try {
+      const { error } = await sb.auth.updateUser({ password: a });
+      if (error) { $('vi-setpw-err').textContent = error.message; $('vi-setpw-btn').disabled = false; return; }
+    } catch (e) { $('vi-setpw-err').textContent = 'Could not update password.'; $('vi-setpw-btn').disabled = false; return; }
+    $('vi-setpw-btn').disabled = false;
+    if (window._viPwMode === 'recovery') {
+      history.replaceState(null, '', window.location.pathname);
+      location.reload();
+    } else {
+      $('vi-setpw').style.display = 'none';
+      if (window.showToast) window.showToast('Password updated', 'success');
+    }
+  }
+
+  async function init() {
+    try {
+      const { createClient } = await import('https://esm.sh/@supabase/supabase-js@2');
+      sb = createClient(SB_URL, SB_KEY);
+      window._sb = sb;
+      $('vi-btn').onclick = doLogin;
+      $('vi-pass').addEventListener('keydown', e => { if (e.key === 'Enter') doLogin(); });
+      $('vi-forgot').onclick = doForgot;
+      $('vi-changepw').onclick = () => showSetPw('change');
+      $('vi-setpw-btn').onclick = doSetPassword;
+      $('vi-setpw-cancel').onclick = () => { $('vi-setpw').style.display = 'none'; };
+      $('vi-newpw2').addEventListener('keydown', e => { if (e.key === 'Enter') doSetPassword(); });
+      sb.auth.onAuthStateChange((event) => { if (event === 'PASSWORD_RECOVERY') showSetPw('recovery'); });
+      const { data: { session } } = await sb.auth.getSession();
+      if (window.location.hash.includes('type=recovery')) { showSetPw('recovery'); }
+      else if (session) { await startSession(); } else { $('vi-email').focus(); }
+    } catch (e) {
+      console.error('Sync init failed', e);
+      $('vi-err').textContent = 'Could not reach the server. Check your connection and reload.';
+    }
+  }
+  init();
+</script>
 </body>
 </html>
