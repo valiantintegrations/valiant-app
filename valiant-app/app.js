@@ -644,8 +644,21 @@ const STAGES = [
   { key: 'lead', label: 'Lead', color: 'gray' },
   { key: 'proposal', label: 'Proposal', color: 'blue' },
   { key: 'sent', label: 'Sent', color: 'amber' },
-  { key: 'contract', label: 'Contract', color: 'green' }
+  { key: 'contract', label: 'Contract', color: 'green' },
+  { key: 'install', label: 'Install', color: 'purple' }
 ];
+
+// Pill color for the Install stage (purple is already an app stage color).
+// Injected so it renders without a styles.css change.
+(function ensureStagePillStyles() {
+  try {
+    if (typeof document === 'undefined' || document.getElementById('vi-stage-pill-style')) return;
+    const st = document.createElement('style');
+    st.id = 'vi-stage-pill-style';
+    st.textContent = '.status-pill.status-purple{background:rgba(163,113,247,0.16);color:#A371F7}';
+    (document.head || document.documentElement).appendChild(st);
+  } catch (e) {}
+})();
 
 // Canonical scope tags used on intake + mobilization. Drives which design checklists apply.
 const SCOPE_TAGS = [
