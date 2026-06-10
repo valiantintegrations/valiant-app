@@ -7411,3 +7411,21 @@ html.text-large body {
   background: #0D1626; border-top: 1px solid #1565C0;
   padding: 10px 14px; border-radius: 0 0 10px 10px;
 }
+
+/* ── Schedule Builder — fit columns to the window; scroll internally ── */
+.sb-wrap { align-items: stretch; height: calc(100vh - 150px); }
+.sb-backlog { max-height: none; height: 100%; min-height: 0; overflow-y: auto; }
+.sb-right { min-height: 0; }
+.sb-cal { flex: 0 0 auto; }
+.sb-panel2 { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; }
+.sb-panel2.sb-panel2-empty { flex: 0 0 auto; }
+.sb-panel2-head { flex: 0 0 auto; }
+.sb-panel2-body { flex: 1 1 auto; min-height: 0; overflow-y: auto; }
+.sb-panel2-bulk { flex: 0 0 auto; position: static; }
+
+@media (max-width: 900px) {
+  .sb-wrap { height: auto; }
+  .sb-backlog { height: auto; max-height: none; overflow: visible; }
+  .sb-panel2 { flex: 0 0 auto; }
+  .sb-panel2-body { overflow: visible; }
+}
