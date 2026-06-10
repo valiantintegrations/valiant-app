@@ -4254,17 +4254,107 @@ function renderDashboard(c) {
   }
 }
 
-// Project Health — management oversight of open projects (% complete + held-up
-// items). Drop 1 stub; full hover-detail view comes in Drop 2.
+// Project Health — management oversight of every open project: progress %,
+// install-window status, and a hover card listing what's holding each one up.
 function renderProjectHealthDashboard(activeProjects) {
-  const open = activeProjects.filter(p => p.stage === 'contract');
-  return `
-    <div style="max-width:1100px">
-      <div class="dashboard-card" style="margin-bottom:14px">
-        <div style="font-size:11px;font-weight:600;color:#6E7681;text-transform:uppercase;letter-spacing:.08em;margin-bottom:6px">Project Health</div>
-        <div style="font-size:13px;color:#8B949E;line-height:1.5">Oversight of every open project — progress % and anything overdue or held up, at a glance. The full view (with hover detail) lands in the next drop.</div>
-        <div style="font-size:30px;font-weight:600;color:#E6EDF3;margin-top:12px">${open.length}<span style="font-size:13px;color:#8B949E;font-weight:400"> open projects</span></div>
+  const openStages = new Set(['contract', 'design', 'purchasing', 'install', 'closeout', 'warranty']);
+  const open = activeProjects.filter(p => openStages.has(p.stage));
+
+  // Soonest install window first; unscheduled last.
+  open.sort((a, b) => {
+    const wa = getInstallWindow(a), wb = getInstallWindow(b);
+    return (wa ? wa.start : '9999').localeCompare(wb ? wb.start : '9999');
+  });
+
+  // Milestone-weighted overall progress (matches the project Overview math).
+  function overallPct(p) {
+    let total = 0, done = 0;
+    PHASES.forEach(ph => {
+      total += ph.milestones.length;
+      done += ph.milestones.reduce((s, m) => s + milestoneProgress(p, ph, m), 0);
+    });
+    return total > 0 ? Math.round((done / total) * 100) : 0;
+  }
+
+  const dotColor = { red: '#F85149', yellow: '#D29922' };
+  let withReds = 0, notBooked = 0;
+
+  const rows = open.map(p => {
+    const pct = overallPct(p);
+    const color = getProjectColor(p.id);
+    const f = computeProjectFlags(p);
+    const items = [...f.management, ...f.install, ...f.design, ...f.sales];
+    const reds = items.filter(i => i.level === 'red').length;
+    if (reds > 0) withReds++;
+
+    const win = getInstallWindow(p);
+    if (!win || win.source !== 'booked') notBooked++;
+    const winText = win
+      ? `${win.source === 'booked' ? 'Booked' : 'Est.'} · ${fmtCountdown(win.start)}`
+      : 'No window';
+    const winColor = !win ? '#6E7681' : (win.source === 'booked' ? '#3FB950' : '#D29922');
+
+    let badge, tip = '';
+    if (items.length === 0) {
+      badge = `<span class="ph-badge" style="color:#3FB950;border-color:#234D2C">On track</span>`;
+    } else {
+      const bc = reds > 0 ? '#F85149' : '#D29922';
+      const bb = reds > 0 ? '#5A2326' : '#5A4612';
+      badge = `<span class="ph-badge" style="color:${bc};border-color:${bb}">${items.length} held up</span>`;
+      tip = `<div class="ph-tip">${items.map(i =>
+        `<div class="ph-tip-item"><span class="ph-dot" style="background:${dotColor[i.level] || '#8B949E'}"></span><span>${i.text}</span></div>`
+      ).join('')}</div>`;
+    }
+
+    const stg = PHASES.find(x => x.key === p.stage);
+    const stgLabel = stg ? stg.label : (p.stage || '');
+
+    return `
+      <div class="ph-row" onclick="openProject(${p.id})">
+        <div style="min-width:0">
+          <div class="ph-name">${esc(p.name)}</div>
+          <div class="ph-sub">${esc(p.client_name || 'No client')}${p.city ? ' · ' + esc(p.city) : ''} · ${esc(stgLabel)}</div>
+        </div>
+        <div class="ph-track-wrap">
+          <div class="ph-track"><div class="ph-fill" style="width:${pct}%;background:${color}"></div></div>
+          <div class="ph-pct">${pct}% complete</div>
+        </div>
+        <div class="ph-flags">${badge}${tip}</div>
+        <div class="ph-win" style="color:${winColor}">${winText}</div>
+      </div>`;
+  }).join('');
+
+  const style = `<style>
+    .ph-wrap{max-width:1100px}
+    .ph-strip{display:flex;gap:10px;margin-bottom:16px;flex-wrap:wrap}
+    .ph-stat{flex:1;min-width:130px;background:#161B22;border:1px solid #30363D;border-radius:10px;padding:12px 14px}
+    .ph-stat .n{font-size:24px;font-weight:600;color:#E6EDF3}
+    .ph-stat .l{font-size:11px;color:#8B949E;margin-top:2px}
+    .ph-row{display:grid;grid-template-columns:1fr 170px 110px 110px;gap:14px;align-items:center;padding:12px 14px;border:1px solid #1C2333;border-radius:10px;background:#0D1117;cursor:pointer;margin-bottom:8px;transition:border-color .15s}
+    .ph-row:hover{border-color:#30363D}
+    .ph-name{font-size:14px;font-weight:600;color:#E6EDF3;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+    .ph-sub{font-size:11px;color:#6E7681;margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+    .ph-track{height:6px;background:#161B22;border-radius:3px;overflow:hidden}
+    .ph-fill{height:100%;border-radius:3px}
+    .ph-pct{font-size:11px;color:#8B949E;margin-top:5px}
+    .ph-flags{position:relative;justify-self:start}
+    .ph-badge{font-size:11px;font-weight:600;padding:3px 10px;border-radius:999px;border:1px solid;white-space:nowrap}
+    .ph-tip{display:none;position:absolute;bottom:calc(100% + 8px);left:0;z-index:60;background:#161B22;border:1px solid #30363D;border-radius:9px;padding:8px 11px;width:240px;box-shadow:0 8px 22px rgba(0,0,0,.55)}
+    .ph-flags:hover .ph-tip{display:block}
+    .ph-tip-item{display:flex;gap:8px;align-items:flex-start;font-size:11px;color:#C9D1D9;padding:3px 0}
+    .ph-dot{width:7px;height:7px;border-radius:50%;margin-top:4px;flex:0 0 auto}
+    .ph-win{font-size:11px;justify-self:end;text-align:right;white-space:nowrap}
+    @media(max-width:760px){.ph-row{grid-template-columns:1fr auto}.ph-track-wrap,.ph-win{display:none}}
+  </style>`;
+
+  return `${style}
+    <div class="ph-wrap">
+      <div class="ph-strip">
+        <div class="ph-stat"><div class="n">${open.length}</div><div class="l">Open projects</div></div>
+        <div class="ph-stat"><div class="n" style="color:${withReds ? '#F85149' : '#E6EDF3'}">${withReds}</div><div class="l">With urgent flags</div></div>
+        <div class="ph-stat"><div class="n" style="color:${notBooked ? '#D29922' : '#E6EDF3'}">${notBooked}</div><div class="l">Install not booked</div></div>
       </div>
+      ${open.length ? rows : '<div style="color:#8B949E;font-size:13px;padding:20px;text-align:center">No open projects right now.</div>'}
     </div>`;
 }
 
