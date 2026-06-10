@@ -16070,6 +16070,15 @@ function renderSettings(c) {
           <button type="button" class="settings-sizebtn${size === 'large' ? ' is-active' : ''}" onclick="setTextSize('large')">Large</button>
         </div>
       </div>
+      <div class="dashboard-card">
+        <div style="font-size:11px;font-weight:600;color:#6E7681;text-transform:uppercase;letter-spacing:0.08em;margin-bottom:4px">Account</div>
+        <div style="font-size:14px;font-weight:600;color:#E6EDF3;margin-bottom:2px">Your login</div>
+        <div style="font-size:12px;color:#8B949E;margin-bottom:12px">Change your password or sign out of this device.</div>
+        <div style="display:flex;gap:8px;flex-wrap:wrap">
+          <button type="button" class="btn btn-sm" onclick="window.viOpenChangePassword && window.viOpenChangePassword()">Change password</button>
+          <button type="button" class="btn btn-sm" onclick="window.viSignOut && window.viSignOut()">Sign out</button>
+        </div>
+      </div>
     </div>
   `;
 }
