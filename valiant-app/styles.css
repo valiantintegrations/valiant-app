@@ -7337,7 +7337,7 @@ html.text-large body {
 .sb-panel2-title { font-size: 14px; font-weight: 700; color: #E6EDF3; }
 .sb-panel2-sub { font-size: 11px; color: #6E7681; }
 .sb-panel2-head .sb-bulk-clear { margin-left: auto; }
-.sb-panel2-body { padding: 10px 12px; display: flex; flex-direction: column; gap: 8px; max-height: 360px; overflow-y: auto; }
+.sb-panel2-body { padding: 10px 12px; display: flex; flex-direction: column; gap: 8px; }
 
 .sb-ptask { background: #0D1117; border: 1px solid #30363D; border-left: 3px solid var(--sb-color, #8B949E); border-radius: 8px; overflow: hidden; }
 .sb-ptask-head {
@@ -7387,3 +7387,27 @@ html.text-large body {
 .sb-panel2-body .sb-draggable:active { cursor: grabbing; }
 .sb-panel2-body .itask-drag-handle { cursor: grab; color: #6E7681; }
 .sb-panel2-body .itask-head-actions { display: flex; align-items: center; gap: 6px; }
+
+/* ── Schedule Builder — panel height + bulk edit mode ── */
+/* No inner scroll cap: panel shows every task so it isn't cut off (page scrolls). */
+.sb-panel2-body { max-height: none; overflow: visible; }
+
+.sb-panel2-head .sb-panel2-edit { margin-left: auto; }
+.sb-panel2-head .sb-bulk-clear { margin-left: 4px; }
+
+.sb-selbox {
+  flex: 0 0 18px; width: 18px; height: 18px; border-radius: 5px;
+  border: 1px solid #484F58; background: #0D1117; color: #0D1117;
+  display: inline-flex; align-items: center; justify-content: center;
+  font-size: 11px; font-weight: 800; cursor: pointer; margin-right: 8px;
+}
+.sb-selbox.on { background: #58A6FF; border-color: #58A6FF; color: #0D1117; }
+.itask-sub.sb-rowsel { background: #0D1626; border-color: #1565C0; }
+.sb-panel2-body .itask-sub { cursor: pointer; }
+
+.sb-panel2-bulk {
+  position: sticky; bottom: 0; z-index: 3;
+  display: flex; align-items: center; gap: 8px;
+  background: #0D1626; border-top: 1px solid #1565C0;
+  padding: 10px 14px; border-radius: 0 0 10px 10px;
+}
