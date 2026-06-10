@@ -3918,20 +3918,42 @@ function renderRightPanelHTML() {
   const taskPanel = `
     <div class="rpanel-header"><div class="rpanel-header-title">Quick Add Task</div></div>
     <div class="rpanel-body">
+      <style>
+        .qt-chip{font-size:11px;padding:4px 9px;border-radius:999px;border:1px solid #30363D;color:#8B949E;cursor:pointer;background:#0D1117;-webkit-tap-highlight-color:transparent}
+        .qt-chip.active{background:#1565C0;color:#58A6FF;border-color:#1F6FEB}
+      </style>
       <div class="form-group">
-        <input class="form-input" id="qt-text" placeholder="What needs to get done?" style="font-size:13px">
+        <input class="form-input" id="qt-text" placeholder="Task title…" style="font-size:13px">
       </div>
       <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">
         <div class="form-group">
-          <label class="form-label">Due Date</label>
-          <input class="form-input" type="date" id="qt-date" style="font-size:12px">
-        </div>
-        <div class="form-group">
           <label class="form-label">Project</label>
           <select class="form-select" id="qt-proj" style="font-size:12px">
-            <option value="">None</option>${projectOptions}
+            <option value="">Select…</option>${projectOptions}
           </select>
         </div>
+        <div class="form-group">
+          <label class="form-label">Phase</label>
+          <select class="form-select" id="qt-phase" style="font-size:12px">
+            <option value="install">Install</option>
+            <option value="design">Design</option>
+          </select>
+        </div>
+      </div>
+      <div class="form-group">
+        <label class="form-label">Due date (optional)</label>
+        <input class="form-input" type="date" id="qt-date" style="font-size:12px">
+      </div>
+      <div class="form-group">
+        <label class="form-label">Assign to</label>
+        <div id="qt-people" style="display:flex;flex-wrap:wrap;gap:5px">
+          ${(state.team || []).map(m => `<span class="qt-chip" data-id="${m.id}" onclick="this.classList.toggle('active')">${esc((m.name || '').split(' ')[0])}</span>`).join('')}
+        </div>
+      </div>
+      <div class="form-group">
+        <label class="form-label">Subtasks (optional)</label>
+        <div id="qt-subs"></div>
+        <button type="button" class="btn btn-sm" onclick="_qtAddSubRow()" style="font-size:11px;margin-top:4px">+ Subtask</button>
       </div>
       <button class="btn-primary" onclick="quickAddTask()" style="width:100%;padding:10px;font-size:13px;margin-top:4px">Add Task</button>
       ${activeTasks > 0 ? `<div style="margin-top:16px;padding-top:12px;border-top:1px solid #1C2333">
@@ -4108,14 +4130,47 @@ function renderRightPanelHTML() {
   `;
 }
 
+function _qtAddSubRow() {
+  const wrap = document.getElementById('qt-subs');
+  if (!wrap) return;
+  const row = document.createElement('div');
+  row.className = 'qt-sub-row';
+  row.style.cssText = 'display:flex;gap:6px;margin-bottom:6px';
+  row.innerHTML = '<input class="form-input qt-sub-title" placeholder="Subtask…" style="flex:1;font-size:12px"><input type="date" class="form-input qt-sub-date" style="font-size:11px;width:118px"><button type="button" class="btn btn-sm" onclick="this.parentElement.remove()" style="padding:4px 8px">\u00d7</button>';
+  wrap.appendChild(row);
+  row.querySelector('.qt-sub-title')?.focus();
+}
+
 function quickAddTask() {
-  const text = document.getElementById('qt-text')?.value?.trim();
-  const dueDate = document.getElementById('qt-date')?.value || '';
+  const title = document.getElementById('qt-text')?.value?.trim();
   const projectId = parseInt(document.getElementById('qt-proj')?.value) || null;
-  if (!text) { document.getElementById('qt-text')?.focus(); return; }
-  addTask(text, dueDate, projectId);
-  const inp = document.getElementById('qt-text');
-  if (inp) inp.value = '';
+  const phase = document.getElementById('qt-phase')?.value || 'install';
+  const dueDate = document.getElementById('qt-date')?.value || '';
+  if (!title) { document.getElementById('qt-text')?.focus(); return; }
+  if (!projectId) {
+    if (typeof showToast === 'function') showToast('Pick a project first', 'error');
+    document.getElementById('qt-proj')?.focus();
+    return;
+  }
+  const assigneeIds = Array.from(document.querySelectorAll('#qt-people .qt-chip.active'))
+    .map(el => parseInt(el.dataset.id)).filter(Boolean);
+
+  const addTaskFn = phase === 'design' ? addDesignTask : addInstallTask;
+  const addSubFn  = phase === 'design' ? addDesignSubtask : addInstallSubtask;
+  const updFn     = phase === 'design' ? updateDesignTask : updateInstallTask;
+
+  const task = addTaskFn({ projectId, title, assigneeIds });
+  if (dueDate) updFn(task.id, { schedStart: dueDate, schedEnd: dueDate });
+
+  document.querySelectorAll('#qt-subs .qt-sub-row').forEach(row => {
+    const st = row.querySelector('.qt-sub-title')?.value?.trim();
+    if (!st) return;
+    const sd = row.querySelector('.qt-sub-date')?.value || dueDate || '';
+    addSubFn(task.id, { title: st, date: sd, assigneeIds });
+  });
+
+  const proj = state.projects.find(p => p.id === projectId);
+  if (typeof showToast === 'function') showToast('Task added to ' + (proj ? proj.name : 'project') + (phase === 'design' ? ' · Design' : ' · Install'), 'success');
   updateRightPanel();
 }
 // ── Dashboard ──
