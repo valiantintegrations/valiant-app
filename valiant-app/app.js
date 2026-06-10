@@ -4486,6 +4486,15 @@ const WIDGETS = [
     render: (ctx) => renderMyMobilizationCard(ctx.memberId)
   },
   {
+    id: 'crew_scheduling',
+    label: 'Crew & Scheduling',
+    defaultSpan: 12,
+    minSpan: 6,
+    scopes: ['mine'],
+    availableTo: () => (getActiveUserBundleKey() === 'install_admin' || currentUserHasPermission('admin.system')),
+    render: (ctx) => renderCrewSchedulingCard(ctx.memberId)
+  },
+  {
     id: 'metrics',
     label: 'Status Summary',
     defaultSpan: 4,
@@ -4592,11 +4601,12 @@ const DASHBOARDS = {
       { id: 'my_calendar',       order: 2, span: 8,  hidden: false },
       { id: 'actions',           order: 3, span: 6,  hidden: false },
       { id: 'pending_approvals', order: 4, span: 6,  hidden: false },
-      { id: 'role_sales',        order: 5, span: 12, hidden: false },
-      { id: 'role_design',       order: 6, span: 12, hidden: false },
-      { id: 'role_pm',           order: 7, span: 12, hidden: false },
-      { id: 'role_install',      order: 8, span: 12, hidden: false },
-      { id: 'role_warehouse',    order: 9, span: 12, hidden: false }
+      { id: 'crew_scheduling',   order: 5, span: 12, hidden: false },
+      { id: 'role_sales',        order: 6, span: 12, hidden: false },
+      { id: 'role_design',       order: 7, span: 12, hidden: false },
+      { id: 'role_pm',           order: 8, span: 12, hidden: false },
+      { id: 'role_install',      order: 9, span: 12, hidden: false },
+      { id: 'role_warehouse',    order: 10, span: 12, hidden: false }
     ]
   }
   // Future: 'sales_mgmt', 'install_mgmt', 'executive', etc. each with their
@@ -5519,6 +5529,92 @@ function renderMyWorkDashboard(memberId, activeProjects, myAssignments, activeMe
 // Shows projects in Contract stage that need mobilization where the viewer is
 // a Sales/Design/PM lead OR is a Master Admin. These should be drained quickly
 // so projects can move from Sales → Design+Install workflow.
+// "Crew & Scheduling" card on My Work — Install Manager (+ admin) only.
+// Surfaces what needs scheduling/crewing and links into the Schedule Builder.
+function renderCrewSchedulingCard(memberId) {
+  const isMgr = getActiveUserBundleKey() === 'install_admin' || currentUserHasPermission('admin.system');
+  if (!isMgr) return '';
+
+  const openStages = ['contract', 'design', 'purchasing', 'install'];
+  const open = (state.projects || []).filter(p => !p.archived && openStages.includes(p.stage));
+
+  const needWindow = open.filter(p => !getBookedTimeline(p.id));
+  const noCrew = open.filter(p => { const a = getProjectAssignment(p.id); return !(a.install && a.install.length); });
+  const dateless = (state.installTasks || []).filter(t =>
+    !getTaskDateRange(t) && state.projects.some(p => p.id === t.projectId && !p.archived));
+  const upcoming = open
+    .map(p => ({ p, win: getInstallWindow(p) }))
+    .filter(o => o.win && o.win.source === 'booked')
+    .filter(o => { const d = daysUntil(o.win.start); return d !== null && d >= 0 && d <= 14; })
+    .sort((a, b) => a.win.start.localeCompare(b.win.start));
+
+  if (!needWindow.length && !noCrew.length && !dateless.length && !upcoming.length) {
+    return `
+      <div class="dashboard-card" style="margin-bottom:14px;border-left:3px solid #3FB950">
+        <div class="dashboard-card-title" style="display:flex;align-items:center;justify-content:space-between;color:#E6EDF3;margin-bottom:6px">
+          <span>Crew &amp; Scheduling</span>
+          <button type="button" class="btn btn-sm" onclick="navigate('schedule-builder')" style="font-size:11px">Open Schedule Builder &rarr;</button>
+        </div>
+        <div style="font-size:12px;color:#8B949E">Everything's scheduled and crewed — nothing pending.</div>
+      </div>`;
+  }
+
+  const cap = (arr, n) => arr.slice(0, n);
+  const rowSB = (p, sub) => `<div class="cs-row" onclick="navigate('schedule-builder')"><div style="min-width:0"><div class="cs-name">${esc(p.name)}</div><div class="cs-sub">${sub}</div></div><span class="cs-arrow">&rarr;</span></div>`;
+  const more = (n) => n > 5 ? `<div class="cs-more" onclick="navigate('schedule-builder')">+${n - 5} more in Schedule Builder &rarr;</div>` : '';
+
+  const sections = [];
+  if (needWindow.length) sections.push(`
+    <div class="cs-group"><div class="cs-ghead" style="color:#D29922">Need an install window &middot; ${needWindow.length}</div>
+      ${cap(needWindow, 5).map(p => rowSB(p, esc(p.client_name || 'No client'))).join('')}
+      ${more(needWindow.length)}
+    </div>`);
+  if (noCrew.length) sections.push(`
+    <div class="cs-group"><div class="cs-ghead" style="color:#F0883E">No crew assigned &middot; ${noCrew.length}</div>
+      ${cap(noCrew, 5).map(p => rowSB(p, esc(p.client_name || 'No client'))).join('')}
+      ${more(noCrew.length)}
+    </div>`);
+  if (dateless.length) {
+    const byProj = {};
+    dateless.forEach(t => { (byProj[t.projectId] = byProj[t.projectId] || []).push(t); });
+    const ids = Object.keys(byProj);
+    sections.push(`
+      <div class="cs-group"><div class="cs-ghead" style="color:#58A6FF">Install tasks with no date &middot; ${dateless.length}</div>
+        ${cap(ids, 5).map(pid => { const p = state.projects.find(x => String(x.id) === String(pid)); return p ? rowSB(p, `${byProj[pid].length} task${byProj[pid].length > 1 ? 's' : ''} unscheduled`) : ''; }).join('')}
+        ${ids.length > 5 ? `<div class="cs-more" onclick="navigate('schedule-builder')">+${ids.length - 5} more in Schedule Builder &rarr;</div>` : ''}
+      </div>`);
+  }
+  if (upcoming.length) sections.push(`
+    <div class="cs-group"><div class="cs-ghead" style="color:#3FB950">Upcoming installs &middot; next 2 weeks &middot; ${upcoming.length}</div>
+      ${cap(upcoming, 6).map(({ p, win }) => {
+        const a = getProjectAssignment(p.id);
+        const crew = (a.install || []).map(x => { const m = getTeamMember(x.id); return m ? (m.initials || getInitials(m.name)) : ''; }).filter(Boolean).join(' ');
+        const e = win.end && win.end !== win.start ? ' – ' + shortDate(win.end) : '';
+        return `<div class="cs-row" onclick="openProject(${p.id})"><div style="min-width:0"><div class="cs-name">${esc(p.name)}</div><div class="cs-sub">${shortDate(win.start)}${e} &middot; ${crew ? esc(crew) : 'no crew'}</div></div><span class="cs-arrow">&rarr;</span></div>`;
+      }).join('')}
+    </div>`);
+
+  const style = `<style>
+    .cs-group{margin-bottom:12px}.cs-group:last-child{margin-bottom:0}
+    .cs-ghead{font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:.04em;margin-bottom:6px}
+    .cs-row{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:8px 10px;background:#0D1117;border:1px solid #1C2333;border-radius:8px;margin-bottom:6px;cursor:pointer;-webkit-tap-highlight-color:transparent}
+    .cs-row:hover{border-color:#30363D}
+    .cs-name{font-size:13px;color:#E6EDF3;font-weight:500;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+    .cs-sub{font-size:11px;color:#8B949E;margin-top:1px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+    .cs-arrow{color:#6E7681;font-size:13px;flex:0 0 auto}
+    .cs-more{font-size:11px;color:#58A6FF;cursor:pointer;padding:4px 2px}
+  </style>`;
+
+  return `${style}
+    <div class="dashboard-card" style="margin-bottom:14px;border-left:3px solid #1F6FEB">
+      <div class="dashboard-card-title" style="display:flex;align-items:center;justify-content:space-between;color:#E6EDF3;margin-bottom:10px">
+        <span>Crew &amp; Scheduling</span>
+        <button type="button" class="btn btn-sm" onclick="navigate('schedule-builder')" style="font-size:11px">Open Schedule Builder &rarr;</button>
+      </div>
+      ${sections.join('')}
+    </div>`;
+}
+
 function renderMyMobilizationCard(memberId) {
   const isAdmin = currentUserHasPermission('admin.system');
   const allMobilization = getProjectsNeedingMobilization();
@@ -8233,11 +8329,56 @@ function refreshAssignTeamBody(projectId) {
 }
 
 // ── Progress tab: where milestones get checked off (Stage C Pass 1) ──
+// Nest a phase's tasks (+ checkable subtasks) under its linked Progress
+// milestone, so Progress is the single place to check things off. Toggling a
+// subtask here feeds the milestone % (which already counts subtask.done).
+function renderProgressLinkedTasks(p, phaseKind, color) {
+  const tasks = (phaseKind === 'design' ? (state.designTasks || []) : (state.installTasks || []))
+    .filter(t => t.projectId === p.id);
+  if (!tasks.length) return '';
+  const box = (done) => `<span class="prog-check${done ? ' checked' : ''}">${done ? '<svg width="9" height="9" viewBox="0 0 11 11" fill="none"><path d="M2 5.5l2.5 2.5L9 3" stroke="#fff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>' : ''}</span>`;
+  return `<div class="prog-nest">` + tasks.map(t => {
+    const subs = t.subtasks || [];
+    if (subs.length) {
+      const doneN = subs.filter(s => s.done).length;
+      return `
+        <div class="prog-task-wrap">
+          <div class="prog-task-head"><span>${esc(t.title)}</span><span class="prog-task-count">${doneN}/${subs.length}</span></div>
+          ${subs.map(sub => `
+            <div class="prog-sub${sub.done ? ' is-done' : ''}" onclick="toggleSubtaskDone(${t.id}, ${sub.id}); renderProjectTabContent()">
+              ${box(sub.done)}
+              <span class="prog-sub-label">${esc(sub.title)}</span>
+              ${sub.date ? `<span class="prog-sub-meta">${shortDate(sub.date)}</span>` : ''}
+            </div>`).join('')}
+        </div>`;
+    }
+    return `
+      <div class="prog-task-wrap">
+        <div class="prog-sub${t.done ? ' is-done' : ''}" onclick="toggleTaskDone(${t.id}); renderProjectTabContent()">
+          ${box(t.done)}
+          <span class="prog-sub-label">${esc(t.title)}</span>
+        </div>
+      </div>`;
+  }).join('') + `</div>`;
+}
+
 function renderProjectProgressHTML(p) {
   const readyForInstall = isReadyForInstall(p);
   const marked = isMarkedReadyForInstall(p.id);
 
   return `
+    <style>
+      .prog-nest{margin-top:8px;padding-left:8px;border-left:2px solid #1C2333;display:flex;flex-direction:column;gap:10px}
+      .prog-task-head{display:flex;justify-content:space-between;font-size:12px;font-weight:600;color:#C9D1D9;margin-bottom:2px}
+      .prog-task-count{font-size:11px;color:#8B949E;font-weight:500}
+      .prog-sub{display:flex;align-items:center;gap:8px;padding:4px 6px;border-radius:6px;cursor:pointer;-webkit-tap-highlight-color:transparent}
+      .prog-sub:hover{background:#161B22}
+      .prog-check{width:15px;height:15px;border-radius:4px;border:1.5px solid #30363D;display:flex;align-items:center;justify-content:center;flex:0 0 auto}
+      .prog-check.checked{background:#238636;border-color:#238636}
+      .prog-sub-label{font-size:12px;color:#C9D1D9}
+      .prog-sub.is-done .prog-sub-label{color:#6E7681;text-decoration:line-through}
+      .prog-sub-meta{margin-left:auto;font-size:10px;color:#6E7681}
+    </style>
     <div class="dashboard-card" style="margin-bottom:14px">
       <div class="dashboard-card-title">Project Milestones</div>
       <div style="font-size:12px;color:#8B949E;line-height:1.5">
@@ -8292,6 +8433,7 @@ function renderProjectProgressHTML(p) {
                           <div class="milestone-subfill" style="width:${Math.round(mPct * 100)}%;background:${phase.color}"></div>
                         </div>
                       ` : ''}
+                      ${renderProgressLinkedTasks(p, milestone.linkedChecklist, phase.color)}
                     ` : ''}
                   </div>
                   ${action && mUnlocked ? (() => {
