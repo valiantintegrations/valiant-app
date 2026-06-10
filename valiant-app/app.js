@@ -5492,9 +5492,160 @@ function renderMyWorkHiddenPalette(memberId) {
   return renderHiddenWidgetsPalette('mine', memberId);
 }
 
+// ── My Work: Notepad layout ──────────────────────────────────────────────
+// An alternative rendering of My Work: an Apple-Notes-style checklist of the
+// tasks/subtasks the user is ASSIGNED to, grouped by project, each line links
+// to its project and checking it toggles the REAL task. A composer adds new
+// lines, which are always real project tasks (pick a project, optionally
+// assign people). Persisted per-device via vi_mywork_layout.
+function getMyWorkLayout() {
+  if (state.myWorkLayout == null) state.myWorkLayout = localStorage.getItem('vi_mywork_layout') || 'cards';
+  return state.myWorkLayout === 'notepad' ? 'notepad' : 'cards';
+}
+function setMyWorkLayout(mode) {
+  state.myWorkLayout = (mode === 'notepad') ? 'notepad' : 'cards';
+  localStorage.setItem('vi_mywork_layout', state.myWorkLayout);
+  renderCurrentPage();
+}
+function renderMyWorkLayoutToggle() {
+  const np = getMyWorkLayout() === 'notepad';
+  const icon = np
+    ? '<svg width="13" height="13" viewBox="0 0 14 14" fill="none"><rect x="2" y="2" width="4" height="4" rx="1" stroke="currentColor" stroke-width="1.3"/><rect x="8" y="2" width="4" height="4" rx="1" stroke="currentColor" stroke-width="1.3"/><rect x="2" y="8" width="4" height="4" rx="1" stroke="currentColor" stroke-width="1.3"/><rect x="8" y="8" width="4" height="4" rx="1" stroke="currentColor" stroke-width="1.3"/></svg>'
+    : '<svg width="13" height="13" viewBox="0 0 14 14" fill="none"><path d="M3 1.5h5l3 3v8H3z" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"/><path d="M5 6h4M5 8.5h4M5 11h2.5" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/></svg>';
+  return `<button type="button" onclick="setMyWorkLayout('${np ? 'cards' : 'notepad'}')" title="${np ? 'Back to dashboard' : 'Notepad layout'}" style="display:inline-flex;align-items:center;gap:6px;font-size:12px;padding:6px 12px;border-radius:7px;border:1px solid #30363D;background:#161B22;color:#C9D1D9;cursor:pointer;-webkit-tap-highlight-color:transparent">${icon}<span>${np ? 'Dashboard' : 'Notepad'}</span></button>`;
+}
+
+// Gather the member's assigned checkoffs (install + design), grouped by project.
+function getNotepadItemsForMember(memberId) {
+  const groups = {};
+  const add = (projectId, line) => {
+    const p = (state.projects || []).find(x => x.id === projectId);
+    if (!p || p.archived) return;
+    if (!groups[projectId]) groups[projectId] = { project: p, lines: [] };
+    groups[projectId].lines.push(line);
+  };
+  const scan = (tasks, phase) => {
+    (tasks || []).forEach(t => {
+      const subs = t.subtasks || [];
+      if (subs.length) {
+        subs.forEach(sub => {
+          const ids = (sub.assigneeIds && sub.assigneeIds.length) ? sub.assigneeIds : (t.assigneeIds || []);
+          if (ids.includes(memberId)) {
+            add(t.projectId, { taskId: t.id, subId: sub.id, phase, title: sub.title, parent: t.title, done: !!sub.done, date: sub.date || null });
+          }
+        });
+      } else if ((t.assigneeIds || []).includes(memberId)) {
+        const dr = getTaskDateRange(t);
+        add(t.projectId, { taskId: t.id, subId: null, phase, title: t.title, parent: null, done: !!t.done, date: (dr && dr.start) || null });
+      }
+    });
+  };
+  scan(state.installTasks, 'install');
+  scan(state.designTasks, 'design');
+  return groups;
+}
+
+function notepadAddTask() {
+  const title = document.getElementById('np-title')?.value?.trim();
+  const projectId = parseInt(document.getElementById('np-proj')?.value) || null;
+  const phase = document.getElementById('np-phase')?.value || 'install';
+  const date = document.getElementById('np-date')?.value || '';
+  if (!title) { document.getElementById('np-title')?.focus(); return; }
+  if (!projectId) {
+    if (typeof showToast === 'function') showToast('Pick a project first', 'error');
+    document.getElementById('np-proj')?.focus();
+    return;
+  }
+  let assigneeIds = Array.from(document.querySelectorAll('#np-people .np-chip.active'))
+    .map(el => parseInt(el.dataset.id)).filter(Boolean);
+  // Default to self so the new line shows on the author's own notepad.
+  if (!assigneeIds.length) { const me = getActiveTeamMemberId(); if (me != null) assigneeIds = [me]; }
+  const addTaskFn = phase === 'design' ? addDesignTask : addInstallTask;
+  const updFn = phase === 'design' ? updateDesignTask : updateInstallTask;
+  const task = addTaskFn({ projectId, title, assigneeIds });
+  if (date) updFn(task.id, { schedStart: date, schedEnd: date });
+  const proj = (state.projects || []).find(p => p.id === projectId);
+  const who = assigneeIds.map(id => (getTeamMember(id) || {}).name).filter(Boolean).map(n => n.split(' ')[0]).join(', ');
+  if (typeof showToast === 'function') showToast('Added to ' + (proj ? proj.name : 'project') + (who ? ' · ' + who : ''), 'success');
+  renderCurrentPage();
+}
+
+function renderMyWorkNotepad(memberId) {
+  const groups = getNotepadItemsForMember(memberId);
+  const projOpts = (state.projects || []).filter(p => !p.archived)
+    .sort((a, b) => (a.name || '').localeCompare(b.name || ''))
+    .map(p => `<option value="${p.id}">${esc(p.name)}</option>`).join('');
+  const chips = (state.team || []).map(m =>
+    `<span class="np-chip" data-id="${m.id}" onclick="this.classList.toggle('active')">${esc((m.name || '').split(' ')[0])}</span>`).join('');
+  const check = '<svg width="11" height="11" viewBox="0 0 11 11" fill="none"><path d="M2 5.5l2.5 2.5L9 3" stroke="#fff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>';
+
+  const ids = Object.keys(groups).sort((a, b) =>
+    (groups[a].project.name || '').localeCompare(groups[b].project.name || ''));
+  const body = ids.length ? ids.map(pid => {
+    const g = groups[pid];
+    const p = g.project;
+    const lines = g.lines.map(ln => `
+      <div class="np-line${ln.done ? ' done' : ''}" onclick="openProject(${p.id})">
+        <span class="np-cb${ln.done ? ' done' : ''}" onclick="event.stopPropagation(); ${ln.subId != null ? `toggleSubtaskDone(${ln.taskId}, ${ln.subId})` : `toggleTaskDone(${ln.taskId})`}; renderCurrentPage()">${ln.done ? check : ''}</span>
+        <div style="flex:1;min-width:0">
+          <div class="np-line-title">${esc(ln.title)}</div>
+          ${(ln.parent || ln.date) ? `<div class="np-line-meta">${ln.parent ? esc(ln.parent) : ''}${ln.parent && ln.date ? ' · ' : ''}${ln.date ? esc(shortDate(ln.date)) : ''}</div>` : ''}
+        </div>
+        <svg class="np-arrow" width="13" height="13" viewBox="0 0 14 14" fill="none"><path d="M5 3l4 4-4 4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+      </div>`).join('');
+    return `
+      <div class="np-group">
+        <div class="np-group-title" onclick="openProject(${p.id})">${esc(p.name)}</div>
+        ${p.client_name ? `<div class="np-group-sub">${esc(p.client_name)}</div>` : ''}
+        ${lines}
+      </div>`;
+  }).join('') : `<div class="np-empty">No tasks assigned to you yet. Add a line above to get started.</div>`;
+
+  return `
+    <style>
+      .np-paper{background:#0D1117;border:1px solid #1C2333;border-radius:12px;padding:18px 18px 22px;max-width:680px}
+      .np-composer{padding-bottom:14px;border-bottom:1px solid #1C2333;margin-bottom:6px}
+      .np-chip{font-size:11px;padding:4px 9px;border-radius:999px;border:1px solid #30363D;color:#8B949E;cursor:pointer;background:#0D1117;-webkit-tap-highlight-color:transparent}
+      .np-chip.active{background:#1565C0;color:#58A6FF;border-color:#1F6FEB}
+      .np-group{margin-top:18px}
+      .np-group-title{font-size:14px;font-weight:700;color:#E6EDF3;cursor:pointer}
+      .np-group-sub{font-size:11px;color:#6E7681;margin:1px 0 6px}
+      .np-line{display:flex;align-items:flex-start;gap:11px;padding:8px 4px;border-bottom:1px solid #161B22;cursor:pointer}
+      .np-line:hover{background:#0F141B}
+      .np-cb{width:18px;height:18px;border-radius:50%;border:1.6px solid #30363D;flex:0 0 auto;display:flex;align-items:center;justify-content:center;margin-top:1px;cursor:pointer}
+      .np-cb.done{background:#238636;border-color:#238636}
+      .np-line-title{font-size:13px;color:#C9D1D9;line-height:1.4}
+      .np-line.done .np-line-title{color:#6E7681;text-decoration:line-through}
+      .np-line-meta{font-size:11px;color:#6E7681;margin-top:1px}
+      .np-arrow{color:#30363D;flex:0 0 auto;margin-top:3px}
+      .np-empty{padding:26px 8px;text-align:center;font-size:13px;color:#6E7681}
+    </style>
+    <div class="np-paper">
+      <div class="np-composer">
+        <input id="np-title" class="form-input" placeholder="New checkoff…" onkeydown="if(event.key==='Enter'){event.preventDefault();notepadAddTask();}" style="font-size:14px">
+        <div style="display:flex;flex-wrap:wrap;gap:8px;margin-top:8px;align-items:center">
+          <select id="np-proj" class="form-select" style="font-size:12px;flex:1;min-width:150px"><option value="">Project…</option>${projOpts}</select>
+          <select id="np-phase" class="form-select" style="font-size:12px;width:100px"><option value="install">Install</option><option value="design">Design</option></select>
+          <input id="np-date" type="date" class="form-input" style="font-size:12px;width:135px">
+        </div>
+        <div id="np-people" style="display:flex;flex-wrap:wrap;gap:5px;margin-top:8px">${chips}</div>
+        <div style="margin-top:10px"><button class="btn-primary" onclick="notepadAddTask()" style="font-size:13px;padding:8px 18px">Add line</button></div>
+      </div>
+      ${body}
+    </div>
+  `;
+}
+
 function renderMyWorkDashboard(memberId, activeProjects, myAssignments, activeMember) {
   const totalAssigned = Object.values(myAssignments).reduce((n, arr) => n + arr.length, 0);
   const myCloseoutProjects = getMyCloseoutProjects(memberId);
+
+  if (getMyWorkLayout() === 'notepad') {
+    return `
+      <div class="mywork-toolbar">${renderMyWorkLayoutToggle()}</div>
+      ${renderMyWorkNotepad(memberId)}
+    `;
+  }
 
   // If no assignments at all AND no closeouts waiting, show empty state
   if (totalAssigned === 0 && myCloseoutProjects.length === 0) {
@@ -5574,6 +5725,7 @@ function renderMyWorkDashboard(memberId, activeProjects, myAssignments, activeMe
   return `
     ${closeoutBanner}
     <div class="mywork-toolbar">
+      ${renderMyWorkLayoutToggle()}
       ${renderMyWorkCustomizeButton()}
     </div>
     ${renderMyWorkWidgetGrid(memberId, widgetCtx)}
