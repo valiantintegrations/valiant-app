@@ -4563,6 +4563,14 @@ const WIDGETS = [
     render: (ctx) => renderCrewSchedulingCard(ctx.memberId)
   },
   {
+    id: 'my_tasks',
+    label: 'My Tasks',
+    defaultSpan: 12,
+    minSpan: 6,
+    scopes: ['mine'],
+    render: (ctx) => renderMyTasksCard(ctx.memberId)
+  },
+  {
     id: 'metrics',
     label: 'Status Summary',
     defaultSpan: 4,
@@ -4667,14 +4675,15 @@ const DASHBOARDS = {
       { id: 'mobilization',      order: 0, span: 12, hidden: false, locked: true, hideable: false },
       { id: 'metrics',           order: 1, span: 4,  hidden: false },
       { id: 'my_calendar',       order: 2, span: 8,  hidden: false },
-      { id: 'actions',           order: 3, span: 6,  hidden: false },
-      { id: 'pending_approvals', order: 4, span: 6,  hidden: false },
-      { id: 'crew_scheduling',   order: 5, span: 12, hidden: false },
-      { id: 'role_sales',        order: 6, span: 12, hidden: false },
-      { id: 'role_design',       order: 7, span: 12, hidden: false },
-      { id: 'role_pm',           order: 8, span: 12, hidden: false },
-      { id: 'role_install',      order: 9, span: 12, hidden: false },
-      { id: 'role_warehouse',    order: 10, span: 12, hidden: false }
+      { id: 'my_tasks',          order: 3, span: 12, hidden: false },
+      { id: 'actions',           order: 4, span: 6,  hidden: false },
+      { id: 'pending_approvals', order: 5, span: 6,  hidden: false },
+      { id: 'crew_scheduling',   order: 6, span: 12, hidden: false },
+      { id: 'role_sales',        order: 7, span: 12, hidden: false },
+      { id: 'role_design',       order: 8, span: 12, hidden: false },
+      { id: 'role_pm',           order: 9, span: 12, hidden: false },
+      { id: 'role_install',      order: 10, span: 12, hidden: false },
+      { id: 'role_warehouse',    order: 11, span: 12, hidden: false }
     ]
   }
   // Future: 'sales_mgmt', 'install_mgmt', 'executive', etc. each with their
@@ -5811,6 +5820,61 @@ function renderMyWorkDashboard(memberId, activeProjects, myAssignments, activeMe
 // so projects can move from Sales → Design+Install workflow.
 // "Crew & Scheduling" card on My Work — Install Manager (+ admin) only.
 // Surfaces what needs scheduling/crewing and links into the Schedule Builder.
+function renderMyTasksCard(memberId) {
+  const groups = getNotepadItemsForMember(memberId);
+  const ids = Object.keys(groups).sort((a, b) =>
+    (groups[a].project.name || '').localeCompare(groups[b].project.name || ''));
+  if (!ids.length) return '';
+  const check = '<svg width="11" height="11" viewBox="0 0 11 11" fill="none"><path d="M2 5.5l2.5 2.5L9 3" stroke="#fff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>';
+  const openN = ids.reduce((n, pid) => n + groups[pid].lines.filter(l => !l.done).length, 0);
+  const body = ids.map(pid => {
+    const g = groups[pid]; const p = g.project;
+    const lines = g.lines.map(ln => {
+      const handler = ln.subId != null ? `toggleSubtaskDone(${ln.taskId}, ${ln.subId})` : `toggleTaskDone(${ln.taskId})`;
+      const tag = ln.phase === 'design' ? 'Design' : 'Install';
+      return `
+        <div class="mt-line${ln.done ? ' done' : ''}" onclick="openProject(${p.id})">
+          <span class="mt-cb${ln.done ? ' done' : ''}" onclick="event.stopPropagation(); ${handler}; renderCurrentPage()">${ln.done ? check : ''}</span>
+          <div style="flex:1;min-width:0">
+            <div class="mt-line-title">${esc(ln.title)}</div>
+            <div class="mt-line-meta"><span class="mt-tag mt-${ln.phase}">${tag}</span>${ln.parent ? ' \u00b7 ' + esc(ln.parent) : ''}${ln.date ? ' \u00b7 ' + esc(shortDate(ln.date)) : ''}</div>
+          </div>
+          <svg class="mt-arrow" width="13" height="13" viewBox="0 0 14 14" fill="none"><path d="M5 3l4 4-4 4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        </div>`;
+    }).join('');
+    return `
+      <div class="mt-group">
+        <div class="mt-group-title" onclick="openProject(${p.id})">${esc(p.name)}${p.client_name ? `<span class="mt-client"> \u00b7 ${esc(p.client_name)}</span>` : ''}</div>
+        ${lines}
+      </div>`;
+  }).join('');
+  return `
+    <div class="dashboard-card" style="margin-bottom:14px">
+      <style>
+        .mt-group{margin-bottom:14px}
+        .mt-group:last-child{margin-bottom:0}
+        .mt-group-title{font-size:13px;font-weight:700;color:#E6EDF3;cursor:pointer;margin-bottom:4px}
+        .mt-client{color:#6E7681;font-weight:500}
+        .mt-line{display:flex;align-items:flex-start;gap:10px;padding:7px 4px;border-bottom:1px solid #161B22;cursor:pointer}
+        .mt-line:hover{background:#0F141B}
+        .mt-cb{width:17px;height:17px;border-radius:5px;border:1.5px solid #30363D;flex:0 0 auto;display:flex;align-items:center;justify-content:center;margin-top:1px}
+        .mt-cb.done{background:#238636;border-color:#238636}
+        .mt-line-title{font-size:13px;color:#C9D1D9;line-height:1.4}
+        .mt-line.done .mt-line-title{color:#6E7681;text-decoration:line-through}
+        .mt-line-meta{font-size:11px;color:#6E7681;margin-top:2px}
+        .mt-tag{font-size:10px;font-weight:600;padding:1px 6px;border-radius:999px}
+        .mt-tag.mt-design{background:rgba(163,113,247,0.16);color:#A371F7}
+        .mt-tag.mt-install{background:rgba(88,166,255,0.16);color:#58A6FF}
+        .mt-arrow{color:#30363D;flex:0 0 auto;margin-top:3px}
+      </style>
+      <div class="dashboard-card-title" style="display:flex;align-items:center;justify-content:space-between">
+        <span>My Tasks</span>
+        <span style="font-size:11px;color:#8B949E;font-weight:500">${openN} open</span>
+      </div>
+      ${body}
+    </div>`;
+}
+
 function renderCrewSchedulingCard(memberId) {
   const isMgr = getActiveUserBundleKey() === 'install_admin' || currentUserHasPermission('admin.system');
   if (!isMgr) return '';
