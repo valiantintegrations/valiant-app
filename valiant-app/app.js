@@ -5663,7 +5663,7 @@ function renderMyWorkNotepad(memberId) {
 
   return `
     <style>
-      .np-paper{background:#0D1117;border:1px solid #1C2333;border-radius:12px;padding:18px 18px 22px;max-width:680px}
+      .np-paper{background:#0D1117;border:1px solid #1C2333;border-radius:12px;padding:18px 18px 22px;width:100%;box-sizing:border-box}
       .np-composer{padding-bottom:14px;border-bottom:1px solid #1C2333;margin-bottom:6px}
       .np-chip{font-size:11px;padding:4px 9px;border-radius:999px;border:1px solid #30363D;color:#8B949E;cursor:pointer;background:#0D1117;-webkit-tap-highlight-color:transparent}
       .np-chip.active{background:#1565C0;color:#58A6FF;border-color:#1F6FEB}
