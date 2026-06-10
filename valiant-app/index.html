@@ -39,12 +39,6 @@
   .vi-overlay button:disabled { opacity: .6; cursor: default; }
   .vi-overlay .vi-err { color: #F85149; font-size: 12px; min-height: 14px; }
   .vi-overlay .vi-status { color: #8B949E; font-size: 12px; text-align: center; }
-  #vi-signout {
-    position: fixed; bottom: 10px; left: 10px; z-index: 9000; display: none;
-    background: #161B22; border: 1px solid #30363D; color: #8B949E;
-    font-family: 'DM Sans', sans-serif; font-size: 11px; padding: 5px 9px; border-radius: 7px; cursor: pointer;
-  }
-  #vi-signout:hover { color: #F85149; border-color: #F85149; }
   #vi-refresh {
     position: fixed; top: 14px; left: 50%; transform: translateX(-50%); z-index: 9500; display: none;
     background: #1F6FEB; color: #fff; border: none; font-family: 'DM Sans', sans-serif;
@@ -52,12 +46,6 @@
   }
   .vi-overlay button.vi-link { background: transparent; color: #58A6FF; padding: 2px; font-weight: 500; margin: 0; }
   .vi-overlay button.vi-link:hover { background: transparent; color: #388BFD; text-decoration: underline; }
-  #vi-changepw {
-    position: fixed; bottom: 40px; left: 10px; z-index: 9000; display: none;
-    background: #161B22; border: 1px solid #30363D; color: #8B949E;
-    font-family: 'DM Sans', sans-serif; font-size: 11px; padding: 5px 9px; border-radius: 7px; cursor: pointer;
-  }
-  #vi-changepw:hover { color: #58A6FF; border-color: #58A6FF; }
 </style>
 </head>
 <body>
@@ -183,9 +171,7 @@
     <div class="vi-status" id="vi-status"></div>
   </div>
 </div>
-<button id="vi-signout">Sign out</button>
 <button id="vi-refresh">Updates available — refresh</button>
-<button id="vi-changepw">Change password</button>
 <div id="vi-setpw" class="vi-overlay" style="display:none">
   <div class="vi-card">
     <div class="vi-logo">
@@ -284,8 +270,6 @@
 
   function bootApp() {
     $('vi-auth').style.display = 'none';
-    $('vi-signout').style.display = 'block';
-    $('vi-changepw').style.display = 'block';
     const s = document.createElement('script');
     s.src = 'app.js';
     document.body.appendChild(s);
@@ -314,7 +298,7 @@
   }
 
   $('vi-refresh').onclick = () => location.reload();
-  $('vi-signout').onclick = async () => {
+  window.viSignOut = async () => {
     try { await sb.auth.signOut(); } catch {}
     clearLocalViKeys();
     location.reload();
@@ -377,7 +361,7 @@
       $('vi-btn').onclick = doLogin;
       $('vi-pass').addEventListener('keydown', e => { if (e.key === 'Enter') doLogin(); });
       $('vi-forgot').onclick = doForgot;
-      $('vi-changepw').onclick = () => showSetPw('change');
+      window.viOpenChangePassword = () => showSetPw('change');
       $('vi-setpw-btn').onclick = doSetPassword;
       $('vi-setpw-cancel').onclick = () => { $('vi-setpw').style.display = 'none'; };
       $('vi-newpw2').addEventListener('keydown', e => { if (e.key === 'Enter') doSetPassword(); });
