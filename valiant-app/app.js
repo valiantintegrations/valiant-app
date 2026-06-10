@@ -21181,6 +21181,8 @@ function _sbInit() {
     placing: null,                 // { kind:'taskset' } | { kind:'task', id } | null (tap-to-place)
     rangeStart: null,              // first cell tapped when picking a start→end range
     activeProject: null,           // project id whose tasks/subtasks fill the panel below the calendar
+    panelEdit: false,              // bulk-edit mode in the project panel
+    panelSel: new Set(),           // selected step keys "taskId:subId" in the panel
     openUnbooked: true,
     openBooked: false
   };
@@ -21305,6 +21307,158 @@ function _sbOpenProject(projectId) {
 function _sbCloseProject() {
   _sbInit();
   window._sbState.activeProject = null;
+  window._sbState.panelEdit = false;
+  window._sbState.panelSel = new Set();
+  renderCurrentPage();
+}
+
+// ── Panel bulk-edit mode (Jetbuilt-style: select steps → assign / set date) ──
+function _sbPanelToggleEdit() {
+  _sbInit();
+  window._sbState.panelEdit = !window._sbState.panelEdit;
+  window._sbState.panelSel = new Set();
+  renderCurrentPage();
+}
+function _sbPanelStepKey(taskId, subId) { return taskId + ':' + subId; }
+function _sbPanelToggleStep(taskId, subId) {
+  _sbInit();
+  const k = _sbPanelStepKey(taskId, subId);
+  const sel = window._sbState.panelSel;
+  if (sel.has(k)) sel.delete(k); else sel.add(k);
+  renderCurrentPage();
+}
+function _sbPanelToggleTask(taskId) {
+  _sbInit();
+  const t = _getTaskByIdAnyPhase(taskId);
+  if (!t) return;
+  const keys = (t.subtasks || []).map(s => _sbPanelStepKey(taskId, s.id));
+  const sel = window._sbState.panelSel;
+  const allOn = keys.length > 0 && keys.every(k => sel.has(k));
+  keys.forEach(k => { if (allOn) sel.delete(k); else sel.add(k); });
+  renderCurrentPage();
+}
+function _sbPanelClear() { _sbInit(); window._sbState.panelSel = new Set(); renderCurrentPage(); }
+
+// Resolve selected step keys → [{taskId, subId, phase, task, sub}]
+function _sbPanelSelectedSteps() {
+  const out = [];
+  window._sbState.panelSel.forEach(k => {
+    const [tid, sid] = k.split(':').map(Number);
+    const t = _getTaskByIdAnyPhase(tid);
+    if (!t) return;
+    const s = (t.subtasks || []).find(x => x.id === sid);
+    if (s) out.push({ taskId: tid, subId: sid, phase: _getTaskPhase(tid), task: t, sub: s });
+  });
+  return out;
+}
+function _sbPanelSaveStores() {
+  // Persist whichever phase stores were touched.
+  save('vi_install_tasks', state.installTasks);
+  save('vi_design_tasks', state.designTasks);
+}
+function _sbPanelOpenAssign() {
+  _sbInit();
+  const steps = _sbPanelSelectedSteps();
+  if (steps.length === 0) { showToast('Select at least one step', 'info'); return; }
+  const crewIds = new Set();
+  const pid = window._sbState.activeProject;
+  if (pid != null) {
+    const a = getProjectAssignment(pid);
+    (a.install || []).forEach(x => crewIds.add(x.id));
+    (a.pm || []).forEach(x => crewIds.add(x.id));
+  }
+  const pool = [...(state.team || [])].sort((a, b) => {
+    const aOn = crewIds.has(a.id) ? 0 : 1, bOn = crewIds.has(b.id) ? 0 : 1;
+    if (aOn !== bOn) return aOn - bOn;
+    return a.name.localeCompare(b.name);
+  });
+  window._sbPanelAssignIds = new Set();
+  document.getElementById('sb-passign-dialog')?.remove();
+  const overlay = document.createElement('div');
+  overlay.id = 'sb-passign-dialog';
+  overlay.className = 'modal-overlay';
+  overlay.style.zIndex = '10002';
+  overlay.onclick = (e) => { if (e.target === overlay) overlay.remove(); };
+  overlay.innerHTML = `
+    <div class="modal-container" style="max-width:420px;display:flex;flex-direction:column">
+      <div class="modal-header">
+        <div class="modal-title">Assign to ${steps.length} step${steps.length === 1 ? '' : 's'}</div>
+        <button class="modal-close" onclick="document.getElementById('sb-passign-dialog').remove()">&times;</button>
+      </div>
+      <div class="modal-body" style="display:flex;flex-direction:column;gap:10px">
+        <div style="font-size:11px;color:#8B949E">Replaces assignees on the selected steps.</div>
+        <div class="itask-assignee-pick">
+          ${pool.map(m => `
+            <label class="itask-assignee-chip">
+              <input type="checkbox" value="${m.id}" onchange="_sbPanelToggleAssignPerson(${m.id},this.checked)">
+              <span>${esc(m.name)}${crewIds.has(m.id) ? '' : ' <span style="font-size:9px;color:#D29922">(not on crew)</span>'}</span>
+            </label>`).join('')}
+        </div>
+      </div>
+      <div class="modal-footer" style="display:flex;gap:8px;justify-content:flex-end;padding:12px 16px;border-top:1px solid #30363D">
+        <button class="btn btn-sm" onclick="document.getElementById('sb-passign-dialog').remove()">Cancel</button>
+        <button class="btn btn-sm btn-primary" onclick="_sbPanelCommitAssign()">Apply</button>
+      </div>
+    </div>`;
+  document.body.appendChild(overlay);
+}
+function _sbPanelToggleAssignPerson(id, checked) {
+  if (!window._sbPanelAssignIds) window._sbPanelAssignIds = new Set();
+  if (checked) window._sbPanelAssignIds.add(id); else window._sbPanelAssignIds.delete(id);
+}
+function _sbPanelCommitAssign() {
+  const ids = [...(window._sbPanelAssignIds || new Set())];
+  const steps = _sbPanelSelectedSteps();
+  steps.forEach(({ sub, task }) => {
+    sub.assigneeIds = [...ids];
+    if (task.projectId != null && ids.length) ensureOnProjectCrew(task.projectId, ids);
+  });
+  _sbPanelSaveStores();
+  document.getElementById('sb-passign-dialog')?.remove();
+  showToast(`Assigned ${ids.length} ${ids.length === 1 ? 'person' : 'people'} to ${steps.length} step${steps.length === 1 ? '' : 's'}`, 'success');
+  renderCurrentPage();
+}
+function _sbPanelOpenDate() {
+  _sbInit();
+  const steps = _sbPanelSelectedSteps();
+  if (steps.length === 0) { showToast('Select at least one step', 'info'); return; }
+  document.getElementById('sb-pdate-dialog')?.remove();
+  const today = _ymd(new Date());
+  const overlay = document.createElement('div');
+  overlay.id = 'sb-pdate-dialog';
+  overlay.className = 'modal-overlay';
+  overlay.style.zIndex = '10002';
+  overlay.onclick = (e) => { if (e.target === overlay) overlay.remove(); };
+  overlay.innerHTML = `
+    <div class="modal-container" style="max-width:340px">
+      <div class="modal-header">
+        <div class="modal-title">Set date · ${steps.length} step${steps.length === 1 ? '' : 's'}</div>
+        <button class="modal-close" onclick="document.getElementById('sb-pdate-dialog').remove()">&times;</button>
+      </div>
+      <div class="modal-body" style="display:flex;flex-direction:column;gap:12px">
+        <label class="sb-field"><span>Date</span><input type="date" id="sb-pdate-val" value="${today}"></label>
+      </div>
+      <div class="modal-footer" style="display:flex;gap:8px;justify-content:flex-end;padding:12px 16px;border-top:1px solid #30363D">
+        <button class="btn btn-sm" onclick="document.getElementById('sb-pdate-dialog').remove()">Cancel</button>
+        <button class="btn btn-sm btn-primary" onclick="_sbPanelCommitDate()">Apply</button>
+      </div>
+    </div>`;
+  document.body.appendChild(overlay);
+}
+function _sbPanelCommitDate() {
+  const d = document.getElementById('sb-pdate-val')?.value;
+  if (!d) { showToast('Pick a date', 'info'); return; }
+  const steps = _sbPanelSelectedSteps();
+  steps.forEach(({ sub, task }) => {
+    sub.date = d;
+    if (task.schedStart) {
+      if (d < task.schedStart) task.schedStart = d;
+      if (d > (task.schedEnd || task.schedStart)) task.schedEnd = d;
+    }
+  });
+  _sbPanelSaveStores();
+  document.getElementById('sb-pdate-dialog')?.remove();
+  showToast(`Set date on ${steps.length} step${steps.length === 1 ? '' : 's'}`, 'success');
   renderCurrentPage();
 }
 function _sbArmPanelTask(taskId) {
@@ -21354,6 +21508,8 @@ function _sbRenderProjectPanel() {
   if (!p) return `<div class="sb-panel2 sb-panel2-empty">Project not found.</div>`;
   const color = getProjectColor(pid);
   const tasks = _sbProjectTasks(pid);
+  const editing = window._sbState.panelEdit;
+  const sel = window._sbState.panelSel;
 
   const taskBlocks = tasks.map(({ t, phase }) => {
     const range = getTaskDateRange(t);
@@ -21364,9 +21520,27 @@ function _sbRenderProjectPanel() {
     const sys = t.system ? `<span class="itask-sys">${esc(t.system)}</span>` : '';
     const phaseTag = phase === 'design' ? '<span class="itask-tplbadge">Design</span>' : '';
     const tplTag = t.templateKey ? '<span class="itask-tplbadge">from template</span>' : '';
+    const taskKeys = (t.subtasks || []).map(s => _sbPanelStepKey(t.id, s.id));
+    const taskAllOn = taskKeys.length > 0 && taskKeys.every(k => sel.has(k));
     const subs = (t.subtasks || []).slice()
       .sort((a, b) => (a.date || '9999').localeCompare(b.date || '9999'))
-      .map(s => `
+      .map(s => {
+        const k = _sbPanelStepKey(t.id, s.id);
+        const on = sel.has(k);
+        if (editing) {
+          return `
+            <div class="itask-sub ${on ? 'sb-rowsel' : ''}" onclick="_sbPanelToggleStep(${t.id},${s.id})">
+              <span class="sb-selbox ${on ? 'on' : ''}">${on ? '✓' : ''}</span>
+              <div class="itask-sub-body">
+                <div class="itask-sub-title">${esc(s.title)}</div>
+                <div class="itask-sub-meta">
+                  ${s.date ? esc(fmtDateLocal(s.date)) : '<span class="itask-nodate">Unpinned</span>'}
+                  <span class="itask-sub-assignees">${_sbAssigneeChipsV2(s.assigneeIds)}</span>
+                </div>
+              </div>
+            </div>`;
+        }
+        return `
         <div class="itask-sub sb-draggable" draggable="true" ondragstart="_sbDragStart(event,'subtask:${t.id}:${s.id}')">
           <span class="itask-drag-handle" title="Drag onto a date">⋮⋮</span>
           <div class="itask-sub-body">
@@ -21378,32 +21552,51 @@ function _sbRenderProjectPanel() {
             ${s.notes ? `<div class="itask-sub-notes">${esc(s.notes)}</div>` : ''}
           </div>
           <button class="sb-iconbtn" title="Pin to a day" onclick="event.stopPropagation();_sbArmSubtask(${t.id},${s.id})">${SB_SVG_CAL}</button>
-        </div>`).join('');
+        </div>`;
+      }).join('');
+    const headBody = editing
+      ? `<div class="itask-head-body">
+            <div class="itask-title">${esc(t.title)} ${sys}${phaseTag}${tplTag}</div>
+            <div class="itask-meta">${esc(dateLabel)}${t.isMilestone ? '' : ` · ${subTotal} step${subTotal === 1 ? '' : 's'}`}</div>
+         </div>`
+      : `<div class="itask-head-body sb-draggable" draggable="true" ondragstart="_sbDragStart(event,'task:${t.id}')">
+            <div class="itask-title">${esc(t.title)} ${sys}${phaseTag}${tplTag}</div>
+            <div class="itask-meta">${esc(dateLabel)}${t.isMilestone ? '' : ` · ${subTotal} step${subTotal === 1 ? '' : 's'}`}</div>
+         </div>`;
+    const headLead = editing && subTotal > 0
+      ? `<span class="sb-selbox ${taskAllOn ? 'on' : ''}" title="Select all steps" onclick="event.stopPropagation();_sbPanelToggleTask(${t.id})">${taskAllOn ? '✓' : ''}</span>`
+      : '';
+    const headAction = editing ? '' : `<div class="itask-head-actions"><button class="sb-iconbtn" title="Schedule task" onclick="event.stopPropagation();_sbArmPanelTask(${t.id})">${SB_SVG_CAL}</button></div>`;
     return `
       <div class="itask-card${t.isMilestone ? ' is-milestone' : ''}">
         <div class="itask-head">
-          <div class="itask-head-body sb-draggable" draggable="true" ondragstart="_sbDragStart(event,'task:${t.id}')">
-            <div class="itask-title">${esc(t.title)} ${sys}${phaseTag}${tplTag}</div>
-            <div class="itask-meta">${esc(dateLabel)}${t.isMilestone ? '' : ` · ${subTotal} step${subTotal === 1 ? '' : 's'}`}</div>
-          </div>
-          <div class="itask-head-actions">
-            <button class="sb-iconbtn" title="Schedule task" onclick="event.stopPropagation();_sbArmPanelTask(${t.id})">${SB_SVG_CAL}</button>
-          </div>
+          ${headLead}${headBody}${headAction}
         </div>
         ${subTotal > 0 ? `<div class="itask-subs">${subs}</div>` : ''}
       </div>`;
   }).join('');
 
+  const selCount = sel.size;
+  const bottomBar = (editing && selCount > 0) ? `
+    <div class="sb-panel2-bulk">
+      <span class="sb-bulkn">${selCount} selected</span>
+      <button class="btn btn-sm" onclick="_sbPanelOpenAssign()">Assign people</button>
+      <button class="btn btn-sm" onclick="_sbPanelOpenDate()">Set date</button>
+      <button class="sb-bulk-clear" onclick="_sbPanelClear()" title="Clear">✕</button>
+    </div>` : '';
+
   return `
     <div class="sb-panel2" style="--sb-color:${color}">
       <div class="sb-panel2-head">
         <span class="sb-panel2-title">${esc(p.name)}</span>
-        <span class="sb-panel2-sub">drag a task or step onto a date above</span>
+        <span class="sb-panel2-sub">${editing ? 'select steps, then assign or set dates' : 'drag a task or step onto a date above'}</span>
+        ${tasks.length ? `<button class="btn btn-sm sb-panel2-edit" onclick="_sbPanelToggleEdit()">${editing ? 'Done' : 'Edit tasks'}</button>` : ''}
         <button class="sb-bulk-clear" onclick="_sbCloseProject()" title="Close">✕</button>
       </div>
       <div class="sb-panel2-body">
         ${tasks.length ? taskBlocks : '<div class="sb-empty">No tasks on this project yet.</div>'}
       </div>
+      ${bottomBar}
     </div>`;
 }
 
