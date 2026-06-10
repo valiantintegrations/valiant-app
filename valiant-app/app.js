@@ -5702,7 +5702,7 @@ function renderMyWorkDashboard(memberId, activeProjects, myAssignments, activeMe
 
   if (getMyWorkLayout() === 'notepad') {
     return `
-      <div class="mywork-toolbar">${renderMyWorkLayoutToggle()}</div>
+      <div class="mywork-toolbar" style="display:flex;justify-content:flex-start">${renderMyWorkLayoutToggle()}</div>
       ${renderMyWorkNotepad(memberId)}
     `;
   }
@@ -5784,9 +5784,9 @@ function renderMyWorkDashboard(memberId, activeProjects, myAssignments, activeMe
 
   return `
     ${closeoutBanner}
-    <div class="mywork-toolbar">
-      ${renderMyWorkLayoutToggle()}
-      ${renderMyWorkCustomizeButton()}
+    <div class="mywork-toolbar" style="display:flex;align-items:center;justify-content:space-between;gap:8px">
+      <div>${renderMyWorkLayoutToggle()}</div>
+      <div style="display:flex;align-items:center;gap:8px">${renderMyWorkCustomizeButton()}</div>
     </div>
     ${renderMyWorkWidgetGrid(memberId, widgetCtx)}
   `;
