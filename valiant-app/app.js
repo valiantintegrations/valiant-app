@@ -16617,6 +16617,69 @@ function setTextSize(size) {
   renderCurrentPage();
 }
 
+// ── Calendar subscribe (per-user ICS feed) ──────────────────────────────
+function getOrCreateCalToken(memberId) {
+  const m = (state.team || []).find(t => t.id === memberId);
+  if (!m) return null;
+  if (!m.calToken) {
+    const rnd = (typeof crypto !== 'undefined' && crypto.randomUUID)
+      ? crypto.randomUUID().replace(/-/g, '')
+      : (Math.random().toString(36).slice(2) + Date.now().toString(36));
+    m.calToken = 'vc_' + rnd;
+    save('vi_team', state.team);
+  }
+  return m.calToken;
+}
+
+function copyCalUrl() {
+  const el = document.getElementById('cal-url');
+  if (!el) return;
+  const done = () => { if (typeof showToast === 'function') showToast('Link copied', 'success'); };
+  if (navigator.clipboard && navigator.clipboard.writeText) {
+    navigator.clipboard.writeText(el.value).then(done).catch(() => { el.select(); document.execCommand('copy'); done(); });
+  } else { el.select(); document.execCommand('copy'); done(); }
+}
+
+function regenerateCalToken() {
+  const mid = getActiveTeamMemberId();
+  const m = (state.team || []).find(t => t.id === mid);
+  if (!m) return;
+  const rnd = (typeof crypto !== 'undefined' && crypto.randomUUID)
+    ? crypto.randomUUID().replace(/-/g, '')
+    : (Math.random().toString(36).slice(2) + Date.now().toString(36));
+  m.calToken = 'vc_' + rnd;
+  save('vi_team', state.team);
+  if (typeof showToast === 'function') showToast('Link reset \u2014 re-subscribe with the new URL', 'success');
+  renderCurrentPage();
+}
+
+function renderCalendarSubscribeCard() {
+  const mid = getActiveTeamMemberId();
+  if (mid == null) return '';
+  const token = getOrCreateCalToken(mid);
+  if (!token) return '';
+  const url = location.origin + '/api/cal?t=' + token;
+  return `
+      <div class="dashboard-card" style="margin-top:14px">
+        <div style="font-size:11px;font-weight:600;color:#6E7681;text-transform:uppercase;letter-spacing:0.08em;margin-bottom:4px">Calendar</div>
+        <div style="font-size:14px;font-weight:600;color:#E6EDF3;margin-bottom:2px">Subscribe to your calendar</div>
+        <div style="font-size:12px;color:#8B949E;margin-bottom:12px">Add your Valiant schedule \u2014 install windows, meetings, your assigned tasks, and personal time \u2014 to Google or Apple Calendar. It's read-only and refreshes on its own.</div>
+        <div style="display:flex;gap:8px;align-items:center;margin-bottom:12px">
+          <input id="cal-url" readonly value="${esc(url)}" onclick="this.select()" class="form-input" style="font-size:12px;flex:1;min-width:0">
+          <button type="button" class="btn btn-sm" onclick="copyCalUrl()">Copy</button>
+        </div>
+        <div style="font-size:12px;color:#8B949E;line-height:1.7">
+          <b style="color:#C9D1D9">Google:</b> Calendar \u2192 Other calendars \u2192 + \u2192 From URL \u2192 paste \u2192 Add.<br>
+          <b style="color:#C9D1D9">iPhone:</b> Settings \u2192 Calendar \u2192 Accounts \u2192 Add Account \u2192 Other \u2192 Add Subscribed Calendar \u2192 paste.<br>
+          <b style="color:#C9D1D9">Mac:</b> Calendar \u2192 File \u2192 New Calendar Subscription \u2192 paste.
+        </div>
+        <div style="margin-top:12px">
+          <button type="button" class="btn btn-sm" onclick="regenerateCalToken()">Reset link</button>
+          <span style="font-size:11px;color:#6E7681;margin-left:8px">Resetting makes the old link stop working.</span>
+        </div>
+      </div>`;
+}
+
 function renderSettings(c) {
   const size = state.textSize || 'normal';
   c.innerHTML = `
@@ -16640,6 +16703,7 @@ function renderSettings(c) {
           <button type="button" class="btn btn-sm" onclick="window.viSignOut && window.viSignOut()">Sign out</button>
         </div>
       </div>
+      ${renderCalendarSubscribeCard()}
     </div>
   `;
 }
