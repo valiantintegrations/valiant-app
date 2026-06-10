@@ -5532,36 +5532,60 @@ function renderMyMobilizationCard(memberId) {
   });
   if (mine.length === 0) return '';
 
+  // Mobilization is a Sales action. Sales (and admin) get the actionable
+  // checklist card; everyone else just gets a heads-up that a job is incoming.
+  const canMobilize = isAdmin || getActiveUserBundleKey() === 'sales';
+
+  const rows = mine.map(p => {
+    const s = getMobilizationState(p.id);
+    const completed = MOBILIZATION_ITEMS.filter(it => s[it.key]).length;
+    const total = MOBILIZATION_ITEMS.length;
+    const pct = Math.round((completed / total) * 100);
+    const meta = `
+      <div class="my-mob-row-main">
+        <div class="my-mob-row-name">${esc(p.name)}</div>
+        <div class="my-mob-row-meta">
+          ${p.client_name ? `<span>${esc(p.client_name)}</span>` : ''}
+          <span style="color:#D29922">${completed}/${total} items &middot; ${pct}%</span>
+        </div>
+        <div class="my-mob-row-bar"><div class="my-mob-row-bar-fill" style="width:${pct}%"></div></div>
+      </div>`;
+    if (canMobilize) {
+      return `
+        <div class="my-mob-row" onclick="openMobilizationDialog(${p.id})">
+          ${meta}
+          <button type="button" class="btn-primary my-mob-row-btn" onclick="event.stopPropagation();openMobilizationDialog(${p.id})">Open Checklist &rarr;</button>
+        </div>`;
+    }
+    return `<div class="my-mob-row" onclick="openProject(${p.id})">${meta}</div>`;
+  }).join('');
+
+  if (canMobilize) {
+    return `
+      <div data-context-section="my-mobilization" class="dashboard-card" style="margin-bottom:14px;border-left:3px solid #DA3633;background:#1A0D0D">
+        <div class="dashboard-card-title" style="display:flex;align-items:center;justify-content:space-between;color:#F85149">
+          <span style="display:flex;align-items:center;gap:8px">
+            <div style="width:8px;height:8px;border-radius:50%;background:#DA3633;animation:pulse 1.5s infinite"></div>
+            Mobilization Needed &middot; ${mine.length}
+          </span>
+        </div>
+        <div style="font-size:11px;color:#C9D1D9;margin-bottom:10px">Complete these checklists to unlock Design + Operations and clear projects from your queue.</div>
+        ${rows}
+      </div>`;
+  }
+
+  // Informational variant — non-sales viewers (e.g. Install Manager / coordinator)
   return `
-    <div data-context-section="my-mobilization" class="dashboard-card" style="margin-bottom:14px;border-left:3px solid #DA3633;background:#1A0D0D">
-      <div class="dashboard-card-title" style="display:flex;align-items:center;justify-content:space-between;color:#F85149">
+    <div data-context-section="my-mobilization" class="dashboard-card" style="margin-bottom:14px;border-left:3px solid #1F6FEB;background:#0D1117">
+      <div class="dashboard-card-title" style="display:flex;align-items:center;justify-content:space-between;color:#58A6FF">
         <span style="display:flex;align-items:center;gap:8px">
-          <div style="width:8px;height:8px;border-radius:50%;background:#DA3633;animation:pulse 1.5s infinite"></div>
-          Mobilization Needed &middot; ${mine.length}
+          <div style="width:8px;height:8px;border-radius:50%;background:#1F6FEB"></div>
+          Incoming &mdash; In Mobilization &middot; ${mine.length}
         </span>
       </div>
-      <div style="font-size:11px;color:#C9D1D9;margin-bottom:10px">Complete these checklists to unlock Design + Operations and clear projects from your queue.</div>
-      ${mine.map(p => {
-        const s = getMobilizationState(p.id);
-        const completed = MOBILIZATION_ITEMS.filter(it => s[it.key]).length;
-        const total = MOBILIZATION_ITEMS.length;
-        const pct = Math.round((completed / total) * 100);
-        return `
-          <div class="my-mob-row" onclick="openMobilizationDialog(${p.id})">
-            <div class="my-mob-row-main">
-              <div class="my-mob-row-name">${esc(p.name)}</div>
-              <div class="my-mob-row-meta">
-                ${p.client_name ? `<span>${esc(p.client_name)}</span>` : ''}
-                <span style="color:#D29922">${completed}/${total} items &middot; ${pct}%</span>
-              </div>
-              <div class="my-mob-row-bar"><div class="my-mob-row-bar-fill" style="width:${pct}%"></div></div>
-            </div>
-            <button type="button" class="btn-primary my-mob-row-btn" onclick="event.stopPropagation();openMobilizationDialog(${p.id})">Open Checklist &rarr;</button>
-          </div>
-        `;
-      }).join('')}
-    </div>
-  `;
+      <div style="font-size:11px;color:#8B949E;margin-bottom:10px">Sales is mobilizing these. They'll move into Design + Install once their checklist clears.</div>
+      ${rows}
+    </div>`;
 }
 
 // "My Calendar" card on My Work — shows today + week ahead at a glance.
