@@ -624,6 +624,21 @@ function getActiveTeamMemberId() {
   return parseInt(localStorage.getItem('vi_active_member')) || state.team[0]?.id || 1;
 }
 
+// ── Admin sandbox ──
+// The "Admin" dropdown entry shows EVERY dashboard tab (a holding area for
+// work-in-progress views). Normal selections show the clean day-to-day set.
+let _adminSandbox = localStorage.getItem('vi_admin_sandbox') === '1';
+function isAdminSandbox() { return _adminSandbox; }
+function setAdminSandbox(on, render) {
+  _adminSandbox = !!on;
+  localStorage.setItem('vi_admin_sandbox', on ? '1' : '0');
+  if (!on && !['mine', 'project_health'].includes(state.dashboardMode)) {
+    state.dashboardMode = 'mine';
+    localStorage.setItem('vi_dashboard_mode', 'mine');
+  }
+  if (render !== false) renderCurrentPage();
+}
+
 // ── Pipeline Stage Config ──
 const STAGES = [
   { key: 'lead', label: 'Lead', color: 'gray' },
@@ -4157,34 +4172,33 @@ function renderDashboard(c) {
   // + admins — not installers or system architects.
   const showPipelineTab = canSeeAllProjects && !isInstaller && !isSystemArchitect;
 
-  // Build mode tabs
-  const tabs = [];
-  if (isMasterAdmin) tabs.push({ key: 'executive', label: 'Executive' });
-  // My Work tab — appends viewer's first name to confirm which account they're in.
-  // Role identification stays on the sidebar (bottom-left) where it's always visible.
+  // Build mode tabs.
+  // Clean day-to-day = My Work (+ Project Health for management). Everything
+  // else lives behind the "Admin" dropdown entry (sandbox) so we keep the
+  // work-in-progress views without cluttering normal use.
+  const sandbox = isAdminSandbox();
+  const isManagement = isMasterAdmin || isInstallManager || isProjectCoord;
   const viewerName = activeMember ? (activeMember.name || '').split(' ')[0] : '';
   const myWorkLabel = viewerName ? `My Work — ${esc(viewerName)}` : 'My Work';
+
+  const tabs = [];
+  if (sandbox) tabs.push({ key: 'executive', label: 'Executive' });
   tabs.push({ key: 'mine', label: myWorkLabel, badge: totalMyWork });
-  if (canSeeSalesMgmt) {
+  if (isManagement || sandbox) tabs.push({ key: 'project_health', label: 'Project Health' });
+  if (sandbox) {
     tabs.push({ key: 'sales_mgmt', label: 'Sales Dept' });
-  }
-  if (canSeeDesignMgmt) {
     tabs.push({ key: 'design_mgmt', label: 'Design Dept' });
-  }
-  if (canSeeInstallMgmt && isProjectCoord) {
     tabs.push({ key: 'install_mgmt', label: 'Project Coordination' });
-  }
-  // All Open Projects — single tab visible to PC + Install Manager + admin.
-  // Shows project cards from contract through closeout (anything not archived
-  // and past contract stage). Distinct from the sidebar Projects tab (which is
-  // a lookup tool for everyone — past, current, anyone's projects).
-  if (isProjectCoord || isInstallManager) {
     tabs.push({ key: 'all_open', label: 'All Open Projects' });
-  }
-  if (isInstallManager) {
     tabs.push({ key: 'crew_manager', label: 'Crew Manager' });
+    tabs.push({ key: 'pipeline', label: 'Full Pipeline' });
   }
-  if (showPipelineTab) tabs.push({ key: 'pipeline', label: 'Full Pipeline' });
+  // If the saved mode isn't an available tab (e.g. left sandbox), fall back.
+  if (!tabs.find(t => t.key === dashboardMode)) {
+    dashboardMode = 'mine';
+    state.dashboardMode = 'mine';
+    localStorage.setItem('vi_dashboard_mode', 'mine');
+  }
 
   // Dept meta — title + accent color, used to render an inline title to
   // the right of the tab strip. Only dept-management dashboards have this;
@@ -4233,9 +4247,25 @@ function renderDashboard(c) {
     c.innerHTML = modeToggle + renderSalesMgmtDashboard(activeProjects);
   } else if (dashboardMode === 'mine') {
     c.innerHTML = modeToggle + renderMyWorkDashboard(memberId, activeProjects, myAssignments, activeMember);
+  } else if (dashboardMode === 'project_health') {
+    c.innerHTML = modeToggle + renderProjectHealthDashboard(activeProjects);
   } else {
     c.innerHTML = modeToggle + renderPipelineDashboard(activeProjects);
   }
+}
+
+// Project Health — management oversight of open projects (% complete + held-up
+// items). Drop 1 stub; full hover-detail view comes in Drop 2.
+function renderProjectHealthDashboard(activeProjects) {
+  const open = activeProjects.filter(p => p.stage === 'contract');
+  return `
+    <div style="max-width:1100px">
+      <div class="dashboard-card" style="margin-bottom:14px">
+        <div style="font-size:11px;font-weight:600;color:#6E7681;text-transform:uppercase;letter-spacing:.08em;margin-bottom:6px">Project Health</div>
+        <div style="font-size:13px;color:#8B949E;line-height:1.5">Oversight of every open project — progress % and anything overdue or held up, at a glance. The full view (with hover detail) lands in the next drop.</div>
+        <div style="font-size:30px;font-weight:600;color:#E6EDF3;margin-top:12px">${open.length}<span style="font-size:13px;color:#8B949E;font-weight:400"> open projects</span></div>
+      </div>
+    </div>`;
 }
 
 // Alert counts for tab badges
@@ -17449,11 +17479,14 @@ async function init() {
   const c = document.getElementById('content');
   const sel = document.getElementById('role-select');
   if (sel) {
+    const inSandbox = isAdminSandbox();
     sel.innerHTML = state.team.map(m => {
-      const da = DASHBOARD_ACCESS.find(d => d.key === m.primaryRole);
-      return `<option value="${m.id}" ${m.id === getActiveTeamMemberId() ? 'selected' : ''}>${esc(m.name)} (${da?.label || m.primaryRole})</option>`;
-    }).join('');
-    sel.onchange = function() { switchUser(parseInt(this.value)); };
+      return `<option value="${m.id}" ${(!inSandbox && m.id === getActiveTeamMemberId()) ? 'selected' : ''}>${esc(m.name)}</option>`;
+    }).join('') + `<option value="__admin__" ${inSandbox ? 'selected' : ''}>Admin (all tabs)</option>`;
+    sel.onchange = function() {
+      if (this.value === '__admin__') { setAdminSandbox(true); }
+      else { setAdminSandbox(false, false); switchUser(parseInt(this.value)); }
+    };
   }
   const userAvatar = document.querySelector('.user-avatar');
   const userName = document.querySelector('.user-name');
