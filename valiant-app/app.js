@@ -3885,7 +3885,6 @@ function renderRightPanelHTML() {
     <div class="rpanel-header">
       <div>
         <div class="rpanel-header-title">Notes</div>
-        <div style="font-size:10px;color:${DASHBOARD_ACCESS.find(d=>d.key===role)?.color||'#6E7681'}">${DASHBOARD_ACCESS.find(d=>d.key===role)?.label||role}</div>
       </div>
       <button class="btn btn-sm" onclick="showAddSectionDialog('${role}')" style="font-size:11px;padding:4px 10px">+ Section</button>
     </div>
