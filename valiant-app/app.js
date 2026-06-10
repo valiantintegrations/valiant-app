@@ -16700,6 +16700,9 @@ function viRunCleanup() {
   matchedI.forEach(p => { p.stage = 'install'; unarchive(p); });
   others.forEach(p => { p.stage = 'proposal'; });
   save('vi_projects', state.projects);
+  // The app boots its project list from vi_projects_cache — must write THAT key
+  // (not just vi_projects) or the reload reads the stale cache and reverts.
+  try { localStorage.setItem('vi_projects_cache', JSON.stringify(state.projects)); } catch (e) {}
   save('vi_archived', state.archived || {});
 
   // 4) Jacob as PM lead on the 20
