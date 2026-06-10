@@ -5552,8 +5552,10 @@ function notepadAddTask() {
   const date = document.getElementById('np-date')?.value || '';
   if (!title) { document.getElementById('np-title')?.focus(); return; }
   if (!projectId) {
-    if (typeof showToast === 'function') showToast('Pick a project first', 'error');
-    document.getElementById('np-proj')?.focus();
+    // Personal line — goes to the personal store (vi_tasks), never a project store.
+    addTask(title, date, null);
+    if (typeof showToast === 'function') showToast('Added to your personal list', 'success');
+    renderCurrentPage();
     return;
   }
   let assigneeIds = Array.from(document.querySelectorAll('#np-people .np-chip.active'))
@@ -5570,8 +5572,27 @@ function notepadAddTask() {
   renderCurrentPage();
 }
 
+function _npProjChanged() {
+  const hasProj = !!(document.getElementById('np-proj')?.value);
+  const ph = document.getElementById('np-phase');
+  const ppl = document.getElementById('np-people');
+  if (ph) ph.style.display = hasProj ? '' : 'none';
+  if (ppl) ppl.style.display = hasProj ? 'flex' : 'none';
+}
+
 function renderMyWorkNotepad(memberId) {
   const groups = getNotepadItemsForMember(memberId);
+  // Fold in the actions-engine items assigned to this member — the same set the
+  // dashboard's "Actions assigned to me" widget shows — so the two match.
+  const myActs = buildSalesActions((state.projects || []).filter(p => !p.archived), memberId, 'mine');
+  (myActs || []).forEach(a => {
+    const gkey = a.projectId != null ? a.projectId : '__general__';
+    if (!groups[gkey]) {
+      const p = a.projectId != null ? (state.projects || []).find(x => x.id === a.projectId) : null;
+      groups[gkey] = { project: p || { id: null, name: 'General', client_name: '' }, lines: [] };
+    }
+    groups[gkey].lines.unshift({ type: 'action', key: a.key, title: a.text, done: false });
+  });
   const projOpts = (state.projects || []).filter(p => !p.archived)
     .sort((a, b) => (a.name || '').localeCompare(b.name || ''))
     .map(p => `<option value="${p.id}">${esc(p.name)}</option>`).join('');
@@ -5581,25 +5602,64 @@ function renderMyWorkNotepad(memberId) {
 
   const ids = Object.keys(groups).sort((a, b) =>
     (groups[a].project.name || '').localeCompare(groups[b].project.name || ''));
-  const body = ids.length ? ids.map(pid => {
+  const groupBody = ids.length ? ids.map(pid => {
     const g = groups[pid];
     const p = g.project;
-    const lines = g.lines.map(ln => `
-      <div class="np-line${ln.done ? ' done' : ''}" onclick="openProject(${p.id})">
-        <span class="np-cb${ln.done ? ' done' : ''}" onclick="event.stopPropagation(); ${ln.subId != null ? `toggleSubtaskDone(${ln.taskId}, ${ln.subId})` : `toggleTaskDone(${ln.taskId})`}; renderCurrentPage()">${ln.done ? check : ''}</span>
+    const arrow = '<svg class="np-arrow" width="13" height="13" viewBox="0 0 14 14" fill="none"><path d="M5 3l4 4-4 4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>';
+    const lines = g.lines.map(ln => {
+      const isAction = ln.type === 'action';
+      const rowClick = (p.id != null) ? `openProject(${p.id})` : '';
+      const checkHandler = isAction
+        ? `completeAction('${ln.key}')`
+        : `${ln.subId != null ? `toggleSubtaskDone(${ln.taskId}, ${ln.subId})` : `toggleTaskDone(${ln.taskId})`}; renderCurrentPage()`;
+      const meta = isAction
+        ? `<div class="np-line-meta">Action</div>`
+        : ((ln.parent || ln.date) ? `<div class="np-line-meta">${ln.parent ? esc(ln.parent) : ''}${ln.parent && ln.date ? ' · ' : ''}${ln.date ? esc(shortDate(ln.date)) : ''}</div>` : '');
+      return `
+      <div class="np-line${ln.done ? ' done' : ''}" onclick="${rowClick}">
+        <span class="np-cb${ln.done ? ' done' : ''}" onclick="event.stopPropagation(); ${checkHandler}">${ln.done ? check : ''}</span>
         <div style="flex:1;min-width:0">
           <div class="np-line-title">${esc(ln.title)}</div>
-          ${(ln.parent || ln.date) ? `<div class="np-line-meta">${ln.parent ? esc(ln.parent) : ''}${ln.parent && ln.date ? ' · ' : ''}${ln.date ? esc(shortDate(ln.date)) : ''}</div>` : ''}
+          ${meta}
         </div>
-        <svg class="np-arrow" width="13" height="13" viewBox="0 0 14 14" fill="none"><path d="M5 3l4 4-4 4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
-      </div>`).join('');
+        ${p.id != null ? arrow : ''}
+      </div>`;
+    }).join('');
     return `
       <div class="np-group">
-        <div class="np-group-title" onclick="openProject(${p.id})">${esc(p.name)}</div>
+        <div class="np-group-title"${p.id != null ? ` onclick="openProject(${p.id})"` : ''}>${esc(p.name)}</div>
         ${p.client_name ? `<div class="np-group-sub">${esc(p.client_name)}</div>` : ''}
         ${lines}
       </div>`;
-  }).join('') : `<div class="np-empty">No tasks assigned to you yet. Add a line above to get started.</div>`;
+  }).join('') : '';
+
+  // Personal section — the member's own checkoffs (vi_tasks), kept entirely
+  // separate from project tasks.
+  const arrow2 = '<svg class="np-arrow" width="13" height="13" viewBox="0 0 14 14" fill="none"><path d="M5 3l4 4-4 4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>';
+  const myPersonal = (state.tasks || []).filter(t => t.memberId === memberId)
+    .sort((a, b) => (a.done === b.done) ? 0 : (a.done ? 1 : -1));
+  const personalLines = myPersonal.map(t => {
+    const proj = t.projectId != null ? (state.projects || []).find(x => x.id === t.projectId) : null;
+    return `
+      <div class="np-line${t.done ? ' done' : ''}" onclick="${proj ? `openProject(${proj.id})` : ''}">
+        <span class="np-cb${t.done ? ' done' : ''}" onclick="event.stopPropagation(); toggleTask(${t.id})">${t.done ? check : ''}</span>
+        <div style="flex:1;min-width:0">
+          <div class="np-line-title">${esc(t.text)}</div>
+          ${(proj || t.dueDate) ? `<div class="np-line-meta">${proj ? esc(proj.name) : ''}${proj && t.dueDate ? ' · ' : ''}${t.dueDate ? esc(shortDate(t.dueDate)) : ''}</div>` : ''}
+        </div>
+        ${proj ? arrow2 : ''}
+      </div>`;
+  }).join('');
+  const personalSection = personalLines ? `
+      <div class="np-group">
+        <div class="np-group-title" style="cursor:default">Personal</div>
+        <div class="np-group-sub">Just for you — not tied to any project</div>
+        ${personalLines}
+      </div>` : '';
+
+  const body = (personalSection || groupBody)
+    ? (personalSection + groupBody)
+    : `<div class="np-empty">Nothing here yet. Add a line above — leave it on 'Personal' for a private checkoff, or pick a project to make it a real task.</div>`;
 
   return `
     <style>
@@ -5624,11 +5684,11 @@ function renderMyWorkNotepad(memberId) {
       <div class="np-composer">
         <input id="np-title" class="form-input" placeholder="New checkoff…" onkeydown="if(event.key==='Enter'){event.preventDefault();notepadAddTask();}" style="font-size:14px">
         <div style="display:flex;flex-wrap:wrap;gap:8px;margin-top:8px;align-items:center">
-          <select id="np-proj" class="form-select" style="font-size:12px;flex:1;min-width:150px"><option value="">Project…</option>${projOpts}</select>
-          <select id="np-phase" class="form-select" style="font-size:12px;width:100px"><option value="install">Install</option><option value="design">Design</option></select>
+          <select id="np-proj" class="form-select" onchange="_npProjChanged()" style="font-size:12px;flex:1;min-width:150px"><option value="">Personal (no project)</option>${projOpts}</select>
+          <select id="np-phase" class="form-select" style="font-size:12px;width:100px;display:none"><option value="install">Install</option><option value="design">Design</option></select>
           <input id="np-date" type="date" class="form-input" style="font-size:12px;width:135px">
         </div>
-        <div id="np-people" style="display:flex;flex-wrap:wrap;gap:5px;margin-top:8px">${chips}</div>
+        <div id="np-people" style="display:none;flex-wrap:wrap;gap:5px;margin-top:8px">${chips}</div>
         <div style="margin-top:10px"><button class="btn-primary" onclick="notepadAddTask()" style="font-size:13px;padding:8px 18px">Add line</button></div>
       </div>
       ${body}
