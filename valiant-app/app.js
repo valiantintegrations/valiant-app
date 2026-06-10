@@ -17960,12 +17960,13 @@ function quickActionCreateNote() {
 
 const OPEN_PROJECT_STAGES = ['contract', 'design', 'install'];
 
-function getOpenProjectsForUser() {
+function getOpenProjectsForUser(scope) {
   const memberId = getActiveTeamMemberId();
-  const canViewAll = currentUserHasPermission('projects.view_all');
+  // scope: 'all' = every open project company-wide; 'mine' = only ones this user
+  // is assigned to. No scope → all if they can view all (back-compat).
+  if (!scope) scope = currentUserHasPermission('projects.view_all') ? 'all' : 'mine';
   let projects = state.projects.filter(p => !p.archived && OPEN_PROJECT_STAGES.includes(p.stage));
-  if (!canViewAll) {
-    // Scope to projects this user is assigned to in any role
+  if (scope === 'mine') {
     projects = projects.filter(p => {
       const a = getProjectAssignment(p.id);
       return ['sales', 'design', 'pm', 'install', 'warehouse'].some(role =>
@@ -17981,7 +17982,15 @@ function renderOpenProjects(c) {
   const memberId = getActiveTeamMemberId();
   const canViewAll = currentUserHasPermission('projects.view_all');
   const canSeeFinancials = currentUserHasPermission('financials.view_project_totals');
-  const projects = getOpenProjectsForUser();
+
+  // Scope toggle: Mine (assigned) vs All Open (whole company).
+  if (!state.openProjectsScope) {
+    state.openProjectsScope = localStorage.getItem('vi_open_projects_scope') || (canViewAll ? 'all' : 'mine');
+  }
+  const scope = state.openProjectsScope;
+  const mineProjectsList = getOpenProjectsForUser('mine');
+  const allProjectsList = getOpenProjectsForUser('all');
+  const projects = scope === 'all' ? allProjectsList : mineProjectsList;
 
   // Group by stage
   const byStage = {};
@@ -18021,7 +18030,7 @@ function renderOpenProjects(c) {
   const heroMetrics = `
     <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:10px;margin-bottom:16px">
       <div class="metric-card">
-        <div class="metric-label">${canViewAll ? 'Active Projects' : 'My Active'}</div>
+        <div class="metric-label">${scope === 'all' ? 'All Active' : 'My Active'}</div>
         <div class="metric-value">${totalCount}</div>
         <div class="metric-sub">in production</div>
       </div>
@@ -18058,14 +18067,21 @@ function renderOpenProjects(c) {
     </div>
   `;
 
+  const scopeToggle = `
+    <div style="display:inline-flex;background:#0D1117;border:1px solid #30363D;border-radius:8px;overflow:hidden;margin-bottom:14px">
+      <button type="button" onclick="setOpenProjectsScope('mine')" style="padding:7px 16px;font-size:12px;border:none;cursor:pointer;${scope === 'mine' ? 'background:#1565C0;color:#58A6FF;font-weight:500' : 'background:transparent;color:#8B949E'}">Mine (${mineProjectsList.length})</button>
+      <button type="button" onclick="setOpenProjectsScope('all')" style="padding:7px 16px;font-size:12px;border:none;cursor:pointer;border-left:1px solid #30363D;${scope === 'all' ? 'background:#1565C0;color:#58A6FF;font-weight:500' : 'background:transparent;color:#8B949E'}">All Open (${allProjectsList.length})</button>
+    </div>`;
+
   const projectsHTML = visibleProjects.length === 0
-    ? `<div class="empty-state" style="padding:40px 20px;text-align:center;color:#6E7681;font-style:italic">${canViewAll ? 'No projects in this view' : 'No active projects assigned to you'}</div>`
+    ? `<div class="empty-state" style="padding:40px 20px;text-align:center;color:#6E7681;font-style:italic">${scope === 'all' ? 'No open projects in this view' : 'No open projects assigned to you'}</div>`
     : `<div class="op-grid">${visibleProjects.map(p => renderOpenProjectCard(p, memberId, canSeeFinancials)).join('')}</div>`;
 
   c.innerHTML = `
     <div style="margin-bottom:14px">
       <div style="font-size:11px;color:#6E7681;font-weight:500">Projects in production: Contract &middot; Design &middot; Install</div>
     </div>
+    ${scopeToggle}
     ${heroMetrics}
     ${filterChips}
     ${projectsHTML}
@@ -18074,6 +18090,12 @@ function renderOpenProjects(c) {
 
 function setOpenProjectsFilter(key) {
   state.openProjectsFilter = key;
+  renderCurrentPage();
+}
+
+function setOpenProjectsScope(key) {
+  state.openProjectsScope = key;
+  localStorage.setItem('vi_open_projects_scope', key);
   renderCurrentPage();
 }
 
