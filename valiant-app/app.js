@@ -16630,6 +16630,99 @@ function setTextSize(size) {
   renderCurrentPage();
 }
 
+// ── ONE-TIME CLEANUP (run once from the console: viRunCleanup()) ──────────
+// Backs up all vi_* data to a JSON download, then: sets the 20 active jobs to
+// Contract/Install, moves every other non-archived project to Proposal, makes
+// Jacob the PM/coordinator on the 20, and wipes ALL calendar data. Destructive
+// + syncs to every device; the JSON backup is the only undo.
+function viRunCleanup() {
+  if (typeof currentUserHasPermission === 'function' && !currentUserHasPermission('admin.system')) {
+    alert('Master Admin only — log in as yourself (Jacob) and try again.');
+    return;
+  }
+  const CONTRACT_IDS = [612,605,599,594,593,589,588,573,572,560,554,542,541,508,505,272];
+  const INSTALL_IDS  = [585,333,302,252];
+  const contractSet = new Set(CONTRACT_IDS);
+  const installSet  = new Set(INSTALL_IDS);
+
+  // 1) Backup every vi_* key to a JSON download
+  try {
+    const backup = {};
+    for (let i = 0; i < localStorage.length; i++) {
+      const k = localStorage.key(i);
+      if (k && k.indexOf('vi_') === 0) backup[k] = localStorage.getItem(k);
+    }
+    const blob = new Blob([JSON.stringify(backup, null, 2)], { type: 'application/json' });
+    const a = document.createElement('a');
+    const d = new Date();
+    const p2 = n => String(n).padStart(2, '0');
+    a.href = URL.createObjectURL(blob);
+    a.download = `valiant-backup-${d.getFullYear()}${p2(d.getMonth()+1)}${p2(d.getDate())}-${p2(d.getHours())}${p2(d.getMinutes())}.json`;
+    document.body.appendChild(a); a.click(); a.remove();
+  } catch (e) { alert('Backup failed — aborting (no changes made).\n' + e); return; }
+
+  // 2) Resolve targets + Jacob
+  const byId = id => state.projects.find(p => Number(p.id) === Number(id));
+  const matchedC = CONTRACT_IDS.map(byId).filter(Boolean);
+  const matchedI = INSTALL_IDS.map(byId).filter(Boolean);
+  const missing  = [...CONTRACT_IDS, ...INSTALL_IDS].filter(id => !byId(id));
+  const jacob = (state.team || []).find(m => /jacob/i.test(m.name || ''));
+  const others = (state.projects || []).filter(p => {
+    const n = Number(p.id);
+    if (contractSet.has(n) || installSet.has(n)) return false;
+    if (state.archived && state.archived[p.id]) return false; // leave icebox/trash/lost
+    return true;
+  });
+
+  console.log('--- Cleanup plan ---');
+  console.log('Contract ' + matchedC.length + '/' + CONTRACT_IDS.length + ':', matchedC.map(p => p.id + ' ' + p.name));
+  console.log('Install ' + matchedI.length + '/' + INSTALL_IDS.length + ':', matchedI.map(p => p.id + ' ' + p.name));
+  console.log('-> Proposal:', others.length, 'projects');
+  console.log('Coordinator (PM lead):', jacob ? jacob.name : 'NOT FOUND');
+  if (missing.length) console.warn('NOT FOUND by id:', missing);
+
+  if (!jacob) { alert('Could not find your team member named "Jacob" — aborting (backup saved).'); return; }
+  if (missing.length && !confirm(missing.length + ' of the 20 target jobs were NOT found by id (see console: ' + missing.join(', ') + ').\n\nContinue anyway? Missing ones get treated as "other" -> Proposal.')) return;
+
+  if (!confirm(
+    'Backup downloaded. Apply now?\n\n' +
+    '\u2022 ' + matchedC.length + ' \u2192 Contract\n' +
+    '\u2022 ' + matchedI.length + ' \u2192 Install\n' +
+    '\u2022 ' + others.length + ' \u2192 Proposal\n' +
+    '\u2022 You (' + jacob.name + ') = PM/coordinator on ' + (matchedC.length + matchedI.length) + ' jobs\n' +
+    '\u2022 ALL calendar data wiped\n\n' +
+    'Syncs to every device. Only the backup can undo this.'
+  )) { console.log('Cancelled (backup already downloaded).'); return; }
+
+  // 3) Stages
+  const unarchive = p => { if (state.archived && state.archived[p.id]) delete state.archived[p.id]; p.archived = null; };
+  matchedC.forEach(p => { p.stage = 'contract'; unarchive(p); });
+  matchedI.forEach(p => { p.stage = 'install'; unarchive(p); });
+  others.forEach(p => { p.stage = 'proposal'; });
+  save('vi_projects', state.projects);
+  save('vi_archived', state.archived || {});
+
+  // 4) Jacob as PM lead on the 20
+  [...matchedC, ...matchedI].forEach(p => setProjectAssignment(p.id, 'pm', [{ id: jacob.id, lead: true }]));
+
+  // 5) Wipe ALL calendar data
+  state.bookedDates = {}; save('vi_booked_dates', state.bookedDates);
+  state.estimatedInstallOverride = {}; save('vi_estimated_install', state.estimatedInstallOverride);
+  state.meetings = []; save('vi_meetings', state.meetings);
+  state.personalEvents = []; save('vi_personal_events', state.personalEvents);
+  ['vi_meeting_logs', 'vi_meeting_approvals', 'vi_install_change_requests'].forEach(k => { try { localStorage.setItem(k, '[]'); } catch (e) {} });
+  const clearDates = tasks => (tasks || []).forEach(t => {
+    t.schedStart = null; t.schedEnd = null;
+    (t.subtasks || []).forEach(sub => { sub.date = ''; });
+  });
+  clearDates(state.installTasks); save('vi_install_tasks', state.installTasks || []);
+  clearDates(state.designTasks); save('vi_design_tasks', state.designTasks || []);
+
+  alert('Cleanup complete \u2014 reloading.');
+  location.reload();
+}
+if (typeof window !== 'undefined') window.viRunCleanup = viRunCleanup;
+
 // ── Calendar subscribe (per-user ICS feed) ──────────────────────────────
 function getOrCreateCalToken(memberId) {
   const m = (state.team || []).find(t => t.id === memberId);
