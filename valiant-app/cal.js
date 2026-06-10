@@ -123,7 +123,7 @@ export default async function handler(req, res) {
 
     const ics = buildICS(member, events);
     res.setHeader('Content-Type', 'text/calendar; charset=utf-8');
-    res.setHeader('Cache-Control', 's-maxage=900, stale-while-revalidate=3600');
+    res.setHeader('Cache-Control', 'no-store, max-age=0');
     res.setHeader('Content-Disposition', 'inline; filename="valiant.ics"');
     return res.status(200).send(ics);
   } catch (e) {
@@ -170,7 +170,7 @@ function buildICS(member, events) {
   const L = [
     'BEGIN:VCALENDAR', 'VERSION:2.0',
     'PRODID:-//Valiant Integrations//Calendar//EN', 'CALSCALE:GREGORIAN', 'METHOD:PUBLISH',
-    `X-WR-CALNAME:Valiant \u2014 ${esc(first)}`, 'X-PUBLISHED-TTL:PT1H', 'REFRESH-INTERVAL;VALUE=DURATION:PT1H'
+    `X-WR-CALNAME:Valiant \u2014 ${esc(first)}`, 'X-PUBLISHED-TTL:PT15M', 'REFRESH-INTERVAL;VALUE=DURATION:PT15M'
   ];
   events.forEach(ev => {
     L.push('BEGIN:VEVENT');
