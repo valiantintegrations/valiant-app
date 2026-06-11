@@ -22557,18 +22557,43 @@ function _sbDragStart(ev, payload) {
   try { ev.dataTransfer.effectAllowed = 'move'; ev.dataTransfer.setData('text/plain', payload); } catch (e) {}
   window._sbDragPayload = payload;
 }
+function _sbClearDragCell() {
+  if (window._sbDragCell && window._sbDragCell.classList) window._sbDragCell.classList.remove('sb-cell-dragover');
+  window._sbDragCell = null;
+}
 function _sbCellDragOver(ev) {
   if (window._sbDragPayload || window._sbState?.placing) {
     ev.preventDefault();
     try { ev.dataTransfer.dropEffect = 'move'; } catch (e) {}
+    const cell = ev.currentTarget;
+    if (window._sbDragCell && window._sbDragCell !== cell) window._sbDragCell.classList.remove('sb-cell-dragover');
+    if (cell && cell.classList) { cell.classList.add('sb-cell-dragover'); window._sbDragCell = cell; }
   }
 }
 function _sbCellDrop(ev, dateStr) {
   ev.preventDefault();
+  _sbClearDragCell();
   const payload = (() => { try { return ev.dataTransfer.getData('text/plain'); } catch (e) { return null; } })() || window._sbDragPayload;
   window._sbDragPayload = null;
   _sbCommitPlace(dateStr, payload);
 }
+// Highlight style for the cell under the drag + clear it when the drag ends
+// anywhere (drop, or released off a cell).
+(function ensureSbDropStyle() {
+  try {
+    if (typeof document === 'undefined') return;
+    if (!document.getElementById('vi-sb-drop-style')) {
+      const st = document.createElement('style');
+      st.id = 'vi-sb-drop-style';
+      st.textContent = '.sb-cell.sb-cell-dragover{outline:2px solid #58A6FF;outline-offset:-2px;background:rgba(88,166,255,0.12) !important;border-radius:6px}';
+      (document.head || document.documentElement).appendChild(st);
+    }
+    if (!window._sbDragEndBound) {
+      document.addEventListener('dragend', _sbClearDragCell);
+      window._sbDragEndBound = true;
+    }
+  } catch (e) {}
+})();
 // Day popup for the selected (active) project — what's on this date for it.
 function _sbShowDayForProject(dateStr, projectId) {
   const p = (state.projects || []).find(x => x.id === projectId);
