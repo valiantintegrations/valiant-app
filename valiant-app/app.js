@@ -2785,10 +2785,11 @@ function toggleMoreMenu() {
       <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M5 5h14l1.5 12H3.5L5 5z"/><path d="M9 5V4a3 3 0 0 1 6 0v1"/></svg>
       Shop Work
     </div>
+    ${(() => { const _m = getTeamMember(getActiveTeamMemberId()); return (_m && Array.isArray(_m.access) && _m.access.includes('admin')); })() ? `
     <div onclick="navigate('team');document.getElementById('more-menu')?.remove()" style="padding:14px 20px;color:#C9D1D9;font-size:14px;cursor:pointer;display:flex;align-items:center;gap:10px;-webkit-tap-highlight-color:transparent">
       <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><circle cx="9" cy="7" r="3.5"/><circle cx="17" cy="7" r="2.5"/><path d="M2 20c0-3.866 3.134-6 7-6s7 2.134 7 6"/><path d="M17 14c2.761 0 5 1.567 5 4"/></svg>
       Team
-    </div>
+    </div>` : ''}
     <div style="border-top:1px solid #30363D;margin:4px 0"></div>
     <div onclick="document.getElementById('more-menu')?.remove();viEnablePush()" style="padding:14px 20px;color:#C9D1D9;font-size:14px;cursor:pointer;display:flex;align-items:center;gap:10px;-webkit-tap-highlight-color:transparent">
       <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M18 8a6 6 0 0 0-12 0c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.7 21a2 2 0 0 1-3.4 0"/></svg>
