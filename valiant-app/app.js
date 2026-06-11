@@ -5841,16 +5841,43 @@ function renderMyWorkDashboard(memberId, activeProjects, myAssignments, activeMe
 // so projects can move from Sales → Design+Install workflow.
 // "Crew & Scheduling" card on My Work — Install Manager (+ admin) only.
 // Surfaces what needs scheduling/crewing and links into the Schedule Builder.
+let _myTasksCollapsed = new Set();
+function toggleMyTaskGroup(pid) {
+  pid = String(pid);
+  if (_myTasksCollapsed.has(pid)) _myTasksCollapsed.delete(pid); else _myTasksCollapsed.add(pid);
+  renderCurrentPage();
+}
+function myTasksCollapseAll() {
+  const g = getNotepadItemsForMember(getActiveTeamMemberId());
+  Object.keys(g).forEach(pid => _myTasksCollapsed.add(String(pid)));
+  renderCurrentPage();
+}
+function myTasksExpandAll() { _myTasksCollapsed.clear(); renderCurrentPage(); }
+
 function renderMyTasksCard(memberId) {
   const groups = getNotepadItemsForMember(memberId);
-  const ids = Object.keys(groups).sort((a, b) =>
-    (groups[a].project.name || '').localeCompare(groups[b].project.name || ''));
-  if (!ids.length) return '';
+  const allIds = Object.keys(groups);
+  if (!allIds.length) return '';
   const check = '<svg width="11" height="11" viewBox="0 0 11 11" fill="none"><path d="M2 5.5l2.5 2.5L9 3" stroke="#fff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>';
-  const openN = ids.reduce((n, pid) => n + groups[pid].lines.filter(l => !l.done).length, 0);
+  const chev = '<svg class="mt-chev" width="11" height="11" viewBox="0 0 14 14" fill="none"><path d="M5 3l4 4-4 4" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>';
+  const openN = allIds.reduce((n, pid) => n + groups[pid].lines.filter(l => !l.done).length, 0);
+  // Prioritize by due date: soonest first, undated last (groups + lines).
+  const dkey = d => d || '9999-12-31';
+  const groupDate = pid => {
+    const ds = groups[pid].lines.filter(l => !l.done && l.date).map(l => l.date).sort();
+    return ds.length ? ds[0] : '9999-12-31';
+  };
+  const ids = allIds.sort((a, b) =>
+    groupDate(a).localeCompare(groupDate(b)) ||
+    (groups[a].project.name || '').localeCompare(groups[b].project.name || ''));
+  const anyCollapsed = ids.some(pid => _myTasksCollapsed.has(String(pid)));
   const body = ids.map(pid => {
     const g = groups[pid]; const p = g.project;
-    const lines = g.lines.map(ln => {
+    const collapsed = _myTasksCollapsed.has(String(pid));
+    const grpOpen = g.lines.filter(l => !l.done).length;
+    const sorted = g.lines.slice().sort((a, b) =>
+      (a.done ? 1 : 0) - (b.done ? 1 : 0) || dkey(a.date).localeCompare(dkey(b.date)));
+    const lines = sorted.map(ln => {
       const handler = ln.subId != null ? `toggleSubtaskDone(${ln.taskId}, ${ln.subId})` : `toggleTaskDone(${ln.taskId})`;
       const tag = ln.phase === 'design' ? 'Design' : 'Install';
       return `
@@ -5865,8 +5892,12 @@ function renderMyTasksCard(memberId) {
     }).join('');
     return `
       <div class="mt-group">
-        <div class="mt-group-title" onclick="openProject(${p.id})">${esc(p.name)}${p.client_name ? `<span class="mt-client"> \u00b7 ${esc(p.client_name)}</span>` : ''}</div>
-        ${lines}
+        <div class="mt-group-head${collapsed ? ' collapsed' : ''}" onclick="toggleMyTaskGroup('${p.id}')">
+          ${chev}
+          <span class="mt-group-title">${esc(p.name)}${p.client_name ? `<span class="mt-client"> \u00b7 ${esc(p.client_name)}</span>` : ''}</span>
+          <span class="mt-grp-count">${grpOpen}</span>
+        </div>
+        ${collapsed ? '' : lines}
       </div>`;
   }).join('');
   return `
@@ -5874,7 +5905,11 @@ function renderMyTasksCard(memberId) {
       <style>
         .mt-group{margin-bottom:14px}
         .mt-group:last-child{margin-bottom:0}
-        .mt-group-title{font-size:13px;font-weight:700;color:#E6EDF3;cursor:pointer;margin-bottom:4px}
+        .mt-group-head{display:flex;align-items:center;gap:7px;cursor:pointer;margin-bottom:4px;padding:2px 0;-webkit-tap-highlight-color:transparent}
+        .mt-group-title{font-size:13px;font-weight:700;color:#E6EDF3}
+        .mt-chev{color:#8B949E;flex:0 0 auto;transform:rotate(90deg);transition:transform .12s}
+        .mt-group-head.collapsed .mt-chev{transform:rotate(0deg)}
+        .mt-grp-count{margin-left:auto;font-size:11px;color:#8B949E;font-weight:600;background:#21262D;border-radius:999px;padding:1px 8px}
         .mt-client{color:#6E7681;font-weight:500}
         .mt-line{display:flex;align-items:flex-start;gap:10px;padding:7px 4px;border-bottom:1px solid #161B22;cursor:pointer}
         .mt-line:hover{background:#0F141B}
@@ -5889,8 +5924,8 @@ function renderMyTasksCard(memberId) {
         .mt-arrow{color:#30363D;flex:0 0 auto;margin-top:3px}
       </style>
       <div class="dashboard-card-title" style="display:flex;align-items:center;justify-content:space-between">
-        <span>My Tasks</span>
-        <span style="font-size:11px;color:#8B949E;font-weight:500">${openN} open</span>
+        <span>My Tasks <span style="font-size:11px;color:#8B949E;font-weight:500;margin-left:4px">${openN} open</span></span>
+        <button type="button" class="btn btn-sm" style="font-size:11px;padding:3px 9px" onclick="${anyCollapsed ? 'myTasksExpandAll()' : 'myTasksCollapseAll()'}">${anyCollapsed ? 'Expand all' : 'Collapse all'}</button>
       </div>
       ${body}
     </div>`;
