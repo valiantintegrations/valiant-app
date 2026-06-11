@@ -5881,6 +5881,19 @@ function renderMyTasksCard(memberId) {
     const lines = sorted.map(ln => {
       const handler = ln.subId != null ? `toggleSubtaskDone(${ln.taskId}, ${ln.subId})` : `toggleTaskDone(${ln.taskId})`;
       const tag = ln.phase === 'design' ? 'Design' : 'Install';
+      let cd = '';
+      if (!ln.done && ln.date) {
+        const d = daysUntil(ln.date);
+        if (d != null) {
+          let lbl, c;
+          if (d < 0) { lbl = Math.abs(d) + 'd overdue'; c = '#F85149'; }
+          else if (d === 0) { lbl = 'Today'; c = '#F85149'; }
+          else if (d === 1) { lbl = 'Tomorrow'; c = '#D29922'; }
+          else if (d <= 7) { lbl = 'in ' + d + ' days'; c = '#D29922'; }
+          else { lbl = 'in ' + d + ' days'; c = '#8B949E'; }
+          cd = `<span class="mt-cd" style="color:${c};border-color:${c}66;background:${c}1a">${lbl}</span>`;
+        }
+      }
       return `
         <div class="mt-line${ln.done ? ' done' : ''}" onclick="openProject(${p.id})">
           <span class="mt-cb${ln.done ? ' done' : ''}" onclick="event.stopPropagation(); ${handler}; renderCurrentPage()">${ln.done ? check : ''}</span>
@@ -5888,6 +5901,7 @@ function renderMyTasksCard(memberId) {
             <div class="mt-line-title">${esc(ln.title)}</div>
             <div class="mt-line-meta"><span class="mt-tag mt-${ln.phase}">${tag}</span>${ln.parent ? ' \u00b7 ' + esc(ln.parent) : ''}${ln.date ? ' \u00b7 ' + esc(shortDate(ln.date)) : ''}</div>
           </div>
+          ${cd}
           <svg class="mt-arrow" width="13" height="13" viewBox="0 0 14 14" fill="none"><path d="M5 3l4 4-4 4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
         </div>`;
     }).join('');
@@ -5922,6 +5936,7 @@ function renderMyTasksCard(memberId) {
         .mt-tag{font-size:10px;font-weight:600;padding:1px 6px;border-radius:999px}
         .mt-tag.mt-design{background:rgba(163,113,247,0.16);color:#A371F7}
         .mt-tag.mt-install{background:rgba(88,166,255,0.16);color:#58A6FF}
+        .mt-cd{font-size:11px;font-weight:700;padding:2px 9px;border-radius:999px;border:1px solid;flex:0 0 auto;margin-top:1px;white-space:nowrap;align-self:center}
         .mt-arrow{color:#30363D;flex:0 0 auto;margin-top:3px}
       </style>
       <div class="dashboard-card-title" style="display:flex;align-items:center;justify-content:space-between">
@@ -8496,6 +8511,18 @@ function _dayPickerHoverEnd() {
 // dateStr: the day under the bar (used to filter subtasks etc.)
 // ════════════════════════════════════════════════════════════════════════════
 
+function _calPeopleChips(ids) {
+  const inner = (ids || []).map(id => {
+    const m = getTeamMember(id);
+    if (!m) return '';
+    const color = (DASHBOARD_ACCESS.find(d => d.key === m.primaryRole) || {}).color || '#6E7681';
+    const initials = m.initials || getInitials(m.name);
+    const first = (m.name || '').split(' ')[0];
+    return `<span style="display:inline-flex;align-items:center;gap:5px;font-size:11px;font-weight:600;padding:2px 8px 2px 3px;border-radius:999px;background:${color}1f;border:1px solid ${color}66;color:${color}"><span style="display:inline-flex;align-items:center;justify-content:center;width:16px;height:16px;border-radius:50%;background:${color}33;font-size:8px">${esc(initials)}</span>${esc(first)}</span>`;
+  }).filter(Boolean).join('');
+  return `<div style="display:flex;flex-wrap:wrap;gap:5px;margin-top:4px">${inner}</div>`;
+}
+
 function _calBuildHoverContent(eventId, dateStr) {
   if (!eventId) return '';
   const m = /^([a-z_]+)-(\d+)$/.exec(eventId);
@@ -8521,12 +8548,11 @@ function _calBuildHoverContent(eventId, dateStr) {
       ? `<div class="cal-hover-section-label">Today's tasks</div>
          ${daySubs.map(({ task, subtask }) => {
            const ids = subtask ? (subtask.assigneeIds || []) : (task.assigneeIds || []);
-           const names = ids.map(id => (getTeamMember(id) || {}).name).filter(Boolean).map(n => n.split(' ')[0]).join(', ');
            const isMile = !subtask && task.isMilestone;
            const title = subtask ? `${task.title}: ${subtask.title}` : task.title;
            return `<div class="cal-hover-task">
              <div class="cal-hover-task-title">${isMile ? '🚩 ' : '◷ '}${esc(title)}</div>
-             ${names ? `<div class="cal-hover-task-who">${esc(names)}</div>` : '<div class="cal-hover-task-who" style="color:#D29922">Unassigned</div>'}
+             ${ids.length ? _calPeopleChips(ids) : '<div class="cal-hover-task-who" style="color:#D29922">Unassigned</div>'}
            </div>`;
          }).join('')}`
       : `<div class="cal-hover-section-label">Today's tasks</div><div class="cal-hover-empty">No tasks landing on this day</div>`;
@@ -8559,13 +8585,13 @@ function _calBuildHoverContent(eventId, dateStr) {
     const time = (meeting.startTime && meeting.endTime)
       ? _fmt12hRange(meeting.startTime, meeting.endTime)
       : (meeting.startTime ? _fmt12h(meeting.startTime) : 'Time not set');
-    const attendees = (meeting.attendees || []).map(id => (getTeamMember(id) || {}).name).filter(Boolean).join(', ');
+    const attIds = (meeting.attendees || []).filter(id => getTeamMember(id));
     return `
       <div class="cal-hover-title">${esc(meeting.title || 'Meeting')}</div>
       ${proj ? `<div class="cal-hover-subtitle">${esc(proj.client_name || proj.name)}</div>` : ''}
       <div class="cal-hover-section-label">Time</div>
       <div class="cal-hover-row">${esc(time)}</div>
-      ${attendees ? `<div class="cal-hover-section-label">Attendees</div><div class="cal-hover-row">${esc(attendees)}</div>` : ''}
+      ${attIds.length ? `<div class="cal-hover-section-label">Attendees</div>${_calPeopleChips(attIds)}` : ''}
     `;
   }
   if (kind === 'pe') {
