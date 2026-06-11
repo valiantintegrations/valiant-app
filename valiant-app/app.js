@@ -4564,12 +4564,20 @@ const WIDGETS = [
     render: (ctx) => renderCrewSchedulingCard(ctx.memberId)
   },
   {
-    id: 'my_tasks',
-    label: 'My Tasks',
+    id: 'on_site',
+    label: 'On-site',
     defaultSpan: 12,
     minSpan: 6,
     scopes: ['mine'],
-    render: (ctx) => renderMyTasksCard(ctx.memberId)
+    render: (ctx) => renderOnSiteCard(ctx.memberId)
+  },
+  {
+    id: 'back_of_house',
+    label: 'Back of House',
+    defaultSpan: 12,
+    minSpan: 6,
+    scopes: ['mine'],
+    render: (ctx) => renderBackOfHouseCard(ctx.memberId)
   },
   {
     id: 'metrics',
@@ -4676,8 +4684,8 @@ const DASHBOARDS = {
       { id: 'mobilization',      order: 0, span: 12, hidden: false, locked: true, hideable: false },
       { id: 'metrics',           order: 1, span: 4,  hidden: false },
       { id: 'my_calendar',       order: 2, span: 8,  hidden: false },
-      { id: 'my_tasks',          order: 3, span: 12, hidden: false },
-      { id: 'actions',           order: 4, span: 6,  hidden: false },
+      { id: 'on_site',           order: 3, span: 12, hidden: false },
+      { id: 'back_of_house',     order: 4, span: 12, hidden: false },
       { id: 'pending_approvals', order: 5, span: 6,  hidden: false },
       { id: 'crew_scheduling',   order: 6, span: 12, hidden: false },
       { id: 'role_sales',        order: 7, span: 12, hidden: false },
@@ -5887,75 +5895,157 @@ function renderMyWorkDashboard(memberId, activeProjects, myAssignments, activeMe
 // so projects can move from Sales → Design+Install workflow.
 // "Crew & Scheduling" card on My Work — Install Manager (+ admin) only.
 // Surfaces what needs scheduling/crewing and links into the Schedule Builder.
-let _myTasksCollapsed = new Set();
-function toggleMyTaskGroup(pid) {
-  pid = String(pid);
-  if (_myTasksCollapsed.has(pid)) _myTasksCollapsed.delete(pid); else _myTasksCollapsed.add(pid);
+let _workCollapsed = new Set(); // entries: `${bucketId}:${gkey}`
+function toggleWorkGroup(bucketId, gkey) {
+  const k = bucketId + ':' + String(gkey);
+  if (_workCollapsed.has(k)) _workCollapsed.delete(k); else _workCollapsed.add(k);
   renderCurrentPage();
 }
-function myTasksCollapseAll() {
-  const g = getNotepadItemsForMember(getActiveTeamMemberId());
-  Object.keys(g).forEach(pid => _myTasksCollapsed.add(String(pid)));
+function _workGroupsFor(bucketId) {
+  const me = getActiveTeamMemberId();
+  return bucketId === 'onsite' ? _gatherOnSite(me) : _gatherBackOfHouse(me);
+}
+function workCollapseAll(bucketId) {
+  Object.keys(_workGroupsFor(bucketId)).forEach(k => _workCollapsed.add(bucketId + ':' + String(k)));
   renderCurrentPage();
 }
-function myTasksExpandAll() { _myTasksCollapsed.clear(); renderCurrentPage(); }
+function workExpandAll(bucketId) {
+  Object.keys(_workGroupsFor(bucketId)).forEach(k => _workCollapsed.delete(bucketId + ':' + String(k)));
+  renderCurrentPage();
+}
 
-function renderMyTasksCard(memberId) {
-  const groups = getNotepadItemsForMember(memberId);
+// On-site = install tasks/subtasks assigned to the member, grouped by job.
+function _gatherOnSite(memberId) {
+  const groups = {};
+  const add = (projectId, line) => {
+    const p = (state.projects || []).find(x => x.id === projectId);
+    if (!p || p.archived) return;
+    if (!groups[projectId]) groups[projectId] = { project: p, lines: [] };
+    groups[projectId].lines.push(line);
+  };
+  (state.installTasks || []).forEach(t => {
+    const subs = t.subtasks || [];
+    if (subs.length) {
+      subs.forEach(sub => {
+        const ids = (sub.assigneeIds && sub.assigneeIds.length) ? sub.assigneeIds : (t.assigneeIds || []);
+        if (ids.includes(memberId)) add(t.projectId, { type: 'task', taskId: t.id, subId: sub.id, phase: 'install', title: sub.title, parent: t.title, done: !!sub.done, date: sub.date || null });
+      });
+    } else if ((t.assigneeIds || []).includes(memberId)) {
+      const dr = getTaskDateRange(t);
+      add(t.projectId, { type: 'task', taskId: t.id, subId: null, phase: 'install', title: t.title, parent: null, done: !!t.done, date: (dr && dr.start) || null });
+    }
+  });
+  return groups;
+}
+
+// Back of House = design tasks/subtasks + actions + upcoming meetings, grouped by job.
+function _gatherBackOfHouse(memberId) {
+  const groups = {};
+  const ensure = (projectId, fallbackName) => {
+    if (projectId == null) {
+      const k = '__' + (fallbackName || 'General') + '__';
+      if (!groups[k]) groups[k] = { project: { id: null, name: fallbackName || 'General', client_name: '' }, lines: [] };
+      return groups[k];
+    }
+    const p = (state.projects || []).find(x => x.id === projectId);
+    if (!p || p.archived) return null;
+    if (!groups[projectId]) groups[projectId] = { project: p, lines: [] };
+    return groups[projectId];
+  };
+  (state.designTasks || []).forEach(t => {
+    const subs = t.subtasks || [];
+    if (subs.length) {
+      subs.forEach(sub => {
+        const ids = (sub.assigneeIds && sub.assigneeIds.length) ? sub.assigneeIds : (t.assigneeIds || []);
+        if (ids.includes(memberId)) { const g = ensure(t.projectId); if (g) g.lines.push({ type: 'task', taskId: t.id, subId: sub.id, phase: 'design', title: sub.title, parent: t.title, done: !!sub.done, date: sub.date || null }); }
+      });
+    } else if ((t.assigneeIds || []).includes(memberId)) {
+      const dr = getTaskDateRange(t);
+      const g = ensure(t.projectId); if (g) g.lines.push({ type: 'task', taskId: t.id, subId: null, phase: 'design', title: t.title, parent: null, done: !!t.done, date: (dr && dr.start) || null });
+    }
+  });
+  const myActs = buildSalesActions((state.projects || []).filter(p => !p.archived), memberId, 'mine');
+  (myActs || []).forEach(a => { const g = ensure(a.projectId); if (g) g.lines.push({ type: 'action', key: a.key, phase: 'action', title: a.text, parent: null, done: false, date: null }); });
+  const today = _ymd(new Date());
+  (state.meetings || []).forEach(m => {
+    if (!(m.attendees || []).includes(memberId)) return;
+    if (!m.date || m.date < today) return;
+    const g = ensure(m.projectId != null ? m.projectId : null, 'Meetings');
+    if (g) g.lines.push({ type: 'meeting', meetingId: m.id, phase: 'meeting', title: m.title || 'Meeting', parent: null, done: false, date: m.date, time: m.time || '' });
+  });
+  return groups;
+}
+
+// Shared renderer for both buckets: collapse + due-date sort + countdown + check-off.
+function _renderWorkBucket(memberId, bucketId, title, groups) {
   const allIds = Object.keys(groups);
   if (!allIds.length) return '';
   const check = '<svg width="11" height="11" viewBox="0 0 11 11" fill="none"><path d="M2 5.5l2.5 2.5L9 3" stroke="#fff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>';
   const chev = '<svg class="mt-chev" width="11" height="11" viewBox="0 0 14 14" fill="none"><path d="M5 3l4 4-4 4" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>';
-  const openN = allIds.reduce((n, pid) => n + groups[pid].lines.filter(l => !l.done).length, 0);
-  // Prioritize by due date: soonest first, undated last (groups + lines).
+  const calIcon = '<svg width="10" height="10" viewBox="0 0 14 14" fill="none"><rect x="2" y="3" width="10" height="9" rx="1.5" stroke="currentColor" stroke-width="1.3"/><path d="M2 6h10M5 2v2M9 2v2" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/></svg>';
   const dkey = d => d || '9999-12-31';
-  const groupDate = pid => {
-    const ds = groups[pid].lines.filter(l => !l.done && l.date).map(l => l.date).sort();
+  const countNum = k => groups[k].lines.filter(l => !l.done).length;
+  const totalN = allIds.reduce((n, k) => n + countNum(k), 0);
+  const groupDate = k => {
+    const ds = groups[k].lines.filter(l => !l.done && l.date).map(l => l.date).sort();
     return ds.length ? ds[0] : '9999-12-31';
   };
   const ids = allIds.sort((a, b) =>
     groupDate(a).localeCompare(groupDate(b)) ||
     (groups[a].project.name || '').localeCompare(groups[b].project.name || ''));
-  const anyCollapsed = ids.some(pid => _myTasksCollapsed.has(String(pid)));
-  const body = ids.map(pid => {
-    const g = groups[pid]; const p = g.project;
-    const collapsed = _myTasksCollapsed.has(String(pid));
-    const grpOpen = g.lines.filter(l => !l.done).length;
+  const anyCollapsed = ids.some(k => _workCollapsed.has(bucketId + ':' + String(k)));
+  const cdHtml = ln => {
+    if (ln.done || !ln.date) return '';
+    const d = daysUntil(ln.date);
+    if (d == null) return '';
+    let lbl, c;
+    if (d < 0) { lbl = Math.abs(d) + 'd overdue'; c = '#F85149'; }
+    else if (d === 0) { lbl = 'Today'; c = '#F85149'; }
+    else if (d === 1) { lbl = 'Tomorrow'; c = '#D29922'; }
+    else if (d <= 7) { lbl = 'in ' + d + ' days'; c = '#D29922'; }
+    else { lbl = 'in ' + d + ' days'; c = '#8B949E'; }
+    return `<span class="mt-cd" style="color:${c};border-color:${c}66;background:${c}1a">${lbl}</span>`;
+  };
+  const body = ids.map(gkey => {
+    const g = groups[gkey]; const p = g.project;
+    const collapsed = _workCollapsed.has(bucketId + ':' + String(gkey));
+    const grpCount = countNum(gkey);
     const sorted = g.lines.slice().sort((a, b) =>
       (a.done ? 1 : 0) - (b.done ? 1 : 0) || dkey(a.date).localeCompare(dkey(b.date)));
     const lines = sorted.map(ln => {
-      const handler = ln.subId != null ? `toggleSubtaskDone(${ln.taskId}, ${ln.subId})` : `toggleTaskDone(${ln.taskId})`;
-      const tag = ln.phase === 'design' ? 'Design' : 'Install';
-      let cd = '';
-      if (!ln.done && ln.date) {
-        const d = daysUntil(ln.date);
-        if (d != null) {
-          let lbl, c;
-          if (d < 0) { lbl = Math.abs(d) + 'd overdue'; c = '#F85149'; }
-          else if (d === 0) { lbl = 'Today'; c = '#F85149'; }
-          else if (d === 1) { lbl = 'Tomorrow'; c = '#D29922'; }
-          else if (d <= 7) { lbl = 'in ' + d + ' days'; c = '#D29922'; }
-          else { lbl = 'in ' + d + ' days'; c = '#8B949E'; }
-          cd = `<span class="mt-cd" style="color:${c};border-color:${c}66;background:${c}1a">${lbl}</span>`;
-        }
+      let tag, tagCls, rowClick, cb;
+      if (ln.type === 'meeting') {
+        tag = 'Meeting'; tagCls = 'mt-meeting';
+        rowClick = `openMeetingDetail(${ln.meetingId})`;
+        cb = `<span class="mt-cb mt-cal">${calIcon}</span>`;
+      } else if (ln.type === 'action') {
+        tag = 'Action'; tagCls = 'mt-action';
+        rowClick = p.id != null ? `openProject(${p.id})` : '';
+        cb = `<span class="mt-cb${ln.done ? ' done' : ''}" onclick="event.stopPropagation(); completeAction('${ln.key}'); renderCurrentPage()">${ln.done ? check : ''}</span>`;
+      } else {
+        tag = ln.phase === 'design' ? 'Design' : 'Install'; tagCls = 'mt-' + ln.phase;
+        const handler = ln.subId != null ? `toggleSubtaskDone(${ln.taskId}, ${ln.subId})` : `toggleTaskDone(${ln.taskId})`;
+        rowClick = p.id != null ? `openProject(${p.id})` : '';
+        cb = `<span class="mt-cb${ln.done ? ' done' : ''}" onclick="event.stopPropagation(); ${handler}; renderCurrentPage()">${ln.done ? check : ''}</span>`;
       }
+      const meta = `<span class="mt-tag ${tagCls}">${tag}</span>${ln.parent ? ' \u00b7 ' + esc(ln.parent) : ''}${ln.date ? ' \u00b7 ' + esc(shortDate(ln.date)) + (ln.time ? ' ' + esc(ln.time) : '') : ''}`;
       return `
-        <div class="mt-line${ln.done ? ' done' : ''}" onclick="openProject(${p.id})">
-          <span class="mt-cb${ln.done ? ' done' : ''}" onclick="event.stopPropagation(); ${handler}; renderCurrentPage()">${ln.done ? check : ''}</span>
+        <div class="mt-line${ln.done ? ' done' : ''}"${rowClick ? ` onclick="${rowClick}"` : ''}>
+          ${cb}
           <div style="flex:1;min-width:0">
             <div class="mt-line-title">${esc(ln.title)}</div>
-            <div class="mt-line-meta"><span class="mt-tag mt-${ln.phase}">${tag}</span>${ln.parent ? ' \u00b7 ' + esc(ln.parent) : ''}${ln.date ? ' \u00b7 ' + esc(shortDate(ln.date)) : ''}</div>
+            <div class="mt-line-meta">${meta}</div>
           </div>
-          ${cd}
+          ${cdHtml(ln)}
           <svg class="mt-arrow" width="13" height="13" viewBox="0 0 14 14" fill="none"><path d="M5 3l4 4-4 4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
         </div>`;
     }).join('');
     return `
       <div class="mt-group">
-        <div class="mt-group-head${collapsed ? ' collapsed' : ''}" onclick="toggleMyTaskGroup('${p.id}')">
+        <div class="mt-group-head${collapsed ? ' collapsed' : ''}" onclick="toggleWorkGroup('${bucketId}','${gkey}')">
           ${chev}
           <span class="mt-group-title">${esc(p.name)}${p.client_name ? `<span class="mt-client"> \u00b7 ${esc(p.client_name)}</span>` : ''}</span>
-          <span class="mt-grp-count">${grpOpen}</span>
+          <span class="mt-grp-count">${grpCount}</span>
         </div>
         ${collapsed ? '' : lines}
       </div>`;
@@ -5975,21 +6065,31 @@ function renderMyTasksCard(memberId) {
         .mt-line:hover{background:#0F141B}
         .mt-cb{width:17px;height:17px;border-radius:5px;border:1.5px solid #30363D;flex:0 0 auto;display:flex;align-items:center;justify-content:center;margin-top:1px}
         .mt-cb.done{background:#238636;border-color:#238636}
+        .mt-cb.mt-cal{border-style:dashed;color:#8B949E;cursor:default}
         .mt-line-title{font-size:13px;color:#C9D1D9;line-height:1.4}
         .mt-line.done .mt-line-title{color:#6E7681;text-decoration:line-through}
         .mt-line-meta{font-size:11px;color:#6E7681;margin-top:2px}
         .mt-tag{font-size:10px;font-weight:600;padding:1px 6px;border-radius:999px}
         .mt-tag.mt-design{background:rgba(163,113,247,0.16);color:#A371F7}
         .mt-tag.mt-install{background:rgba(88,166,255,0.16);color:#58A6FF}
+        .mt-tag.mt-action{background:rgba(63,185,80,0.16);color:#3FB950}
+        .mt-tag.mt-meeting{background:rgba(210,153,34,0.16);color:#D29922}
         .mt-cd{font-size:11px;font-weight:700;padding:2px 9px;border-radius:999px;border:1px solid;flex:0 0 auto;margin-top:1px;white-space:nowrap;align-self:center}
         .mt-arrow{color:#30363D;flex:0 0 auto;margin-top:3px}
       </style>
       <div class="dashboard-card-title" style="display:flex;align-items:center;justify-content:space-between">
-        <span>My Tasks <span style="font-size:11px;color:#8B949E;font-weight:500;margin-left:4px">${openN} open</span></span>
-        <button type="button" class="btn btn-sm" style="font-size:11px;padding:3px 9px" onclick="${anyCollapsed ? 'myTasksExpandAll()' : 'myTasksCollapseAll()'}">${anyCollapsed ? 'Expand all' : 'Collapse all'}</button>
+        <span>${esc(title)} <span style="font-size:11px;color:#8B949E;font-weight:500;margin-left:4px">${totalN} ${totalN === 1 ? 'item' : 'items'}</span></span>
+        <button type="button" class="btn btn-sm" style="font-size:11px;padding:3px 9px" onclick="${anyCollapsed ? `workExpandAll('${bucketId}')` : `workCollapseAll('${bucketId}')`}">${anyCollapsed ? 'Expand all' : 'Collapse all'}</button>
       </div>
       ${body}
     </div>`;
+}
+
+function renderOnSiteCard(memberId) {
+  return _renderWorkBucket(memberId, 'onsite', 'On-site', _gatherOnSite(memberId));
+}
+function renderBackOfHouseCard(memberId) {
+  return _renderWorkBucket(memberId, 'boh', 'Back of House', _gatherBackOfHouse(memberId));
 }
 
 function renderCrewSchedulingCard(memberId) {
