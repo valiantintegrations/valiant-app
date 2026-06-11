@@ -18647,14 +18647,20 @@ async function init() {
   const c = document.getElementById('content');
   const sel = document.getElementById('role-select');
   if (sel) {
-    const inSandbox = isAdminSandbox();
-    sel.innerHTML = state.team.map(m => {
-      return `<option value="${m.id}" ${(!inSandbox && m.id === getActiveTeamMemberId()) ? 'selected' : ''}>${esc(m.name)}</option>`;
-    }).join('') + `<option value="__admin__" ${inSandbox ? 'selected' : ''}>Admin (all tabs)</option>`;
-    sel.onchange = function() {
-      if (this.value === '__admin__') { setAdminSandbox(true); }
-      else { setAdminSandbox(false, false); switchUser(parseInt(this.value)); }
-    };
+    if (!canSwitchUsers()) {
+      // Non-admin logins are pinned to their own account — hide the switcher.
+      sel.style.display = 'none';
+    } else {
+      sel.style.display = '';
+      const inSandbox = isAdminSandbox();
+      sel.innerHTML = state.team.map(m => {
+        return `<option value="${m.id}" ${(!inSandbox && m.id === getActiveTeamMemberId()) ? 'selected' : ''}>${esc(m.name)}</option>`;
+      }).join('') + `<option value="__admin__" ${inSandbox ? 'selected' : ''}>Admin (all tabs)</option>`;
+      sel.onchange = function() {
+        if (this.value === '__admin__') { setAdminSandbox(true); }
+        else { setAdminSandbox(false, false); switchUser(parseInt(this.value)); }
+      };
+    }
   }
   const userAvatar = document.querySelector('.user-avatar');
   const userName = document.querySelector('.user-name');
