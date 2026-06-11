@@ -297,6 +297,7 @@
 
   async function startSession() {
     setStatus('Loading your data…');
+    try { const { data: { user } } = await sb.auth.getUser(); window.VI_AUTH_EMAIL = (user && user.email) ? user.email : ''; } catch (e) {}
     const result = await hydrateFromCloud();
     if (result === 'empty') {
       setStatus('Setting up shared data…');
