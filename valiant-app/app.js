@@ -116,6 +116,7 @@ const DEFAULT_BUNDLES = {
       'admin.view_users','admin.assign_permissions',
       'admin.edit_users.installer','admin.edit_users.warehouse',
       'projects.view_all','projects.edit','projects.change_stage',
+      'projects.assign_team.sales','projects.assign_team.design','projects.assign_team.pm',
       'projects.assign_team.install','projects.assign_team.warehouse',
       'install.view','install.edit','install.manage_crew',
       'calendar.edit_all_events',
@@ -486,6 +487,14 @@ state.team.forEach(m => {
   if (stale) {
     state.bundles = JSON.parse(JSON.stringify(DEFAULT_BUNDLES));
     save('vi_bundles', state.bundles);
+  }
+  // Ensure the Install Manager can assign every role slot (sales/design/pm added later).
+  if (state.bundles?.install_admin?.permissions) {
+    const needAssign = ['projects.assign_team.sales','projects.assign_team.design','projects.assign_team.pm'];
+    const iaPerms = state.bundles.install_admin.permissions;
+    let addedAssign = false;
+    needAssign.forEach(pk => { if (!iaPerms.includes(pk)) { iaPerms.push(pk); addedAssign = true; } });
+    if (addedAssign) save('vi_bundles', state.bundles);
   }
   // One-time cleanup of calendar.view_all (introduced and removed in v1.43)
   // Strip from all bundles + user perms if present
@@ -2816,6 +2825,17 @@ function toggleSidebar() {
   document.getElementById('sidebar').classList.toggle('open');
 }
 
+function _persistNav() {
+  // Per-device, NOT synced (no vi_ prefix) — remembers the last page so a reload stays put.
+  try {
+    localStorage.setItem('nav_last', JSON.stringify({
+      page: state.currentPage,
+      projectId: state.currentPage === 'project' ? (state.currentProject?.id ?? null) : null,
+      projectTab: state.currentPage === 'project' ? (state.projectTab || null) : null
+    }));
+  } catch (e) {}
+}
+
 function renderCurrentPage() {
   const c = document.getElementById('content');
   if (!c) return;
@@ -2845,6 +2865,7 @@ function renderCurrentPage() {
   }
   updateRightPanel();
   if (typeof updateContextNav === 'function') updateContextNav();
+  _persistNav();
 }
 
 // ── Project Page Navigation ──
@@ -3664,6 +3685,30 @@ function sendMessage() {
   updateRightPanel();
   setTimeout(() => { const list = document.getElementById('msg-list'); if (list) list.scrollTop = list.scrollHeight; }, 50);
 }
+
+// Apply an incoming message change pushed live by the realtime layer (no reload).
+function applyLiveMessages() {
+  try { state.messages = JSON.parse(localStorage.getItem('vi_messages') || '[]'); } catch (e) { return; }
+  const list = document.getElementById('msg-list');
+  if (list) {
+    // Messages panel is open — refresh just the list, keeping scroll position.
+    const channelId = state.activeConversation || 'team';
+    const atBottom = (list.scrollHeight - list.scrollTop - list.clientHeight) < 80;
+    list.innerHTML = renderMessagesList(channelId);
+    if (atBottom) list.scrollTop = list.scrollHeight;
+    return;
+  }
+  // Not viewing messages — refresh the unread badge, unless the user is typing in the panel.
+  const ae = document.activeElement;
+  const typingInPanel = ae && (ae.tagName === 'TEXTAREA' || ae.tagName === 'INPUT') &&
+    typeof ae.closest === 'function' && ae.closest('#right-panel');
+  if (!typingInPanel) updateRightPanel();
+}
+
+// Called by the realtime bootstrap when a live key (chat) changes in the cloud.
+window.viOnLiveKey = function (key) {
+  if (key === 'vi_messages') applyLiveMessages();
+};
 
 function getNoteSections(role) {
   return state.noteSections[role] || [];
@@ -18752,6 +18797,25 @@ async function init() {
   _migrateDesignTaskTemplates();
   _migrateDesignSubtasksToTasks();
   _fixDesignTaskIdCollisions();
+  // Restore the last page viewed (per-device) so a reload keeps you where you were.
+  try {
+    const nav = JSON.parse(localStorage.getItem('nav_last') || 'null');
+    if (nav && nav.page) {
+      if (nav.page === 'project' && nav.projectId != null) {
+        const proj = state.projects.find(p => p.id === nav.projectId);
+        if (proj) {
+          state.currentProject = proj;
+          state.projectTab = nav.projectTab || (typeof getDefaultProjectTab === 'function' ? getDefaultProjectTab() : 'overview');
+          state.currentPage = 'project';
+          state.projectOrigin = state.projectOrigin || 'dashboard';
+          const tEl = document.getElementById('page-title'); if (tEl) tEl.textContent = proj.name;
+          if (typeof injectTopbarBackButton === 'function') injectTopbarBackButton();
+        }
+      } else if (nav.page !== 'dashboard') {
+        state.currentPage = nav.page;
+      }
+    }
+  } catch (e) {}
   try {
     renderCurrentPage();
   } catch (e) {
