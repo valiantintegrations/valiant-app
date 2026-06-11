@@ -324,8 +324,28 @@
 
   function subscribeRealtime() {
     try {
+      const LIVE_KEYS = new Set(['vi_messages']);  // applied instantly, no refresh banner
       sb.channel('app_data_rt')
-        .on('postgres_changes', { event: '*', schema: 'public', table: 'app_data' }, () => {
+        .on('postgres_changes', { event: '*', schema: 'public', table: 'app_data' }, (payload) => {
+          const row = (payload && (payload.new || payload.old)) || {};
+          const key = row.key;
+          if (key && LIVE_KEYS.has(key)) {
+            // Apply chat changes straight into local storage + notify the app — no reload.
+            const applyVal = (raw) => {
+              const v = (typeof raw === 'string') ? raw : JSON.stringify(raw);
+              hydrating = true;
+              try { rawSet(key, v); } finally { hydrating = false; }
+              if (typeof window.viOnLiveKey === 'function') { try { window.viOnLiveKey(key); } catch (e) {} }
+            };
+            if (payload.new && payload.new.value !== undefined) {
+              applyVal(payload.new.value);
+            } else {
+              sb.from('app_data').select('value').eq('key', key).single()
+                .then(({ data }) => { if (data && data.value !== undefined) applyVal(data.value); })
+                .catch(() => {});
+            }
+            return;
+          }
           if (Date.now() < suppressUntil) return;          // our own change echoing back
           $('vi-refresh').style.display = 'block';          // let the user choose when to refresh
         })
