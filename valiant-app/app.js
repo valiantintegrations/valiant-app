@@ -4580,6 +4580,14 @@ const WIDGETS = [
     render: (ctx) => renderBackOfHouseCard(ctx.memberId)
   },
   {
+    id: 'pre_launch',
+    label: 'Job Prep',
+    defaultSpan: 12,
+    minSpan: 6,
+    scopes: ['mine'],
+    render: (ctx) => renderPreLaunchCard(ctx.memberId)
+  },
+  {
     id: 'metrics',
     label: 'Status Summary',
     defaultSpan: 4,
@@ -4685,15 +4693,16 @@ const DASHBOARDS = {
       { id: 'metrics',           order: 1, span: 4,  hidden: false },
       { id: 'my_calendar',       order: 2, span: 8,  hidden: false },
       { id: 'quick_actions',     order: 3, span: 12, hidden: false },
-      { id: 'on_site',           order: 4, span: 12, hidden: false },
-      { id: 'back_of_house',     order: 5, span: 12, hidden: false },
-      { id: 'pending_approvals', order: 6, span: 6,  hidden: false },
-      { id: 'crew_scheduling',   order: 7, span: 12, hidden: false },
-      { id: 'role_sales',        order: 8, span: 12, hidden: false },
-      { id: 'role_design',       order: 9, span: 12, hidden: false },
-      { id: 'role_pm',           order: 10, span: 12, hidden: false },
-      { id: 'role_install',      order: 11, span: 12, hidden: false },
-      { id: 'role_warehouse',    order: 12, span: 12, hidden: false }
+      { id: 'pre_launch',        order: 4, span: 12, hidden: false },
+      { id: 'on_site',           order: 5, span: 12, hidden: false },
+      { id: 'back_of_house',     order: 6, span: 12, hidden: false },
+      { id: 'pending_approvals', order: 7, span: 6,  hidden: false },
+      { id: 'crew_scheduling',   order: 8, span: 12, hidden: false },
+      { id: 'role_sales',        order: 9, span: 12, hidden: false },
+      { id: 'role_design',       order: 10, span: 12, hidden: false },
+      { id: 'role_pm',           order: 11, span: 12, hidden: false },
+      { id: 'role_install',      order: 12, span: 12, hidden: false },
+      { id: 'role_warehouse',    order: 13, span: 12, hidden: false }
     ]
   }
   // Future: 'sales_mgmt', 'install_mgmt', 'executive', etc. each with their
@@ -6083,6 +6092,132 @@ function renderOnSiteCard(memberId) {
 function renderBackOfHouseCard(memberId) {
   return _renderWorkBucket(memberId, 'boh', 'Back of House', _gatherBackOfHouse(memberId));
 }
+
+
+// ---- Installer pre-launch / job-prep checklist -----------------------------
+// Per-installer, soft (no gating). Surfaces only when one of the member's
+// installs is within ~2 days or currently underway. Auto-resets a member's
+// checks if the install window start moves (reschedule).
+const PRELAUNCH_ITEMS = [
+  { key: 'map',     label: 'Review site map & directions', tab: 'overview' },
+  { key: 'parking', label: 'Confirm parking & site access', tab: 'overview' },
+  { key: 'scope',   label: 'Review job scope',              tab: 'overview' },
+  { key: 'tasks',   label: 'Review my install tasks',       tab: 'install'  }
+];
+
+function _preLaunchStore() {
+  if (!state.preLaunchChecklist) {
+    try { state.preLaunchChecklist = JSON.parse(localStorage.getItem('vi_prelaunch_checklist')) || {}; }
+    catch (e) { state.preLaunchChecklist = {}; }
+  }
+  return state.preLaunchChecklist;
+}
+function _preLaunchItemsFor(projectId, memberId, windowStart) {
+  const rec = (_preLaunchStore()[projectId] || {})[memberId];
+  if (!rec) return {};
+  if (windowStart && rec.windowStart && rec.windowStart !== windowStart) return {}; // window moved -> reset
+  return rec.items || {};
+}
+function togglePreLaunchItem(projectId, memberId, itemKey, windowStart) {
+  const store = _preLaunchStore();
+  if (!store[projectId]) store[projectId] = {};
+  let rec = store[projectId][memberId];
+  if (!rec || (windowStart && rec.windowStart && rec.windowStart !== windowStart)) {
+    rec = { items: {}, windowStart: windowStart || null };
+  }
+  rec.items = rec.items || {};
+  rec.items[itemKey] = !rec.items[itemKey];
+  rec.windowStart = windowStart || rec.windowStart || null;
+  rec.updatedAt = Date.now();
+  store[projectId][memberId] = rec;
+  save('vi_prelaunch_checklist', store);
+  renderCurrentPage();
+}
+
+// Jobs this installer should prep for: on the install crew (or has install
+// work) AND the window is within 2 days of starting or currently active.
+function _preLaunchProjectsFor(memberId) {
+  const out = [];
+  (state.projects || []).forEach(p => {
+    if (!p || p.archived) return;
+    const win = getInstallWindow(p);
+    if (!win || !win.start) return;
+    const dStart = daysUntil(win.start);
+    const dEnd = daysUntil(win.end || win.start);
+    if (dStart == null || dEnd == null) return;
+    if (!(dStart <= 2 && dEnd >= 0)) return;
+    const asg = getProjectAssignment(p.id);
+    const onCrew = (asg.install || []).some(x => x.id === memberId);
+    const hasTask = (state.installTasks || []).some(t => t.projectId === p.id &&
+      (((t.assigneeIds || []).includes(memberId)) ||
+       ((t.subtasks || []).some(s => (s.assigneeIds || []).includes(memberId)))));
+    if (!onCrew && !hasTask) return;
+    out.push({ project: p, win, dStart });
+  });
+  out.sort((a, b) => a.dStart - b.dStart);
+  return out;
+}
+
+function renderPreLaunchCard(memberId) {
+  const jobs = _preLaunchProjectsFor(memberId);
+  if (!jobs.length) return '';
+  const check = '<svg width="12" height="12" viewBox="0 0 11 11" fill="none"><path d="M2 5.5l2.5 2.5L9 3" stroke="#fff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>';
+  const blocks = jobs.map(({ project: p, win, dStart }) => {
+    const color = getProjectColor(p.id);
+    const saved = _preLaunchItemsFor(p.id, memberId, win.start);
+    const doneN = PRELAUNCH_ITEMS.filter(it => saved[it.key]).length;
+    const allDone = doneN === PRELAUNCH_ITEMS.length;
+    const when = dStart < 0 ? 'Install underway' : (dStart === 0 ? 'Install today' : (dStart === 1 ? 'Install tomorrow' : 'Install in ' + dStart + ' days'));
+    const whenColor = dStart <= 0 ? '#F85149' : (dStart === 1 ? '#D29922' : '#58A6FF');
+    const rows = PRELAUNCH_ITEMS.map(it => {
+      const on = !!saved[it.key];
+      return `
+        <div class="pl-row${on ? ' done' : ''}">
+          <span class="pl-cb${on ? ' done' : ''}" onclick="togglePreLaunchItem(${p.id}, ${memberId}, '${it.key}', '${win.start}')">${on ? check : ''}</span>
+          <span class="pl-label">${esc(it.label)}</span>
+          <span class="pl-open" onclick="openProject(${p.id}, '${it.tab}')">Open &rsaquo;</span>
+        </div>`;
+    }).join('');
+    return `
+      <div class="pl-job">
+        <div class="pl-job-head">
+          <span class="pl-dot" style="background:${color}"></span>
+          <span class="pl-job-name">${esc(p.name)}</span>
+          <span class="pl-when" style="color:${whenColor}">${when}</span>
+        </div>
+        ${allDone
+          ? `<div class="pl-ready">All set \u2014 you\u2019re ready to roll</div>`
+          : `<div class="pl-prog">${doneN}/${PRELAUNCH_ITEMS.length} done</div>`}
+        ${rows}
+      </div>`;
+  }).join('');
+  return `
+    <div class="dashboard-card" style="margin-bottom:14px">
+      <style>
+        .pl-job{margin-bottom:16px}
+        .pl-job:last-child{margin-bottom:0}
+        .pl-job-head{display:flex;align-items:center;gap:8px;margin-bottom:3px}
+        .pl-dot{width:9px;height:9px;border-radius:50%;flex:0 0 auto}
+        .pl-job-name{font-size:13px;font-weight:700;color:#E6EDF3}
+        .pl-when{margin-left:auto;font-size:11px;font-weight:700;white-space:nowrap}
+        .pl-prog{font-size:11px;color:#8B949E;margin-bottom:6px}
+        .pl-ready{font-size:11px;font-weight:700;color:#3FB950;margin-bottom:6px}
+        .pl-row{display:flex;align-items:center;gap:10px;padding:8px 4px;border-bottom:1px solid #161B22}
+        .pl-cb{width:19px;height:19px;border-radius:5px;border:1.5px solid #30363D;flex:0 0 auto;display:flex;align-items:center;justify-content:center;cursor:pointer}
+        .pl-cb.done{background:#238636;border-color:#238636}
+        .pl-label{font-size:13px;color:#C9D1D9;flex:1;min-width:0}
+        .pl-row.done .pl-label{color:#6E7681;text-decoration:line-through}
+        .pl-open{font-size:11px;color:#58A6FF;cursor:pointer;flex:0 0 auto;font-weight:600}
+        .pl-open:hover{text-decoration:underline}
+      </style>
+      <div class="dashboard-card-title" style="display:flex;align-items:center;gap:8px">
+        <svg width="15" height="15" viewBox="0 0 16 16" fill="none"><rect x="2" y="2" width="12" height="12" rx="2.5" stroke="currentColor" stroke-width="1.3"/><path d="M5 8.2l2 2L11 5.4" stroke="#3FB950" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        <span>Job Prep <span style="font-size:11px;color:#8B949E;font-weight:500;margin-left:2px">before you head out</span></span>
+      </div>
+      ${blocks}
+    </div>`;
+}
+
 
 function renderCrewSchedulingCard(memberId) {
   const isMgr = getActiveUserBundleKey() === 'install_admin' || currentUserHasPermission('admin.system');
