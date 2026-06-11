@@ -3611,10 +3611,20 @@ function markChannelRead(channelId) {
   localStorage.setItem('vi_last_read_ch', JSON.stringify(state.lastReadByChannel));
 }
 
+// A channel is "mine" if it's the shared team channel or a DM I'm part of.
+function _isMyChannel(channelId, myId) {
+  if (!channelId || channelId === 'team') return true;
+  if (channelId.indexOf('dm_') === 0) {
+    const parts = channelId.split('_');
+    return parseInt(parts[1]) === myId || parseInt(parts[2]) === myId;
+  }
+  return true;
+}
 function getUnreadCount() {
   const myId = getActiveTeamMemberId();
   return state.messages.filter(m => {
     const ch = m.channelId || 'team';
+    if (!_isMyChannel(ch, myId)) return false; // ignore DMs I'm not part of
     const lastRead = state.lastReadByChannel[ch] || 0;
     return m.senderId !== myId && m.timestamp > lastRead;
   }).length;
