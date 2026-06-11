@@ -676,7 +676,9 @@ const STAGES = [
   { key: 'proposal', label: 'Proposal', color: 'blue' },
   { key: 'sent', label: 'Sent', color: 'amber' },
   { key: 'contract', label: 'Contract', color: 'green' },
-  { key: 'install', label: 'Install', color: 'purple' }
+  { key: 'install', label: 'Install', color: 'purple' },
+  { key: 'commissioning', label: 'Commissioning', color: 'teal' },
+  { key: 'signoff', label: 'Sign-off', color: 'rose' }
 ];
 
 // Pill color for the Install stage (purple is already an app stage color).
@@ -686,7 +688,7 @@ const STAGES = [
     if (typeof document === 'undefined' || document.getElementById('vi-stage-pill-style')) return;
     const st = document.createElement('style');
     st.id = 'vi-stage-pill-style';
-    st.textContent = '.status-pill.status-purple{background:rgba(163,113,247,0.16);color:#A371F7}';
+    st.textContent = '.status-pill.status-purple{background:rgba(163,113,247,0.16);color:#A371F7}.status-pill.status-teal{background:rgba(45,212,191,0.16);color:#2DD4BF}.status-pill.status-rose{background:rgba(247,120,186,0.16);color:#F778BA}';
     (document.head || document.documentElement).appendChild(st);
   } catch (e) {}
 })();
@@ -4366,7 +4368,7 @@ function renderDashboard(c) {
 // Project Health — management oversight of every open project: progress %,
 // install-window status, and a hover card listing what's holding each one up.
 function renderProjectHealthDashboard(activeProjects) {
-  const openStages = new Set(['contract', 'design', 'purchasing', 'install', 'closeout', 'warranty']);
+  const openStages = new Set(['contract', 'design', 'purchasing', 'install', 'commissioning', 'signoff', 'closeout', 'warranty']);
   const open = activeProjects.filter(p => openStages.has(p.stage));
 
   // Soonest install window first; unscheduled last.
@@ -6264,7 +6266,7 @@ function renderCrewSchedulingCard(memberId) {
   const isMgr = getActiveUserBundleKey() === 'install_admin' || currentUserHasPermission('admin.system');
   if (!isMgr) return '';
 
-  const openStages = ['contract', 'design', 'purchasing', 'install'];
+  const openStages = ['contract', 'design', 'purchasing', 'install', 'commissioning', 'signoff'];
   const open = (state.projects || []).filter(p => !p.archived && openStages.includes(p.stage));
 
   const needWindow = open.filter(p => !getBookedTimeline(p.id));
@@ -9872,9 +9874,18 @@ const PHASES = [
     { key: 'job_loaded',         label: 'Job loaded' },
     { key: 'install_started',    label: 'Install started' },
     { key: 'install_complete',   label: 'Install complete', linkedChecklist: 'install' },
-    { key: 'commissioning',      label: 'Job commissioning' },
     { key: 'asbuilt_updated',    label: 'As-built updated' },
     { key: 'unload_deprep',      label: 'Unload & de-prep' }
+  ]},
+  { key: 'commissioning', label: 'Commissioning', color: '#2DD4BF', parallel: false, milestones: [
+    { key: 'system_commissioned', label: 'System commissioning & tuning complete' },
+    { key: 'client_training',     label: 'Client training & walkthrough' },
+    { key: 'punch_list',          label: 'Punch list completed' }
+  ]},
+  { key: 'signoff', label: 'Sign-off', color: '#F778BA', parallel: false, milestones: [
+    { key: 'final_walkthrough', label: 'Final walkthrough / client acceptance' },
+    { key: 'final_invoice',     label: 'Final invoice sent' },
+    { key: 'project_closed',    label: 'Project closed' }
   ]}
 ];
 
@@ -10463,6 +10474,32 @@ function getMilestone(projectId, phaseKey, milestoneKey) {
   return state.milestones?.[projectId]?.[phaseKey]?.[milestoneKey] || false;
 }
 
+// Derive the furthest pipeline stage a project has *entered* from milestone
+// progress (a stage is entered when its anchor milestone is checked). Drives
+// auto-advance of p.stage; advancement is forward-only so manual moves stick.
+function deriveStageFromProgress(p) {
+  const anchors = [
+    ['proposal',      'proposal',      'walkthrough_done'],
+    ['sent',          'proposal',      'proposal_sent'],
+    ['contract',      'contract',      'client_signed'],
+    ['install',       'install',       'shop_work_done'],
+    ['commissioning', 'commissioning', 'system_commissioned'],
+    ['signoff',       'signoff',       'final_walkthrough']
+  ];
+  let stage = 'lead';
+  for (const a of anchors) { if (getMilestone(p.id, a[1], a[2])) stage = a[0]; }
+  return stage;
+}
+function maybeAutoAdvanceStage(projectId) {
+  const p = (state.projects || []).find(x => x.id === projectId);
+  if (!p) return;
+  const order = STAGES.map(s => s.key);
+  const derived = deriveStageFromProgress(p);
+  if (order.indexOf(derived) > order.indexOf(p.stage)) {
+    p.stage = derived; // forward-only; manual moves/drag still take precedence otherwise
+    try { localStorage.setItem('vi_projects_cache', JSON.stringify(state.projects)); } catch (e) {}
+  }
+}
 function setMilestone(projectId, phaseKey, milestoneKey, value) {
   if (!state.milestones[projectId]) state.milestones[projectId] = {};
   if (!state.milestones[projectId][phaseKey]) state.milestones[projectId][phaseKey] = {};
@@ -10472,6 +10509,7 @@ function setMilestone(projectId, phaseKey, milestoneKey, value) {
     delete state.milestones[projectId][phaseKey][milestoneKey];
   }
   save('vi_milestones', state.milestones);
+  if (value) maybeAutoAdvanceStage(projectId);
 }
 
 // Compute progress for a single milestone (0 to 1).
@@ -12768,7 +12806,7 @@ function renderAllOpenProjectsDashboard(activeProjects) {
   // Stages that count as "open": contract through closeout. Excludes lead/proposal
   // (not yet signed). Excludes archived. Sales hasn't-mobilized-yet projects also
   // show here (the contract stage covers them) so they stay visible for chasing.
-  const openStages = new Set(['contract','design','purchasing','install','closeout','warranty']);
+  const openStages = new Set(['contract','design','purchasing','install','commissioning','signoff','closeout','warranty']);
   const open = activeProjects.filter(p => openStages.has(p.stage));
 
   // Sort by install window start ascending (soonest first), unscheduled last
