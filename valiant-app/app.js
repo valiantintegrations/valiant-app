@@ -4596,8 +4596,8 @@ const WIDGETS = [
     render: (ctx) => renderMyCalendarCard(ctx.memberId)
   },
   {
-    id: 'actions',
-    label: 'Actions Assigned to Me',
+    id: 'quick_actions',
+    label: 'Quick Actions',
     defaultSpan: 6,
     minSpan: 4,
     scopes: ['mine'],
@@ -4684,15 +4684,16 @@ const DASHBOARDS = {
       { id: 'mobilization',      order: 0, span: 12, hidden: false, locked: true, hideable: false },
       { id: 'metrics',           order: 1, span: 4,  hidden: false },
       { id: 'my_calendar',       order: 2, span: 8,  hidden: false },
-      { id: 'on_site',           order: 3, span: 12, hidden: false },
-      { id: 'back_of_house',     order: 4, span: 12, hidden: false },
-      { id: 'pending_approvals', order: 5, span: 6,  hidden: false },
-      { id: 'crew_scheduling',   order: 6, span: 12, hidden: false },
-      { id: 'role_sales',        order: 7, span: 12, hidden: false },
-      { id: 'role_design',       order: 8, span: 12, hidden: false },
-      { id: 'role_pm',           order: 9, span: 12, hidden: false },
-      { id: 'role_install',      order: 10, span: 12, hidden: false },
-      { id: 'role_warehouse',    order: 11, span: 12, hidden: false }
+      { id: 'quick_actions',     order: 3, span: 12, hidden: false },
+      { id: 'on_site',           order: 4, span: 12, hidden: false },
+      { id: 'back_of_house',     order: 5, span: 12, hidden: false },
+      { id: 'pending_approvals', order: 6, span: 6,  hidden: false },
+      { id: 'crew_scheduling',   order: 7, span: 12, hidden: false },
+      { id: 'role_sales',        order: 8, span: 12, hidden: false },
+      { id: 'role_design',       order: 9, span: 12, hidden: false },
+      { id: 'role_pm',           order: 10, span: 12, hidden: false },
+      { id: 'role_install',      order: 11, span: 12, hidden: false },
+      { id: 'role_warehouse',    order: 12, span: 12, hidden: false }
     ]
   }
   // Future: 'sales_mgmt', 'install_mgmt', 'executive', etc. each with their
@@ -4963,7 +4964,7 @@ function renderMyActionsWidget(ctx) {
   return `
     <div class="dashboard-card" style="margin:0">
       <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px">
-        <div class="dashboard-card-title" style="margin:0;color:#58A6FF">Actions Assigned to Me &middot; ${myActions.length}</div>
+        <div class="dashboard-card-title" style="margin:0;color:#58A6FF">Quick Actions &middot; ${myActions.length}</div>
         <button type="button" onclick="setDashboardMode('sales_mgmt');setSalesDashTab('action')" class="btn btn-sm" style="font-size:11px;padding:4px 10px">View all in Sales</button>
       </div>
       ${myActions.slice(0, 8).map(a => renderActionRow(a)).join('')}
@@ -5938,7 +5939,7 @@ function _gatherOnSite(memberId) {
   return groups;
 }
 
-// Back of House = design tasks/subtasks + actions + upcoming meetings, grouped by job.
+// Back of House = design tasks/subtasks assigned to the member, grouped by job.
 function _gatherBackOfHouse(memberId) {
   const groups = {};
   const ensure = (projectId, fallbackName) => {
@@ -5963,15 +5964,6 @@ function _gatherBackOfHouse(memberId) {
       const dr = getTaskDateRange(t);
       const g = ensure(t.projectId); if (g) g.lines.push({ type: 'task', taskId: t.id, subId: null, phase: 'design', title: t.title, parent: null, done: !!t.done, date: (dr && dr.start) || null });
     }
-  });
-  const myActs = buildSalesActions((state.projects || []).filter(p => !p.archived), memberId, 'mine');
-  (myActs || []).forEach(a => { const g = ensure(a.projectId); if (g) g.lines.push({ type: 'action', key: a.key, phase: 'action', title: a.text, parent: null, done: false, date: null }); });
-  const today = _ymd(new Date());
-  (state.meetings || []).forEach(m => {
-    if (!(m.attendees || []).includes(memberId)) return;
-    if (!m.date || m.date < today) return;
-    const g = ensure(m.projectId != null ? m.projectId : null, 'Meetings');
-    if (g) g.lines.push({ type: 'meeting', meetingId: m.id, phase: 'meeting', title: m.title || 'Meeting', parent: null, done: false, date: m.date, time: m.time || '' });
   });
   return groups;
 }
@@ -15600,6 +15592,19 @@ function renderActionRow(a) {
   const openHandler = a.projectId
     ? (anchor ? `onclick="openProject(${a.projectId},'progress','${anchor}')"` : `onclick="openProject(${a.projectId})"`)
     : '';
+  // Inline schedule+invite button for meeting-type auto-actions — fires the same
+  // meeting-picker -> email-invite flow as the Progress-tab milestone button.
+  const MEETING_ACTION_MAP = {
+    walkthrough:    ['lead', 'walkthrough_sched'],
+    design_kickoff: ['design', 'design_kickoff'],
+    handoff:        ['design', 'design_handoff']
+  };
+  const _ma = a.autoType ? MEETING_ACTION_MAP[a.autoType] : null;
+  const schedBtn = (_ma && a.projectId) ? `
+        <button type="button" onclick="triggerMilestoneAction(${a.projectId}, '${_ma[0]}', '${_ma[1]}')" title="Schedule meeting + send invite" style="display:inline-flex;align-items:center;gap:5px;height:26px;padding:0 10px;border-radius:7px;border:1px solid #1F6FEB;background:rgba(31,111,235,0.15);color:#58A6FF;font-size:11px;font-weight:600;cursor:pointer;white-space:nowrap">
+          <svg width="12" height="12" viewBox="0 0 14 14" fill="none"><rect x="2" y="3" width="10" height="9" rx="1.5" stroke="currentColor" stroke-width="1.3"/><path d="M2 6h10M5 2v2M9 2v2" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/></svg>
+          Schedule
+        </button>` : '';
   return `
     <div class="action-row${hi}">
       <div class="action-row-main" ${openHandler}>
@@ -15613,6 +15618,7 @@ function renderActionRow(a) {
         </div>
       </div>
       <div class="action-row-actions">
+        ${schedBtn}
         <button type="button" class="action-btn action-btn-done" onclick="completeAction('${a.key}')" title="Done">
           <svg width="13" height="13" viewBox="0 0 14 14" fill="none"><path d="M2 7.5l3.5 3.5L12 4" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
         </button>
