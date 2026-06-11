@@ -18840,7 +18840,11 @@ function devSwitchToUser(memberId) {
   });
 })();
 
-init();
+// Defer the first render until the entire script has finished evaluating, so every
+// module-level const declared further down (MEETING_TYPES, etc.) is initialized
+// before renderCurrentPage() runs. Calling init() inline here renders mid-file and
+// throws "Cannot access 'X' before initialization" for any const below this point.
+setTimeout(init, 0);
 
 // ═══════════════════════════════════════════════════════════════════
 // QUICK ACTIONS BOTTOM SHEET
