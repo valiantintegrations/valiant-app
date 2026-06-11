@@ -2762,6 +2762,7 @@ function injectBottomNav() {
   </div>`;
   document.body.appendChild(nav);
   updateBottomNavMsgBadge();
+  setTimeout(ensurePushSubscribed, 2500);
 }
 
 function toggleMoreMenu() {
@@ -2787,6 +2788,11 @@ function toggleMoreMenu() {
     <div onclick="navigate('team');document.getElementById('more-menu')?.remove()" style="padding:14px 20px;color:#C9D1D9;font-size:14px;cursor:pointer;display:flex;align-items:center;gap:10px;-webkit-tap-highlight-color:transparent">
       <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><circle cx="9" cy="7" r="3.5"/><circle cx="17" cy="7" r="2.5"/><path d="M2 20c0-3.866 3.134-6 7-6s7 2.134 7 6"/><path d="M17 14c2.761 0 5 1.567 5 4"/></svg>
       Team
+    </div>
+    <div style="border-top:1px solid #30363D;margin:4px 0"></div>
+    <div onclick="document.getElementById('more-menu')?.remove();viEnablePush()" style="padding:14px 20px;color:#C9D1D9;font-size:14px;cursor:pointer;display:flex;align-items:center;gap:10px;-webkit-tap-highlight-color:transparent">
+      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M18 8a6 6 0 0 0-12 0c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.7 21a2 2 0 0 1-3.4 0"/></svg>
+      Enable Notifications
     </div>
     <div style="border-top:1px solid #30363D;margin:4px 0"></div>
     <div onclick="syncJetbuilt();document.getElementById('more-menu')?.remove()" style="padding:14px 20px;color:#58A6FF;font-size:14px;cursor:pointer;display:flex;align-items:center;gap:10px;-webkit-tap-highlight-color:transparent">
@@ -3691,9 +3697,107 @@ function sendMessage() {
     timestamp: Date.now()
   });
   save('vi_messages', state.messages);
+  _pushNotifyMessage(member, text, state.activeConversation || 'team');
   if (input) input.value = '';
   updateRightPanel();
   setTimeout(() => { const list = document.getElementById('msg-list'); if (list) list.scrollTop = list.scrollHeight; }, 50);
+}
+
+// ===== Web Push notifications =====
+function _getPushSubs() {
+  try { return JSON.parse(localStorage.getItem('vi_push_subs') || '{}'); } catch (e) { return {}; }
+}
+function _savePushSub(memberId, subJSON) {
+  if (memberId == null) return;
+  const all = _getPushSubs();
+  all[memberId] = subJSON;
+  save('vi_push_subs', all); // vi_ key -> synced to all devices
+}
+function _urlBase64ToUint8Array(base64String) {
+  const padding = '='.repeat((4 - (base64String.length % 4)) % 4);
+  const base64 = (base64String + padding).replace(/-/g, '+').replace(/_/g, '/');
+  const raw = atob(base64);
+  const arr = new Uint8Array(raw.length);
+  for (let i = 0; i < raw.length; i++) arr[i] = raw.charCodeAt(i);
+  return arr;
+}
+function _pushSupported() {
+  return ('serviceWorker' in navigator) && ('PushManager' in window) && (typeof Notification !== 'undefined');
+}
+// Called from the More menu — asks permission and registers this device.
+async function viEnablePush() {
+  try {
+    if (!_pushSupported()) {
+      alert('This device doesn\u2019t support push notifications. On iPhone, open the app from the Home Screen icon (not Safari).');
+      return;
+    }
+    if (!window.VI_VAPID_PUBLIC) { alert('Push isn\u2019t configured yet (the VAPID public key is missing in index.html).'); return; }
+    const perm = await Notification.requestPermission();
+    if (perm !== 'granted') { alert('Notifications weren\u2019t enabled. You can turn them on later in your device settings.'); return; }
+    const reg = await navigator.serviceWorker.ready;
+    let sub = await reg.pushManager.getSubscription();
+    if (!sub) {
+      sub = await reg.pushManager.subscribe({
+        userVisibleOnly: true,
+        applicationServerKey: _urlBase64ToUint8Array(window.VI_VAPID_PUBLIC)
+      });
+    }
+    _savePushSub(getActiveTeamMemberId(), sub.toJSON());
+    alert('Notifications enabled on this device.');
+  } catch (e) {
+    console.warn('enable push failed', e);
+    alert('Couldn\u2019t enable notifications: ' + (e && e.message ? e.message : e));
+  }
+}
+// On load, if permission was already granted, keep this device's subscription saved.
+async function ensurePushSubscribed() {
+  try {
+    if (!_pushSupported() || !window.VI_VAPID_PUBLIC) return;
+    if (Notification.permission !== 'granted') return;
+    const reg = await navigator.serviceWorker.ready;
+    let sub = await reg.pushManager.getSubscription();
+    if (!sub) {
+      sub = await reg.pushManager.subscribe({
+        userVisibleOnly: true,
+        applicationServerKey: _urlBase64ToUint8Array(window.VI_VAPID_PUBLIC)
+      });
+    }
+    _savePushSub(getActiveTeamMemberId(), sub.toJSON());
+  } catch (e) { /* silent */ }
+}
+// Fire a push to the recipients of a just-sent message.
+function _pushNotifyMessage(sender, text, channelId) {
+  try {
+    if (!window.VI_VAPID_PUBLIC || !sender) return;
+    const subs = _getPushSubs();
+    let recipientIds = [];
+    if (channelId === 'team') {
+      recipientIds = state.team.map(m => m.id).filter(id => id !== sender.id);
+    } else if (channelId.indexOf('dm_') === 0) {
+      const parts = channelId.split('_');
+      const a = parseInt(parts[1]), b = parseInt(parts[2]);
+      recipientIds = [a === sender.id ? b : a];
+    }
+    const targets = recipientIds.map(id => subs[id]).filter(Boolean);
+    if (!targets.length) return;
+    const title = channelId === 'team' ? `${sender.name} \u00b7 Team` : sender.name;
+    fetch('/api/push-send', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ subscriptions: targets, title, body: text.slice(0, 140), url: '/', tag: 'msg_' + channelId })
+    })
+      .then(r => r.json())
+      .then(res => { if (res && Array.isArray(res.expired) && res.expired.length) _pruneExpiredSubs(res.expired); })
+      .catch(() => {});
+  } catch (e) { /* silent */ }
+}
+function _pruneExpiredSubs(endpoints) {
+  const all = _getPushSubs();
+  let changed = false;
+  Object.keys(all).forEach(k => {
+    if (all[k] && endpoints.indexOf(all[k].endpoint) !== -1) { delete all[k]; changed = true; }
+  });
+  if (changed) save('vi_push_subs', all);
 }
 
 // Apply an incoming message change pushed live by the realtime layer (no reload).
