@@ -1531,16 +1531,17 @@ function getInstallTaskById(taskId) {
 // returns { start: dueDate, end: dueDate }.
 function getTaskDateRange(task) {
   if (!task) return null;
-  // Explicit scheduled range (set from Schedule Builder) wins — the task spans
-  // this window as a bar on all calendars; subtasks may still be pinned to
-  // specific days inside it.
-  if (task.schedStart) return { start: task.schedStart, end: task.schedEnd || task.schedStart };
   if (task.isMilestone) {
     return task.dueDate ? { start: task.dueDate, end: task.dueDate } : null;
   }
+  // Pinned step dates are the granular source of truth: when any step is dated,
+  // the task spans its steps. The coarse schedStart/schedEnd is only a fallback
+  // for tasks with no dated steps. This keeps every calendar AND the Schedule
+  // Builder panel in agreement (a stale drag-span can't override the steps).
   const dates = (task.subtasks || []).map(s => s.date).filter(Boolean).sort();
-  if (dates.length === 0) return null;
-  return { start: dates[0], end: dates[dates.length - 1] };
+  if (dates.length) return { start: dates[0], end: dates[dates.length - 1] };
+  if (task.schedStart) return { start: task.schedStart, end: task.schedEnd || task.schedStart };
+  return null;
 }
 
 // Auto-add a person (or list of people) to a project's install crew if not
@@ -22798,11 +22799,8 @@ function _sbDayItems(dateStr) {
     const p = state.projects.find(x => x.id === t.projectId);
     const color = p ? getProjectColor(p.id) : '#8B949E';
     const pre = '';
-    if (t.schedStart && dateStr >= t.schedStart && dateStr <= (t.schedEnd || t.schedStart)) {
-      items.push({ color, solid: false, label: pre + t.title });
-    } else if ((t.subtasks || []).some(s => s.date === dateStr)) {
-      items.push({ color, solid: false, label: pre + t.title });
-    } else if (t.isMilestone && t.dueDate === dateStr) {
+    const r = getTaskDateRange(t);
+    if (r && dateStr >= r.start && dateStr <= r.end) {
       items.push({ color, solid: false, label: pre + t.title });
     }
   });
