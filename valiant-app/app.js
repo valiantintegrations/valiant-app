@@ -4855,9 +4855,58 @@ function getDefaultMyWorkLayout(memberId) { return getDefaultLayout('mine'); }
 // (renderMyMobilizationCard, renderMyCalendarCard, renderPendingApprovalsCard
 // already exist later in the file. The two below are extracted from inline.)
 
+// Which flag domains a viewer should see on "Needs Attention". Project
+// management (coordinator / PM / admin) sees everything; everyone else sees
+// only their position's domain, plus their own missed deadlines.
+function _viewerFlagScope() {
+  const bk = getActiveUserBundleKey();
+  if (bk === 'master_admin' || bk === 'project_coordinator' || bk === 'project_manager' || currentUserHasPermission('admin.system')) return 'all';
+  const map = {
+    sales: ['sales'],
+    designer: ['design'],
+    system_architect: ['design'],
+    installer: ['install'],
+    install_assistant: ['install'],
+    install_admin: ['install', 'management'],
+    warehouse: ['management']
+  };
+  return map[bk] || [];
+}
+function _viewerOverdueFlags(p) {
+  const mid = getActiveTeamMemberId();
+  if (mid == null) return [];
+  const d = new Date();
+  const todayStr = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+  const out = [];
+  const scan = store => (store || []).filter(t => t.projectId === p.id).forEach(t => {
+    const subs = t.subtasks || [];
+    if (subs.length) {
+      subs.forEach(sub => {
+        const ids = (sub.assigneeIds && sub.assigneeIds.length) ? sub.assigneeIds : (t.assigneeIds || []);
+        if (sub.date && !sub.done && ids.includes(mid) && sub.date < todayStr) out.push({ level: 'red', text: 'Overdue: ' + sub.title });
+      });
+    } else if ((t.assigneeIds || []).includes(mid) && !t.done) {
+      const dr = getTaskDateRange(t);
+      if (dr && dr.end < todayStr) out.push({ level: 'red', text: 'Overdue: ' + t.title });
+    }
+  });
+  scan(state.installTasks); scan(state.designTasks);
+  return out;
+}
+function _viewerRelevantFlags(p) {
+  const scope = _viewerFlagScope();
+  const f = computeProjectFlags(p);
+  if (scope === 'all') return [...f.sales, ...f.management, ...f.design, ...f.install];
+  const flags = [];
+  scope.forEach(dom => (f[dom] || []).forEach(fl => flags.push(fl)));
+  _viewerOverdueFlags(p).forEach(fl => flags.push(fl));
+  return flags;
+}
+
 function renderMetricsWidget(ctx) {
-  const { myProjects, myAssignments, urgentProjects, flaggedProjects } = ctx;
+  const { myProjects, myAssignments, urgentProjects } = ctx;
   const roleCount = Object.keys(myAssignments).filter(k => myAssignments[k].length > 0).length;
+  const flagged = (myProjects || []).map(p => ({ p, flags: _viewerRelevantFlags(p) })).filter(o => o.flags.length > 0);
   return `
     <div class="mywork-metrics-widget">
       <div class="metric-card">
@@ -4872,20 +4921,16 @@ function renderMetricsWidget(ctx) {
           <div class="metric-sub">install within 14 days</div>
         </div>
       ` : ''}
-      ${flaggedProjects.length > 0 ? `
+      ${flagged.length > 0 ? `
         <div class="metric-card na-metric" style="border-color:#9E6A03;position:relative;cursor:help">
           <div class="metric-label">Needs Attention</div>
-          <div class="metric-value" style="color:#D29922">${flaggedProjects.length}</div>
-          <div class="metric-sub">has flagged items</div>
+          <div class="metric-value" style="color:#D29922">${flagged.length}</div>
+          <div class="metric-sub">needs your action</div>
           <div class="na-pop">
-            ${flaggedProjects.map(p => {
-              const f = computeProjectFlags(p);
-              const all = [...f.sales, ...f.management, ...f.design, ...f.install];
-              return `<div class="na-proj">
+            ${flagged.map(({ p, flags }) => `<div class="na-proj">
                 <div class="na-proj-name">${esc(p.name)}</div>
-                ${all.map(fl => `<div class="na-flag"><span class="na-dot ${fl.level}"></span><span>${fl.text}</span></div>`).join('')}
-              </div>`;
-            }).join('')}
+                ${flags.map(fl => `<div class="na-flag"><span class="na-dot ${fl.level}"></span><span>${fl.text}</span></div>`).join('')}
+              </div>`).join('')}
           </div>
         </div>
       ` : ''}
