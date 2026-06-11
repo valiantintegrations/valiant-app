@@ -211,6 +211,8 @@
   let hydrating = false;
   let suppressUntil = 0;      // ignore realtime echoes of our own writes
   let sb = null;
+  const pendingWrites = new Map();  // key -> latest value not yet confirmed in the cloud
+  let authToken = null;             // session access token, for the keepalive flush on unload
 
   const $ = id => document.getElementById(id);
   const setStatus = t => { const s = $('vi-status'); if (s) s.textContent = t || ''; };
@@ -218,9 +220,13 @@
   async function mirrorSet(key, raw) {
     if (!sb || !shouldSync(key)) return;
     let value; try { value = JSON.parse(raw); } catch { value = raw; }
+    pendingWrites.set(key, value);            // unconfirmed until the upsert resolves
     suppressUntil = Date.now() + 4000;
-    try { await sb.from('app_data').upsert({ key, value }, { onConflict: 'key' }); }
-    catch (e) { console.warn('sync up failed', key, e); }
+    try {
+      const { error } = await sb.from('app_data').upsert({ key, value }, { onConflict: 'key' });
+      if (error) { console.warn('sync up failed', key, error); }
+      else if (pendingWrites.get(key) === value) { pendingWrites.delete(key); }
+    } catch (e) { console.warn('sync up failed', key, e); }
   }
   async function mirrorRemove(key) {
     if (!sb || !shouldSync(key)) return;
@@ -231,6 +237,36 @@
   // Wrap writes so every change goes up to the cloud.
   localStorage.setItem = function (k, v) { rawSet(k, v); if (!hydrating) mirrorSet(k, v); };
   localStorage.removeItem = function (k) { rawRemove(k); if (!hydrating) mirrorRemove(k); };
+
+  // A normal upsert is fire-and-forget; reloading the page a moment after a save can
+  // cancel the request mid-flight, so the change never reaches the cloud and the next
+  // load's hydrate wipes it locally. On page-hide, re-send any unconfirmed writes with
+  // keepalive requests, which the browser is allowed to finish after the page unloads.
+  function flushPendingWrites() {
+    if (!sb || !pendingWrites.size) return;
+    const token = authToken || SB_KEY;
+    pendingWrites.forEach((value, key) => {
+      try {
+        const body = JSON.stringify([{ key, value }]);
+        if (body.length > 60000) return;  // keepalive payload cap; large caches resync on next load
+        fetch(`${SB_URL}/rest/v1/app_data?on_conflict=key`, {
+          method: 'POST',
+          keepalive: true,
+          headers: {
+            'apikey': SB_KEY,
+            'Authorization': 'Bearer ' + token,
+            'Content-Type': 'application/json',
+            'Prefer': 'resolution=merge-duplicates'
+          },
+          body
+        });
+      } catch (e) { /* best effort */ }
+    });
+  }
+  window.addEventListener('pagehide', flushPendingWrites);
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'hidden') flushPendingWrites();
+  });
 
   function clearLocalViKeys() {
     const kill = [];
@@ -245,18 +281,20 @@
     const { data, error } = await sb.from('app_data').select('key,value');
     if (error) throw error;
     hydrating = true;
-    if (data && data.length) {
-      // Cloud is source of truth — mirror it exactly onto this device.
-      clearLocalViKeys();
-      data.forEach(row => {
-        const v = (typeof row.value === 'string') ? row.value : JSON.stringify(row.value);
-        rawSet(row.key, v);
-      });
-      hydrating = false;
-      return 'pulled';
+    try {
+      if (data && data.length) {
+        // Cloud is source of truth — mirror it exactly onto this device.
+        clearLocalViKeys();
+        data.forEach(row => {
+          const v = (typeof row.value === 'string') ? row.value : JSON.stringify(row.value);
+          rawSet(row.key, v);
+        });
+        return 'pulled';
+      }
+      return 'empty';
+    } finally {
+      hydrating = false;  // never leave writes un-mirrored if a write above throws
     }
-    hydrating = false;
-    return 'empty';
   }
 
   // First run only: push this device's existing data up to seed the cloud.
@@ -380,8 +418,9 @@
       $('vi-setpw-btn').onclick = doSetPassword;
       $('vi-setpw-cancel').onclick = () => { $('vi-setpw').style.display = 'none'; };
       $('vi-newpw2').addEventListener('keydown', e => { if (e.key === 'Enter') doSetPassword(); });
-      sb.auth.onAuthStateChange((event) => { if (event === 'PASSWORD_RECOVERY') showSetPw('recovery'); });
+      sb.auth.onAuthStateChange((event, session) => { authToken = (session && session.access_token) || authToken; if (event === 'PASSWORD_RECOVERY') showSetPw('recovery'); });
       const { data: { session } } = await sb.auth.getSession();
+      authToken = (session && session.access_token) || authToken;
       if (hashType === 'recovery') { showSetPw('recovery'); }
       else if (hashType === 'invite') { showSetPw('invite'); }
       else if (session) { await startSession(); } else { $('vi-email').focus(); }
