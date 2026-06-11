@@ -11715,7 +11715,9 @@ function saveProjectSiteNotes(projectId, notes) {
 
 async function renderLocationTab(container, project) {
   const address = getProjectAddressString(project);
-  const canEdit = currentUserHasPermission('projects.edit');
+  // Pin/site-location editing: global editors, plus anyone assigned to this job's PM slot.
+  const canEdit = currentUserHasPermission('projects.edit')
+    || isAssignedToProject(getActiveTeamMemberId(), project.id, 'pm');
 
   if (!address) {
     container.innerHTML = `
