@@ -7698,6 +7698,7 @@ function _saveScopeTagsDialog() {
   // Preserve SCOPE_TAGS order so display is stable
   p.scope_tags = SCOPE_TAGS.filter(t => selected.has(t));
   save('vi_projects', state.projects);
+  save('vi_projects_cache', state.projects);  // app boots projects from the cache — keep it in sync
   document.getElementById('scope-tags-dialog')?.remove();
   window._scopeDialogSelected = null;
   window._scopeDialogPid = null;
@@ -7716,6 +7717,7 @@ function _toggleProjectScopeTag(projectId, tag, on) {
     p.scope_tags = p.scope_tags.filter(t => t !== tag);
   }
   save('vi_projects', state.projects);
+  save('vi_projects_cache', state.projects);
   renderCurrentPage();
 }
 
@@ -19432,6 +19434,7 @@ function getMobilizationState(projectId) {
   const tags = p.systems || [];
   const pinsCount = (state.projectPins?.[projectId] || []).length;
   const briefingSkipped = state.mobilizationFlags?.[projectId]?.site_briefing_skipped;
+  const askedClientSite = state.mobilizationFlags?.[projectId]?.site_briefing_ask_client;
   const designKickoffLog = state.meetingLogs?.[projectId]?.design_kickoff;
   const designKickoffScheduled = state.mobilizationFlags?.[projectId]?.design_kickoff_scheduled;
   // Also check the new meetings model — any design_kickoff meeting on this project that's
@@ -19447,7 +19450,7 @@ function getMobilizationState(projectId) {
     pm_lead:        !!pmLead,
     install_window: !!win,
     scope_tags:     tags.length > 0,
-    site_briefing:  pinsCount > 0 || !!briefingSkipped,
+    site_briefing:  pinsCount > 0 || !!briefingSkipped || !!askedClientSite,
     design_kickoff: !!designKickoffLog || !!designKickoffScheduled || !!designKickoffMeeting
   };
 }
@@ -19586,7 +19589,13 @@ function renderMobilizationBody(projectId) {
         : '<span style="color:#D29922">No tags</span>';
     } else if (it.key === 'site_briefing') {
       const pinsCount = (state.projectPins?.[projectId] || []).length;
-      detail = pinsCount > 0 ? `${pinsCount} pin${pinsCount === 1 ? '' : 's'}` : (flags.site_briefing_skipped ? '<span style="color:#8B949E">Skipped</span>' : '<span style="color:#D29922">No pins yet</span>');
+      detail = pinsCount > 0
+        ? `${pinsCount} pin${pinsCount === 1 ? '' : 's'}`
+        : (flags.site_briefing_ask_client
+            ? '<span style="color:#58A6FF">Asked client \u2014 PM following up</span>'
+            : (flags.site_briefing_skipped
+                ? '<span style="color:#8B949E">Skipped</span>'
+                : '<span style="color:#8B949E">Optional \u2014 add pins, skip, or ask client</span>'));
     } else if (it.key === 'design_kickoff') {
       // Prefer the new meetings model when available
       const dkMeeting = (state.meetings || [])
@@ -19679,8 +19688,15 @@ function renderMobilizationItemAction(projectId, itemKey, done) {
     if (pinsCount > 0) {
       return `<button type="button" class="btn btn-sm" onclick="openSiteBriefingFromMobilization(${projectId})" style="font-size:11px;padding:4px 10px">Open</button>`;
     }
+    if (flags.site_briefing_ask_client) {
+      return `
+        <button type="button" class="btn btn-sm" onclick="openSiteBriefingFromMobilization(${projectId})" style="font-size:11px;padding:4px 10px">Open</button>
+        <button type="button" class="btn btn-sm" onclick="mobilizationClearAskClient(${projectId})" style="font-size:11px;padding:4px 10px">Undo ask</button>
+      `;
+    }
     return `
       <button type="button" class="btn btn-sm" onclick="openSiteBriefingFromMobilization(${projectId})" style="font-size:11px;padding:4px 10px">Open</button>
+      <button type="button" class="btn btn-sm" onclick="mobilizationAskClientForSite(${projectId})" style="font-size:11px;padding:4px 10px">Don't know \u2014 ask client</button>
       <button type="button" class="btn btn-sm" onclick="toggleMobilizationFlag(${projectId},'site_briefing_skipped')" style="font-size:11px;padding:4px 10px">${flags.site_briefing_skipped ? 'Un-skip' : 'Skip'}</button>
     `;
   }
@@ -19953,6 +19969,40 @@ function toggleScopeTag(projectId, tag) {
   if (idx >= 0) p.systems.splice(idx, 1);
   else p.systems.push(tag);
   save('vi_projects', state.projects);
+  save('vi_projects_cache', state.projects);  // app boots projects from the cache — keep it in sync
+  refreshMobilizationBody(projectId);
+}
+
+function mobilizationAskClientForSite(projectId) {
+  const p = state.projects.find(x => x.id === projectId);
+  if (!p) return;
+  // Pins aren't required — mark the item satisfied and hand the follow-up to the PM.
+  if (!state.mobilizationFlags) state.mobilizationFlags = {};
+  if (!state.mobilizationFlags[projectId]) state.mobilizationFlags[projectId] = {};
+  state.mobilizationFlags[projectId].site_briefing_ask_client = true;
+  save('vi_mobilization_flags', state.mobilizationFlags);
+  const a = getProjectAssignment(projectId);
+  const pmLead = (a.pm || []).find(x => x.lead) || (a.pm || [])[0];
+  if (!state.actionsManual) state.actionsManual = [];
+  state.actionsManual.push({
+    id: Date.now(),
+    section: 'other',
+    text: `Ask client for site location / parking details, then add site pins — ${p.name}`,
+    projectId,
+    assigneeId: pmLead ? pmLead.id : null,
+    createdBy: getActiveTeamMemberId(),
+    createdAt: new Date().toISOString()
+  });
+  _persistActionsManual();
+  showToast(pmLead ? "Added to the PM's actions" : 'Saved — assign a PM to send it to them', pmLead ? 'success' : 'warn');
+  refreshMobilizationBody(projectId);
+}
+
+function mobilizationClearAskClient(projectId) {
+  if (state.mobilizationFlags?.[projectId]) {
+    delete state.mobilizationFlags[projectId].site_briefing_ask_client;
+    save('vi_mobilization_flags', state.mobilizationFlags);
+  }
   refreshMobilizationBody(projectId);
 }
 
