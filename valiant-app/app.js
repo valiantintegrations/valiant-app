@@ -3898,12 +3898,14 @@ function scheduleMeeting() {
     const f = document.getElementById(id); if (f) f.value = '';
   });
   updateRightPanel();
+  renderCurrentPage();  // also refresh the calendar so the new meeting shows without a reload
 }
 
 function deleteMeeting(id) {
   state.meetings = state.meetings.filter(m => m.id !== id);
   save('vi_meetings', state.meetings);
   updateRightPanel();
+  renderCurrentPage();  // keep the calendar in sync after removing a meeting
 }
 
 function renderRightPanelHTML() {
