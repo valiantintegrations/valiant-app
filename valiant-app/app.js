@@ -6655,7 +6655,7 @@ function renderMyWorkCard(p, role, isLead) {
           </div>
           <div style="font-size:11px;color:#8B949E;margin-top:2px">${esc(p.client_name || 'No client')}${p.city ? ' · ' + esc(p.city) : ''}</div>
         </div>
-        <span class="status-pill status-${stg.color}" style="font-size:10px;flex-shrink:0">${stg.label}</span>
+        ${stagePillHTML(p, 'font-size:10px;flex-shrink:0')}
       </div>
 
       <!-- Segmented progress map -->
@@ -6831,7 +6831,7 @@ function renderExecutiveDashboard(activeProjects) {
               <div style="font-size:11px;font-weight:700;color:#D29922;text-transform:uppercase;letter-spacing:0.06em;margin-bottom:6px">Stuck · ${stuckProjects.length}</div>
               ${stuckProjects.slice(0, 5).map(p => {
                 const stg = STAGES.find(s => s.key === p.stage);
-                return `<div onclick="openProject(${p.id})" style="font-size:12px;color:#C9D1D9;padding:4px 0;cursor:pointer;-webkit-tap-highlight-color:transparent;border-bottom:1px solid #1C2333;display:flex;align-items:center;justify-content:space-between"><span>${esc(p.name)}</span><span style="font-size:10px;color:#6E7681">${stg?.label || ''}</span></div>`;
+                return `<div onclick="openProject(${p.id})" style="font-size:12px;color:#C9D1D9;padding:4px 0;cursor:pointer;-webkit-tap-highlight-color:transparent;border-bottom:1px solid #1C2333;display:flex;align-items:center;justify-content:space-between"><span>${esc(p.name)}</span><span style="font-size:10px;color:#6E7681">${esc(getDisplayStage(p).label)}</span></div>`;
               }).join('')}
             </div>
           ` : ''}
@@ -7071,7 +7071,7 @@ function renderProjects(c) {
                 <div style="font-size:12px;color:#6E7681;margin-top:2px">${esc(p.client_name || 'No client')}${p.city ? ' · ' + esc(p.city) + (p.state_abbr ? ', ' + esc(p.state_abbr) : '') : ''}</div>
                 ${(() => { const dt = getInstallDateDisplay(p); return `<div style="font-size:11px;color:${dt.color};margin-top:2px">${dt.label}: ${dt.value}</div>`; })()}
               </div>
-              <span class="status-pill status-${stg.color}">${stg.label}</span>
+              ${stagePillHTML(p)}
             </div>
             <div style="display:flex;align-items:center;justify-content:space-between">
               <div>${p.systems.map(systemTagHTML).join('') || '<span style="color:#6E7681;font-size:11px">No tags</span>'}</div>
@@ -7091,7 +7091,7 @@ function projectRow(p) {
     <tr onclick="openProject(${p.id})" data-stage="${p.stage}" data-name="${esc(p.name).toLowerCase()}">
       <td><div class="proj-name">${esc(p.name)}</div><div class="proj-id">#${p.id}</div></td>
       <td>${esc(p.client_name || '—')}</td>
-      <td><span class="status-pill status-${stg.color}">${stg.label}</span></td>
+      <td>${stagePillHTML(p)}</td>
       ${canSee('financials') ? `<td>${fmt(p.total)}</td>` : ''}
       <td>${p.systems.map(systemTagHTML).join('') || '<span style="color:#6E7681">—</span>'}</td>
       <td style="font-size:12px;color:#6E7681">${shortDate(p.updated_at)}</td>
@@ -7134,6 +7134,17 @@ function getDisplayStage(p) {
     }
   }
   return { label: baseStg.label, custom: false, stg: baseStg };
+}
+
+// Shared stage pill — reflects the active parallel phase (Design/Purchasing/Planning)
+// when a Contract-stage project has started one, so every surface matches the project page.
+function stagePillHTML(p, extraStyle) {
+  const d = getDisplayStage(p);
+  const xs = extraStyle || '';
+  if (d.custom) {
+    return `<span class="status-pill" style="background:${d.color}22;color:${d.color};border:1px solid ${d.color}66;${xs}" title="Active parallel phase \u2014 lifecycle stage is still Contract">${esc(d.label)}</span>`;
+  }
+  return `<span class="status-pill status-${d.stg.color}"${xs ? ` style="${xs}"` : ''}>${esc(d.stg.label)}</span>`;
 }
 
 function renderProjectPage(c) {
@@ -19215,7 +19226,7 @@ function quickActionProjectPicker(promptLabel, onProjectChosen) {
             <div style="font-size:13px;color:#E6EDF3;font-weight:500;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${esc(p.name)}</div>
             <div style="font-size:11px;color:#8B949E;margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${esc(p.client_name || 'No client')}</div>
           </div>
-          <span class="status-pill status-${stg.color}" style="flex-shrink:0">${stg.label}</span>
+          ${stagePillHTML(p, 'flex-shrink:0')}
         </button>
       `;
     }).join('');
@@ -19457,11 +19468,11 @@ function renderOpenProjectCard(p, memberId, canSeeFinancials) {
     <div class="op-card${isOnTeam ? ' op-card-mine' : ''}${closeout ? ' op-card-closeout' : ''}" onclick="openProject(${p.id})" style="box-shadow:inset 4px 0 0 ${projectColor}">
       <div class="op-card-top">
         <div class="op-card-name">${esc(p.name)}</div>
-        <span class="status-pill status-${stg.color}">${stg.label}</span>
+        ${stagePillHTML(p)}
       </div>
       <div class="op-card-client">${esc(p.client_name || 'No client')}${p.city ? ' &middot; ' + esc(p.city) : ''}</div>
       <div class="op-card-progress">
-        <div class="op-progress-bar"><div class="op-progress-fill" style="width:${overallPct}%;background:${stg.color === 'red' ? '#F0883E' : stg.color === 'purple' ? '#A371F7' : '#58A6FF'}"></div></div>
+        <div class="op-progress-bar"><div class="op-progress-fill" style="width:${overallPct}%;background:${(() => { const d = getDisplayStage(p); return d.custom ? d.color : (d.stg.color === 'red' ? '#F0883E' : d.stg.color === 'purple' ? '#A371F7' : '#58A6FF'); })()}"></div></div>
         <div class="op-progress-text">${overallPct}% &middot; ${doneMilestones}/${totalMilestones}</div>
       </div>
       <div class="op-card-meta">
