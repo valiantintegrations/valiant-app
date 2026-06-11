@@ -10785,7 +10785,7 @@ function renderCalendar(c) {
     if (range.end < gridStartStr || range.start > gridEndStr) return;
     // Skip when project install window already covers this range
     const win = getInstallWindow(proj);
-    if (win && win.start <= range.start && win.end >= range.end) return;
+    /* show scheduled tasks even inside the install window (was: skip when covered) */
 
     const allAttendees = new Set();
     (t.assigneeIds || []).forEach(id => allAttendees.add(id));
@@ -13076,7 +13076,7 @@ function getMasterCalendarEvents(startDateStr, endDateStr, ctx) {
       // Skip when project install window already covers this range — the
       // window bar IS the bar; subtasks appear under it in day-detail.
       const win = getInstallWindow(proj);
-      if (win && win.start <= range.start && win.end >= range.end) return;
+      /* show scheduled tasks even inside the install window (was: skip when covered) */
 
       events.push({
         type: 'install_task',
@@ -22568,10 +22568,72 @@ function _sbCellDrop(ev, dateStr) {
   window._sbDragPayload = null;
   _sbCommitPlace(dateStr, payload);
 }
+// Day popup for the selected (active) project — what's on this date for it.
+function _sbShowDayForProject(dateStr, projectId) {
+  const p = (state.projects || []).find(x => x.id === projectId);
+  if (!p) return;
+  const to12 = t => { if (!t) return ''; const [h, m] = String(t).split(':').map(Number); const ap = h < 12 ? 'AM' : 'PM'; const hh = ((h + 11) % 12) + 1; return `${hh}:${String(m || 0).padStart(2, '0')} ${ap}`; };
+  const who = ids => (ids || []).map(id => (getTeamMember(id) || {}).name).filter(Boolean).map(n => n.split(' ')[0]).join(', ');
+  const rows = [];
+  const win = getInstallWindow(p);
+  if (win && isWorkingDayInWindow(win, dateStr)) {
+    rows.push({ tag: win.source === 'booked' ? 'Install window' : 'Est. window', color: win.source === 'booked' ? '#3FB950' : '#8B949E', label: 'On site', sub: '' });
+  }
+  const scan = (store, phase, color) => (store || []).filter(t => t.projectId === projectId).forEach(t => {
+    if (t.schedStart && dateStr >= t.schedStart && dateStr <= (t.schedEnd || t.schedStart)) {
+      rows.push({ tag: phase, color, label: t.title, sub: who(t.assigneeIds) });
+    }
+    (t.subtasks || []).filter(sub => sub.date === dateStr).forEach(sub => {
+      const w = who(sub.assigneeIds);
+      rows.push({ tag: phase, color, label: sub.title, sub: t.title + (w ? ' \u00b7 ' + w : '') });
+    });
+    if (t.isMilestone && t.dueDate === dateStr) rows.push({ tag: phase, color, label: t.title, sub: 'Milestone' });
+  });
+  scan(state.installTasks, 'Install', '#58A6FF');
+  scan(state.designTasks, 'Design', '#A371F7');
+  (state.meetings || []).filter(m => m.projectId === projectId && m.date === dateStr).forEach(m => {
+    rows.push({ tag: 'Meeting', color: '#3FB950', label: m.title || 'Meeting', sub: [to12(m.time), who(m.attendeeIds || m.attendees)].filter(Boolean).join(' \u00b7 ') });
+  });
+
+  document.getElementById('sb-day-dialog')?.remove();
+  const overlay = document.createElement('div');
+  overlay.id = 'sb-day-dialog';
+  overlay.className = 'modal-overlay';
+  overlay.style.zIndex = '10002';
+  overlay.onclick = (e) => { if (e.target === overlay) overlay.remove(); };
+  const bodyHtml = rows.length
+    ? rows.map(r => `
+        <div style="display:flex;align-items:flex-start;gap:10px;padding:8px 0;border-bottom:1px solid #21262D">
+          <span style="font-size:10px;font-weight:600;padding:2px 7px;border-radius:999px;background:${r.color}22;color:${r.color};flex:0 0 auto;margin-top:1px">${esc(r.tag)}</span>
+          <div style="flex:1;min-width:0">
+            <div style="font-size:13px;color:#E6EDF3">${esc(r.label)}</div>
+            ${r.sub ? `<div style="font-size:11px;color:#8B949E;margin-top:1px">${esc(r.sub)}</div>` : ''}
+          </div>
+        </div>`).join('')
+    : `<div style="font-size:13px;color:#8B949E;padding:10px 0">Nothing scheduled for this project on this day.</div>`;
+  overlay.innerHTML = `
+    <div class="modal-container" style="max-width:380px">
+      <div class="modal-header">
+        <div class="modal-title">${esc(p.name)} \u00b7 ${esc(fmtDateLocal(dateStr))}</div>
+        <button class="modal-close" onclick="document.getElementById('sb-day-dialog').remove()">&times;</button>
+      </div>
+      <div class="modal-body">${bodyHtml}</div>
+      <div class="modal-footer" style="display:flex;gap:8px;justify-content:flex-end;padding:12px 16px;border-top:1px solid #30363D">
+        <button class="btn btn-sm" onclick="openProject(${projectId});document.getElementById('sb-day-dialog').remove()">Open project</button>
+        <button class="btn btn-sm btn-primary" onclick="document.getElementById('sb-day-dialog').remove()">Close</button>
+      </div>
+    </div>`;
+  document.body.appendChild(overlay);
+}
+
 function _sbCellTap(dateStr) {
   _sbInit();
   const st = window._sbState;
-  if (!st.placing) return; // only acts when something is armed
+  if (!st.placing) {
+    // Not placing tasks — if a project is selected, show what's on that day for it.
+    if (st.activeProject != null) _sbShowDayForProject(dateStr, st.activeProject);
+    return;
+  }
   const kind = st.placing.kind;
   if (kind === 'taskset' || kind === 'task') {
     // First tap sets the start; second tap sets the end and commits the range.
