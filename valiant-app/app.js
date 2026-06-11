@@ -4872,13 +4872,34 @@ function renderMetricsWidget(ctx) {
         </div>
       ` : ''}
       ${flaggedProjects.length > 0 ? `
-        <div class="metric-card" style="border-color:#9E6A03">
+        <div class="metric-card na-metric" style="border-color:#9E6A03;position:relative;cursor:help">
           <div class="metric-label">Needs Attention</div>
           <div class="metric-value" style="color:#D29922">${flaggedProjects.length}</div>
           <div class="metric-sub">has flagged items</div>
+          <div class="na-pop">
+            ${flaggedProjects.map(p => {
+              const f = computeProjectFlags(p);
+              const all = [...f.sales, ...f.management, ...f.design, ...f.install];
+              return `<div class="na-proj">
+                <div class="na-proj-name">${esc(p.name)}</div>
+                ${all.map(fl => `<div class="na-flag"><span class="na-dot ${fl.level}"></span><span>${fl.text}</span></div>`).join('')}
+              </div>`;
+            }).join('')}
+          </div>
         </div>
       ` : ''}
     </div>
+    <style>
+      .na-pop{position:absolute;top:calc(100% + 6px);left:0;min-width:240px;max-width:300px;background:#161B22;border:1px solid #30363D;border-radius:10px;padding:10px 12px;box-shadow:0 10px 30px rgba(0,0,0,0.5);z-index:60;display:none;text-align:left}
+      .na-metric:hover .na-pop{display:block}
+      .na-proj{padding:6px 0;border-bottom:1px solid #21262D}
+      .na-proj:last-child{border-bottom:none}
+      .na-proj-name{font-size:12px;font-weight:600;color:#E6EDF3;margin-bottom:4px}
+      .na-flag{display:flex;align-items:flex-start;gap:7px;font-size:11px;color:#C9D1D9;line-height:1.45;padding:1px 0}
+      .na-dot{width:7px;height:7px;border-radius:50%;flex:0 0 auto;margin-top:4px}
+      .na-dot.red{background:#F85149}
+      .na-dot.yellow{background:#D29922}
+    </style>
   `;
 }
 
