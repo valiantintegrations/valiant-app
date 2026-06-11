@@ -11137,7 +11137,7 @@ function renderCalendar(c) {
       taskId: t.id,
       name: t.title,
       clientName: proj.client_name || '',
-      booked: false, // tasks render outline (planning)
+      booked: true, // tasks render solid (only estimated windows outlined)
       start: range.start,
       end: range.end,
       excludeWeekends: false, // tasks don't skip weekends — subtasks pinned to specific days
@@ -11192,7 +11192,7 @@ function renderCalendar(c) {
       taskId: t.id,
       name: t.title,
       clientName: proj.client_name || '',
-      booked: false,
+      booked: true,
       start: range.start,
       end: range.end,
       excludeWeekends: false,
@@ -13430,7 +13430,7 @@ function getMasterCalendarEvents(startDateStr, endDateStr, ctx) {
         endTime: null,
         color: t.isMilestone ? '#D29922' : '#58A6FF',
         displayColor: getProjectColor(t.projectId),
-        committed: false, // tasks render with outline style (planning)
+        committed: true, // tasks render solid (only estimated windows outlined)
         attendeeIds: [...allAttendees],
         statusLabel: t.isMilestone ? 'Milestone' : 'Tasks',
         raw: t,
@@ -13474,7 +13474,7 @@ function getMasterCalendarEvents(startDateStr, endDateStr, ctx) {
         endTime: null,
         color: t.isMilestone ? '#D29922' : '#A371F7',
         displayColor: getProjectColor(t.projectId),
-        committed: false,
+        committed: true,
         attendeeIds: [...allAttendees],
         statusLabel: t.isMilestone ? 'Milestone' : 'Design',
         raw: t,
