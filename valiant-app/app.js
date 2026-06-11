@@ -18840,6 +18840,16 @@ function devSwitchToUser(memberId) {
   });
 })();
 
+// Native <input type="date"> only opens its calendar when you click the tiny built-in
+// icon; clicking the text just lets you type. This makes a click anywhere on any date
+// field pop the calendar picker (no-op on browsers without showPicker()).
+document.addEventListener('click', (e) => {
+  const t = e.target;
+  if (t && t.tagName === 'INPUT' && t.type === 'date' && typeof t.showPicker === 'function') {
+    try { t.showPicker(); } catch (_) {}
+  }
+});
+
 // Defer the first render until the entire script has finished evaluating, so every
 // module-level const declared further down (MEETING_TYPES, etc.) is initialized
 // before renderCurrentPage() runs. Calling init() inline here renders mid-file and
