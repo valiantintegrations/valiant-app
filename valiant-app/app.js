@@ -2768,7 +2768,12 @@ function toggleMoreMenu() {
   menu = document.createElement('div');
   menu.id = 'more-menu';
   menu.style.cssText = 'position:fixed;bottom:64px;right:12px;background:#161B22;border:1px solid #30363D;border-radius:12px;z-index:70;padding:8px 0;min-width:180px;box-shadow:0 8px 32px rgba(0,0,0,0.5)';
+  const _moreUnread = getUnreadCount();
   menu.innerHTML = `
+    <div onclick="document.getElementById('more-menu')?.remove();toggleRightPanel('messages')" style="padding:14px 20px;color:#C9D1D9;font-size:14px;cursor:pointer;display:flex;align-items:center;gap:10px;-webkit-tap-highlight-color:transparent">
+      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21 11.5a8.38 8.38 0 0 1-8.5 8.5 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7A8.38 8.38 0 0 1 4 11.5 8.5 8.5 0 0 1 12.5 3 8.38 8.38 0 0 1 21 11.5z"/></svg>
+      Messages${_moreUnread ? `<span style="margin-left:auto;background:#DA3633;color:#fff;font-size:11px;font-weight:700;border-radius:10px;padding:1px 7px">${_moreUnread > 9 ? '9+' : _moreUnread}</span>` : ''}
+    </div>
     <div onclick="navigate('vendors');document.getElementById('more-menu')?.remove()" style="padding:14px 20px;color:#C9D1D9;font-size:14px;cursor:pointer;display:flex;align-items:center;gap:10px;-webkit-tap-highlight-color:transparent">
       <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><circle cx="12" cy="7" r="4"/><path d="M4 21c0-4.418 3.582-7 8-7s8 2.582 8 7"/></svg>
       Vendors
@@ -3898,9 +3903,33 @@ function renderMessagesList(channelId) {
 
 function injectRightPanel() {
   if (document.getElementById('right-panel')) return;
+  if (!document.getElementById('rpanel-extra-style')) {
+    const st = document.createElement('style');
+    st.id = 'rpanel-extra-style';
+    st.textContent = `
+      .rpanel-resize{position:absolute;left:-3px;top:0;width:8px;height:100%;cursor:col-resize;z-index:60}
+      .rpanel-resize:hover{background:linear-gradient(90deg,transparent,#1565C055)}
+      #right-panel .rpanel-content{width:calc(var(--rp-w,336px) - 52px)!important}
+      .rp-mobile-close{display:none}
+      @media (max-width:768px){
+        #right-panel:not(.rp-mobile-open){display:none!important}
+        #right-panel.rp-mobile-open{position:fixed!important;inset:0!important;left:0!important;top:0!important;right:0!important;bottom:0!important;width:100vw!important;height:100%!important;height:100dvh!important;z-index:3000!important;display:block!important;background:#0D1117!important}
+        #right-panel.rp-mobile-open .rpanel-strip{display:none!important}
+        #right-panel.rp-mobile-open .rpanel-content{width:100vw!important;max-width:100vw!important;height:100%!important;height:100dvh!important;display:flex!important;flex-direction:column!important}
+        #right-panel.rp-mobile-open .rp-mobile-close{display:flex!important;position:absolute;top:10px;right:12px;z-index:10;background:#21262D;border:1px solid #30363D;color:#C9D1D9;width:30px;height:30px;border-radius:8px;align-items:center;justify-content:center;font-size:15px;line-height:1;cursor:pointer;-webkit-tap-highlight-color:transparent}
+        .rpanel-resize{display:none!important}
+      }
+    `;
+    document.head.appendChild(st);
+  }
   const el = document.createElement('div');
   el.id = 'right-panel';
   document.body.appendChild(el);
+  // keep panel layout correct when crossing the mobile/desktop breakpoint
+  window.addEventListener('resize', () => {
+    if (window._rpRT) return;
+    window._rpRT = setTimeout(() => { window._rpRT = null; updateRightPanel(); }, 150);
+  });
   updateRightPanel();
 }
 
@@ -3909,13 +3938,62 @@ function updateRightPanel() {
   if (!el) return;
   el.innerHTML = renderRightPanelHTML();
   const main = document.getElementById('main');
-  if (main && window.innerWidth > 768) {
-    main.style.paddingRight = state.rightPanel ? '336px' : '52px';
+  const isMobile = window.innerWidth <= 768;
+  if (isMobile) {
+    if (state.rightPanel) el.classList.add('rp-mobile-open');
+    else el.classList.remove('rp-mobile-open');
+    el.style.width = '';
+    if (main) main.style.paddingRight = '';
+  } else {
+    el.classList.remove('rp-mobile-open');
+    const w = _rpanelWidth();
+    el.style.setProperty('--rp-w', w + 'px');
+    el.style.width = state.rightPanel ? (w + 'px') : '';
+    if (main) main.style.paddingRight = state.rightPanel ? (w + 'px') : '52px';
   }
   if (state.rightPanel === 'messages' && state.activeConversation) {
     const list = document.getElementById('msg-list');
     if (list) list.scrollTop = list.scrollHeight;
   }
+}
+
+// Right-panel width (desktop), per-device, not synced.
+function _rpanelWidth() {
+  let w = parseInt(localStorage.getItem('nav_panel_width') || '336', 10);
+  if (isNaN(w)) w = 336;
+  return Math.max(300, Math.min(640, w));
+}
+function _rpanelSetWidth(w) {
+  w = Math.max(300, Math.min(640, Math.round(w)));
+  localStorage.setItem('nav_panel_width', String(w));
+  return w;
+}
+function _rpanelStartResize(e) {
+  e.preventDefault();
+  const el = document.getElementById('right-panel');
+  const main = document.getElementById('main');
+  if (!el) return;
+  const move = (ev) => {
+    const x = ev.touches ? ev.touches[0].clientX : ev.clientX;
+    let w = Math.max(300, Math.min(640, window.innerWidth - x));
+    el.style.width = w + 'px';
+    el.style.setProperty('--rp-w', w + 'px');
+    if (main) main.style.paddingRight = w + 'px';
+  };
+  const up = (ev) => {
+    document.removeEventListener('mousemove', move);
+    document.removeEventListener('mouseup', up);
+    document.removeEventListener('touchmove', move);
+    document.removeEventListener('touchend', up);
+    document.body.style.userSelect = '';
+    const x = ev.changedTouches ? ev.changedTouches[0].clientX : ev.clientX;
+    _rpanelSetWidth(window.innerWidth - x);
+  };
+  document.body.style.userSelect = 'none';
+  document.addEventListener('mousemove', move);
+  document.addEventListener('mouseup', up);
+  document.addEventListener('touchmove', move, { passive: false });
+  document.addEventListener('touchend', up);
 }
 
 function getUpcomingMeetings() {
@@ -4230,8 +4308,10 @@ function renderRightPanelHTML() {
 
   const contentMap = { notes: notesPanel, task: taskPanel, messages: messagesPanel, schedule: schedulePanel };
 
+  const isMobile = window.innerWidth <= 768;
   return `
-    <div class="rpanel-content">${contentMap[panel] || ''}</div>
+    ${(!isMobile && panel) ? `<div class="rpanel-resize" onmousedown="_rpanelStartResize(event)" ontouchstart="_rpanelStartResize(event)" title="Drag to resize"></div>` : ''}
+    <div class="rpanel-content">${(isMobile && panel) ? `<button class="rp-mobile-close" onclick="toggleRightPanel('${panel}')" aria-label="Close">\u2715</button>` : ''}${contentMap[panel] || ''}</div>
     ${strip}
   `;
 }
