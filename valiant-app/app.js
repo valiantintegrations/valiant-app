@@ -589,6 +589,7 @@ function removeTeamMember(id) {
 }
 
 function switchUser(memberId) {
+  if (!canSwitchUsers()) return; // only a master-admin login may switch users
   const member = getTeamMember(memberId);
   if (!member) return;
   currentUserName = member.name;
@@ -620,8 +621,38 @@ function switchUser(memberId) {
   renderCurrentPage();
 }
 
+// ── Logged-in identity → team member binding ──
+// Maps the Supabase auth email (set by the bootstrap as window.VI_AUTH_EMAIL)
+// to a team member via the member's email field. Normal users are pinned to
+// their own member; only a master-admin login may switch/impersonate.
+function getAuthMemberId() {
+  const email = (window.VI_AUTH_EMAIL || '').trim().toLowerCase();
+  if (!email) return null;
+  const m = (state.team || []).find(t => (t.email || '').trim().toLowerCase() === email);
+  return m ? m.id : null;
+}
+function isMasterAdminLogin() {
+  const id = getAuthMemberId();
+  if (id == null) return false;
+  const up = state.userPermissions[id];
+  if (up && up.bundle === 'master_admin') return true;
+  return hasPermission(id, 'admin.system');
+}
+// May this login switch users? Master admins can. Logins not yet linked to a
+// team member (no matching email) also can, so the owner isn't locked out
+// while setting up email mappings.
+function canSwitchUsers() {
+  const id = getAuthMemberId();
+  if (id == null) return true;
+  return isMasterAdminLogin();
+}
 function getActiveTeamMemberId() {
-  return parseInt(localStorage.getItem('vi_active_member')) || state.team[0]?.id || 1;
+  const authId = getAuthMemberId();
+  // Pin non-switchers to their own member, ignoring any stored/shared selection.
+  if (authId != null && !canSwitchUsers()) return authId;
+  const stored = parseInt(localStorage.getItem('vi_active_member'));
+  if (stored) return stored;
+  return authId || state.team[0]?.id || 1;
 }
 
 // ── Admin sandbox ──
@@ -18676,6 +18707,7 @@ async function init() {
 // ── Dev override: always-available user switcher ──
 // Triggered by: triple-click on the "Valiant Integrations" sidebar header, or Ctrl+Shift+U
 function showDevUserSwitcher() {
+  if (!canSwitchUsers()) return; // user switching is master-admin only
   document.getElementById('dev-switcher')?.remove();
   const modal = document.createElement('div');
   modal.id = 'dev-switcher';
