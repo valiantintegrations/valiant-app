@@ -437,6 +437,7 @@ const state = {
   calendarSelectedMembers: JSON.parse(localStorage.getItem('vi_calendar_selected_members') || '[]'),
   calendarShowBooked: JSON.parse(localStorage.getItem('vi_calendar_show_booked') || 'false'),
   calendarShowEstimated: JSON.parse(localStorage.getItem('vi_calendar_show_estimated') || 'false'),
+  calendarShowProjectWindow: JSON.parse(localStorage.getItem('vi_calendar_show_project_window') || 'true'),
   planningAssignments: JSON.parse(localStorage.getItem('vi_planning_assignments') || '{}'),
   vehicles: JSON.parse(localStorage.getItem('vi_vehicles') || '[]'),
   tools: JSON.parse(localStorage.getItem('vi_tools') || '[]'),
@@ -642,9 +643,7 @@ function isMasterAdminLogin() {
 // team member (no matching email) also can, so the owner isn't locked out
 // while setting up email mappings.
 function canSwitchUsers() {
-  const id = getAuthMemberId();
-  if (id == null) return true;
-  return isMasterAdminLogin();
+  return isMasterAdminLogin(); // strictly master-admin; unlinked logins do NOT get the switcher
 }
 function getActiveTeamMemberId() {
   const authId = getAuthMemberId();
@@ -11148,10 +11147,17 @@ function renderCalendar(c) {
   const taskIdsWithBar = new Set();
   const projectIdsWithInstallBar = new Set();
   installBars.forEach(b => { if (b.type === 'install') projectIdsWithInstallBar.add(b.projectId); });
+  // People filter (Me / All / individuals) — shared by install + design task bars.
+  const _calViewerId = getActiveTeamMemberId();
+  const _calSelected = state.calendarSelectedMembers || [];
+  const _calEffective = _calSelected.length === 0 ? [_calViewerId] : _calSelected;
   (state.installTasks || []).forEach(t => {
     if (t.projectId == null) return;
     const proj = state.projects.find(p => p.id === t.projectId);
     if (!proj) return;
+    const _taskPeople = new Set((t.assigneeIds || []));
+    (t.subtasks || []).forEach(s => (s.assigneeIds || []).forEach(id => _taskPeople.add(id)));
+    if (!_calEffective.some(mid => _taskPeople.has(mid))) return; // only selected people's tasks
     let range;
     if (t.isMilestone) {
       if (!t.dueDate) return;
@@ -11194,9 +11200,6 @@ function renderCalendar(c) {
   // if at least one of the effective members is an assignee on the task or any
   // of its subtasks. Matches how install bars filter via assignment.
   const designTaskIdsWithBar = new Set();
-  const _calViewerId = getActiveTeamMemberId();
-  const _calSelected = state.calendarSelectedMembers || [];
-  const _calEffective = _calSelected.length === 0 ? [_calViewerId] : _calSelected;
   (state.designTasks || []).forEach(t => {
     if (t.projectId == null) return;
     const proj = state.projects.find(p => p.id === t.projectId);
@@ -11435,9 +11438,7 @@ function renderCalendar(c) {
     `);
   }
 
-  // Booked + Estimated visibility toggles (default OFF)
-  const showBooked = state.calendarShowBooked === true;
-  const showEstimated = state.calendarShowEstimated === true;
+  // (Project Window / Estimated visibility handled in getEventsForDate + renderCalendarFilters)
 
   c.innerHTML = `
     <div class="calendar-container">
@@ -11472,7 +11473,7 @@ function renderCalendarFilters() {
   const team = state.team.filter(m => !m.archived);
   const selected = state.calendarSelectedMembers || [];
   const viewerId = getActiveTeamMemberId();
-  const showBooked = state.calendarShowBooked === true;
+  const showProjectWindow = state.calendarShowProjectWindow !== false; // default ON
   const showEstimated = state.calendarShowEstimated === true;
 
   // Default: if no members selected, treat as just viewer
@@ -11493,9 +11494,9 @@ function renderCalendarFilters() {
       </div>
       <div class="cal-filter-group">
         <span class="cal-filter-label">Jobs:</span>
-        <button class="cal-toggle-chip ${showBooked ? 'active' : ''}" onclick="toggleCalendarShowBooked()" style="${showBooked ? 'border-color:#3FB950;color:#3FB950;background:#0F4C2E33' : ''}">
+        <button class="cal-toggle-chip ${showProjectWindow ? 'active' : ''}" onclick="toggleCalendarShowProjectWindow()" style="${showProjectWindow ? 'border-color:#3FB950;color:#3FB950;background:#0F4C2E33' : ''}">
           <span class="cal-toggle-dot" style="background:#3FB950"></span>
-          Booked
+          Project Window
         </button>
         <button class="cal-toggle-chip ${showEstimated ? 'active' : ''}" onclick="toggleCalendarShowEstimated()" style="${showEstimated ? 'border-color:#58A6FF;color:#58A6FF;background:#0D262633' : ''}">
           <span class="cal-toggle-dot" style="background:#58A6FF"></span>
@@ -11535,6 +11536,12 @@ function toggleCalendarShowBooked() {
 function toggleCalendarShowEstimated() {
   state.calendarShowEstimated = !state.calendarShowEstimated;
   localStorage.setItem('vi_calendar_show_estimated', JSON.stringify(state.calendarShowEstimated));
+  renderCalendar(document.getElementById('content'));
+}
+
+function toggleCalendarShowProjectWindow() {
+  state.calendarShowProjectWindow = state.calendarShowProjectWindow === false ? true : false;
+  localStorage.setItem('vi_calendar_show_project_window', JSON.stringify(state.calendarShowProjectWindow));
   renderCalendar(document.getElementById('content'));
 }
 
@@ -11587,9 +11594,9 @@ function getCalendarDates(p) {
 //   1. Booked/Estimated toggles (default OFF — must be opted in)
 //   2. Viewer's assignments (only show jobs viewer is assigned to)
 function getEventsForDate(dateStr) {
-  const showBooked = state.calendarShowBooked === true;
+  const showProjectWindow = state.calendarShowProjectWindow !== false; // default ON
   const showEstimated = state.calendarShowEstimated === true;
-  if (!showBooked && !showEstimated) return [];
+  if (!showProjectWindow) return []; // Project Window off -> hide full-span window bars (task bars remain)
 
   const viewerId = getActiveTeamMemberId();
   // Selected members on the calendar — if "all" or specific people are selected,
@@ -11602,8 +11609,7 @@ function getEventsForDate(dateStr) {
       if (p.archived) return false;
       const dates = getCalendarDates(p);
       if (!dates.start) return false;
-      // Booked/Estimated source filter
-      if (dates.source === 'booked' && !showBooked) return false;
+      // Booked windows always show; estimated windows only when toggled on.
       if (dates.source === 'estimated' && !showEstimated) return false;
       // Date range check
       const sd = dates.start.substring(0, 10);
