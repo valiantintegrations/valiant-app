@@ -2742,9 +2742,10 @@ function injectBottomNav() {
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/></svg>
       <span>Home</span>
     </div>
-    <div class="bnav-item" data-page="projects" onclick="navigate('projects')">
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M4 6h16M4 12h12M4 18h14"/></svg>
-      <span>Projects</span>
+    <div class="bnav-item" onclick="toggleRightPanel('messages')" style="position:relative">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21 11.5a8.38 8.38 0 0 1-8.5 8.5 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7A8.38 8.38 0 0 1 4 11.5 8.5 8.5 0 0 1 12.5 3 8.38 8.38 0 0 1 21 11.5z"/></svg>
+      <span>Messages</span>
+      <span id="bnav-msg-badge" style="display:none;position:absolute;top:1px;left:calc(50% + 6px);background:#DA3633;color:#fff;font-size:9px;font-weight:700;min-width:15px;height:15px;border-radius:8px;padding:0 3px;line-height:15px;text-align:center;box-sizing:border-box">0</span>
     </div>
     <div class="bnav-item bnav-quick" onclick="openQuickActions()">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M13 2L3 14h7l-1 8 10-12h-7l1-8z"/></svg>
@@ -2760,6 +2761,7 @@ function injectBottomNav() {
     </div>
   </div>`;
   document.body.appendChild(nav);
+  updateBottomNavMsgBadge();
 }
 
 function toggleMoreMenu() {
@@ -2770,9 +2772,9 @@ function toggleMoreMenu() {
   menu.style.cssText = 'position:fixed;bottom:64px;right:12px;background:#161B22;border:1px solid #30363D;border-radius:12px;z-index:70;padding:8px 0;min-width:180px;box-shadow:0 8px 32px rgba(0,0,0,0.5)';
   const _moreUnread = getUnreadCount();
   menu.innerHTML = `
-    <div onclick="document.getElementById('more-menu')?.remove();toggleRightPanel('messages')" style="padding:14px 20px;color:#C9D1D9;font-size:14px;cursor:pointer;display:flex;align-items:center;gap:10px;-webkit-tap-highlight-color:transparent">
-      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21 11.5a8.38 8.38 0 0 1-8.5 8.5 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7A8.38 8.38 0 0 1 4 11.5 8.5 8.5 0 0 1 12.5 3 8.38 8.38 0 0 1 21 11.5z"/></svg>
-      Messages${_moreUnread ? `<span style="margin-left:auto;background:#DA3633;color:#fff;font-size:11px;font-weight:700;border-radius:10px;padding:1px 7px">${_moreUnread > 9 ? '9+' : _moreUnread}</span>` : ''}
+    <div onclick="navigate('projects');document.getElementById('more-menu')?.remove()" style="padding:14px 20px;color:#C9D1D9;font-size:14px;cursor:pointer;display:flex;align-items:center;gap:10px;-webkit-tap-highlight-color:transparent">
+      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M4 6h16M4 12h12M4 18h14"/></svg>
+      Projects
     </div>
     <div onclick="navigate('vendors');document.getElementById('more-menu')?.remove()" style="padding:14px 20px;color:#C9D1D9;font-size:14px;cursor:pointer;display:flex;align-items:center;gap:10px;-webkit-tap-highlight-color:transparent">
       <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><circle cx="12" cy="7" r="4"/><path d="M4 21c0-4.418 3.582-7 8-7s8 2.582 8 7"/></svg>
@@ -3704,6 +3706,7 @@ function applyLiveMessages() {
     const atBottom = (list.scrollHeight - list.scrollTop - list.clientHeight) < 80;
     list.innerHTML = renderMessagesList(channelId);
     if (atBottom) list.scrollTop = list.scrollHeight;
+    updateBottomNavMsgBadge();
     return;
   }
   // Not viewing messages — refresh the unread badge, unless the user is typing in the panel.
@@ -3955,9 +3958,17 @@ function updateRightPanel() {
     const list = document.getElementById('msg-list');
     if (list) list.scrollTop = list.scrollHeight;
   }
+  updateBottomNavMsgBadge();
 }
 
-// Right-panel width (desktop), per-device, not synced.
+// Live unread badge on the mobile bottom-nav Messages button.
+function updateBottomNavMsgBadge() {
+  const b = document.getElementById('bnav-msg-badge');
+  if (!b) return;
+  const n = getUnreadCount();
+  if (n > 0) { b.textContent = n > 9 ? '9+' : String(n); b.style.display = ''; }
+  else { b.style.display = 'none'; }
+}
 function _rpanelWidth() {
   let w = parseInt(localStorage.getItem('nav_panel_width') || '336', 10);
   if (isNaN(w)) w = 336;
