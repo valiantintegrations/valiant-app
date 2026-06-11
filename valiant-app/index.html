@@ -325,7 +325,9 @@
 
   function showSetPw(mode) {
     window._viPwMode = mode;
-    $('vi-setpw-title').textContent = mode === 'recovery' ? 'Set a new password' : 'Change your password';
+    $('vi-setpw-title').textContent = mode === 'recovery' ? 'Set a new password'
+      : mode === 'invite' ? 'Welcome — set your password'
+      : 'Change your password';
     $('vi-setpw-cancel').style.display = mode === 'change' ? 'block' : 'none';
     $('vi-setpw-err').textContent = ''; $('vi-setpw-status').textContent = '';
     $('vi-newpw').value = ''; $('vi-newpw2').value = '';
@@ -353,7 +355,7 @@
       if (error) { $('vi-setpw-err').textContent = error.message; $('vi-setpw-btn').disabled = false; return; }
     } catch (e) { $('vi-setpw-err').textContent = 'Could not update password.'; $('vi-setpw-btn').disabled = false; return; }
     $('vi-setpw-btn').disabled = false;
-    if (window._viPwMode === 'recovery') {
+    if (window._viPwMode === 'recovery' || window._viPwMode === 'invite') {
       history.replaceState(null, '', window.location.pathname);
       location.reload();
     } else {
@@ -363,6 +365,9 @@
   }
 
   async function init() {
+    // Capture the auth link type from the URL hash BEFORE the Supabase client
+    // loads — detectSessionInUrl consumes and clears the hash, so read it first.
+    const hashType = (window.location.hash.match(/type=([a-z_]+)/i) || [])[1] || '';
     try {
       const { createClient } = await import('https://esm.sh/@supabase/supabase-js@2');
       sb = createClient(SB_URL, SB_KEY);
@@ -376,7 +381,8 @@
       $('vi-newpw2').addEventListener('keydown', e => { if (e.key === 'Enter') doSetPassword(); });
       sb.auth.onAuthStateChange((event) => { if (event === 'PASSWORD_RECOVERY') showSetPw('recovery'); });
       const { data: { session } } = await sb.auth.getSession();
-      if (window.location.hash.includes('type=recovery')) { showSetPw('recovery'); }
+      if (hashType === 'recovery') { showSetPw('recovery'); }
+      else if (hashType === 'invite') { showSetPw('invite'); }
       else if (session) { await startSession(); } else { $('vi-email').focus(); }
     } catch (e) {
       console.error('Sync init failed', e);
