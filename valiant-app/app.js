@@ -4151,8 +4151,10 @@ function _rpanelStartResize(e) {
 
 function getUpcomingMeetings() {
   const today = new Date().toISOString().slice(0, 10);
+  const myId = getActiveTeamMemberId();
   return state.meetings
     .filter(m => m.date >= today)
+    .filter(m => (m.attendees || []).map(Number).includes(myId) || m.createdBy === myId)
     .sort((a, b) => (a.date + a.time).localeCompare(b.date + b.time))
     .slice(0, 5);
 }
@@ -4449,10 +4451,7 @@ function renderRightPanelHTML() {
             const dateStr = new Date(m.date + 'T00:00').toLocaleDateString('en-US',{month:'short',day:'numeric'});
             const attendeeNames = m.attendees.map(id=>getTeamMember(id)?.name||'').filter(Boolean).join(', ');
             return `<div style="padding:8px 0;border-bottom:1px solid #0D1117">
-              <div style="display:flex;justify-content:space-between;align-items:flex-start">
-                <div style="font-size:12px;font-weight:500;color:#E6EDF3">${esc(m.title)}</div>
-                <button onclick="deleteMeeting(${m.id})" style="background:none;border:none;color:#6E7681;cursor:pointer;font-size:13px;padding:0;flex-shrink:0">×</button>
-              </div>
+              <div style="font-size:12px;font-weight:500;color:#E6EDF3">${esc(m.title)}</div>
               <div style="font-size:11px;color:#58A6FF;margin-top:2px">${dateStr}${m.time ? ' · ' + m.time : ''} · ${m.duration}</div>
               ${attendeeNames ? `<div style="font-size:10px;color:#6E7681;margin-top:1px">${esc(attendeeNames)}</div>` : ''}
             </div>`;
