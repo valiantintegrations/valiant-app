@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
 <title>Valiant Integrations</title>
 <link rel="icon" type="image/png" sizes="32x32" href="icon-32.png">
 <link rel="apple-touch-icon" href="icon-180.png">
@@ -14,6 +14,14 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@300;400;500;600&family=DM+Mono:wght@400;500&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="styles.css">
+<style id="vi-safe-bottom">
+  /* iOS home-indicator ("swipe-up bar") clearance + extra bottom breathing room. */
+  @media (max-width: 768px) {
+    #content { padding-bottom: calc(96px + env(safe-area-inset-bottom)) !important; }
+    body.has-context-nav #content { padding-bottom: calc(124px + env(safe-area-inset-bottom)) !important; }
+    #bottom-nav { padding-bottom: max(8px, env(safe-area-inset-bottom)) !important; }
+  }
+</style>
 <style>
   /* Login + sync overlay (self-contained, doesn't touch styles.css) */
   .vi-overlay {
@@ -221,7 +229,7 @@
   // lets a stale copy clobber someone else's just-added item, so for these we union
   // with the current cloud copy (by id) right before writing.
   const MERGE_KEYS = new Set(['vi_messages']);
-  window.VI_SYNC_BUILD = 'merge2';
+  window.VI_SYNC_BUILD = 'merge3';
   function _unionById(a, b) {
     const byId = new Map();
     (a || []).forEach(x => { if (x && x.id != null) byId.set(x.id, x); });
