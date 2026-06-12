@@ -454,7 +454,7 @@
 
 <!-- ===== Web Push: paste your VAPID PUBLIC key below (from `npx web-push generate-vapid-keys`) ===== -->
 <script>
-  window.VI_VAPID_PUBLIC = ''; /* <-- PASTE VAPID PUBLIC KEY HERE (leave '' to keep push disabled) */
+  window.VI_VAPID_PUBLIC = 'BKBXdIAHhiL1LOh81EirR_dNSjfCuKInHLNQtn2d7RFx0eYLvlTxeoAjLq2xs16C8olOZGblJlpUvffxqn-7F6g';
   if ('serviceWorker' in navigator) {
     window.addEventListener('load', () => {
       navigator.serviceWorker.register('sw.js').catch((e) => console.warn('SW registration failed', e));
