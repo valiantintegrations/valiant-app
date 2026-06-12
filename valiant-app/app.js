@@ -1,4 +1,4 @@
-// ── Valiant Integrations App ──
+=// ── Valiant Integrations App ──
 // API calls handled via /api/jetbuilt proxy
 
 // ── State ──
@@ -4386,6 +4386,7 @@ function renderRightPanelHTML() {
           ${headerSub ? `<div style="font-size:10px;color:${headerColor}">${esc(headerSub)}</div>` : ''}
         </div>
       </div>
+      <div style="font-size:9px;color:#6E7681;padding:3px 8px;background:#0D1117;flex-shrink:0;text-align:center;letter-spacing:0.03em">b:mm3 · me #${myId} · ${esc(state.activeConversation)}</div>
       <div id="msg-list" class="rpanel-body" style="flex:1;display:flex;flex-direction:column">
         ${renderMessagesList(state.activeConversation)}
       </div>
