@@ -606,7 +606,7 @@ function switchUser(memberId) {
   currentUserRole = member.primaryRole || member.access[0] || 'installer';
   localStorage.setItem('vi_user', member.name);
   localStorage.setItem('vi_role', currentUserRole);
-  localStorage.setItem('vi_active_member', memberId);
+  sessionStorage.setItem('vi_active_member', memberId); // device + session local — the "viewing as" switch must NOT sync across devices
 
   const userAvatar = document.querySelector('.user-avatar');
   const userName = document.querySelector('.user-name');
@@ -658,10 +658,26 @@ function getActiveTeamMemberId() {
   const authId = getAuthMemberId();
   // Pin non-switchers to their own member, ignoring any stored/shared selection.
   if (authId != null && !canSwitchUsers()) return authId;
-  const stored = parseInt(localStorage.getItem('vi_active_member'));
+  const stored = parseInt(sessionStorage.getItem('vi_active_member'));
   if (stored) return stored;
   return authId || state.team[0]?.id || 1;
 }
+
+// Diagnostic: explains how the current device resolved "who am I". Temporary aid
+// for debugging DM delivery / unread issues. Also on window as viWhoAmI().
+function _identityDiag() {
+  const authEmail = (window.VI_AUTH_EMAIL || '').trim().toLowerCase();
+  const authId = getAuthMemberId();
+  const resolvedId = getActiveTeamMemberId();
+  const m = getTeamMember(resolvedId);
+  let via, warn = false;
+  if (authId != null && resolvedId === authId) via = 'matched by email';
+  else if (authId != null && resolvedId !== authId) via = 'viewing as (switched)';
+  else if (authEmail) { via = 'NO email match — fell back to list'; warn = true; }
+  else { via = 'no login email — fell back to list'; warn = true; }
+  return { authEmail, authId, resolvedId, name: (m && m.name) || '(unknown)', via, warn };
+}
+window.viWhoAmI = function () { const d = _identityDiag(); console.log(d); return d; };
 
 // ── Admin sandbox ──
 // The "Admin" dropdown entry shows EVERY dashboard tab (a holding area for
@@ -4042,6 +4058,10 @@ function injectRightPanel() {
         #right-panel.rp-mobile-open .rpanel-strip{display:none!important}
         #right-panel.rp-mobile-open .rpanel-content{width:100vw!important;max-width:100vw!important;height:100%!important;height:100dvh!important;display:flex!important;flex-direction:column!important}
         #right-panel.rp-mobile-open .rp-mobile-close{display:flex!important;position:absolute;top:10px;right:12px;z-index:10;background:#21262D;border:1px solid #30363D;color:#C9D1D9;width:30px;height:30px;border-radius:8px;align-items:center;justify-content:center;font-size:15px;line-height:1;cursor:pointer;-webkit-tap-highlight-color:transparent}
+        #right-panel.rp-mobile-open .rpanel-header{padding-top:max(12px,env(safe-area-inset-top))!important;padding-left:max(16px,env(safe-area-inset-left))!important;padding-right:max(16px,env(safe-area-inset-right))!important}
+        #right-panel.rp-mobile-open #msg-list{padding-left:max(16px,env(safe-area-inset-left))!important;padding-right:max(16px,env(safe-area-inset-right))!important}
+        #right-panel.rp-mobile-open .msg-composer{padding-left:max(14px,env(safe-area-inset-left))!important;padding-right:max(14px,env(safe-area-inset-right))!important;padding-bottom:max(10px,env(safe-area-inset-bottom))!important}
+        #right-panel.rp-mobile-open .rp-mobile-close{top:max(10px,env(safe-area-inset-top))!important;right:max(12px,env(safe-area-inset-right))!important}
         .rpanel-resize{display:none!important}
       }
     `;
@@ -4310,6 +4330,7 @@ function renderRightPanelHTML() {
     messagesPanel = `
       <div class="rpanel-header"><div class="rpanel-header-title">Messages</div></div>
       <div class="rpanel-body" style="padding:8px">
+        ${(() => { const d = _identityDiag(); return `<div style="font-size:10px;color:${d.warn ? '#F0883E' : '#8B949E'};background:#161B22;border:1px solid ${d.warn ? '#9E6A2E' : '#1C2333'};border-radius:6px;padding:6px 8px;margin-bottom:8px;line-height:1.45">${d.warn ? '⚠ ' : ''}You are <b style="color:#E6EDF3">${esc(d.name)}</b> (#${d.resolvedId}) · ${esc(d.via)}<br>login: ${esc(d.authEmail || '(none)')}</div>`; })()}
         <div onclick="openConversation('team')" style="display:flex;align-items:center;gap:10px;padding:10px;border-radius:8px;cursor:pointer;margin-bottom:4px;background:#161B22;border:1px solid #1C2333;-webkit-tap-highlight-color:transparent">
           <div style="width:36px;height:36px;border-radius:50%;background:#1565C022;border:1.5px solid #1565C0;display:flex;align-items:center;justify-content:center;flex-shrink:0">
             <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="#58A6FF" stroke-width="1.3"><circle cx="5" cy="6" r="2.5"/><circle cx="11" cy="6" r="2"/><path d="M1 13c0-2.761 1.791-4 4-4s4 1.239 4 4"/><path d="M11 9.5c2 0 3.5.9 3.5 2.5"/></svg>
@@ -4366,7 +4387,7 @@ function renderRightPanelHTML() {
       <div id="msg-list" class="rpanel-body" style="flex:1;display:flex;flex-direction:column">
         ${renderMessagesList(state.activeConversation)}
       </div>
-      <div style="padding:10px;border-top:1px solid #1C2333;flex-shrink:0">
+      <div class="msg-composer" style="padding:10px;border-top:1px solid #1C2333;flex-shrink:0">
         <div style="display:flex;gap:6px;align-items:flex-end">
           <textarea id="msg-input" placeholder="Message ${esc(headerName)}…"
             style="flex:1;background:#0D1117;border:1px solid #30363D;border-radius:8px;color:#E6EDF3;font-size:12px;font-family:'DM Sans',sans-serif;padding:8px 10px;resize:none;outline:none;line-height:1.4;max-height:80px;min-height:36px"
