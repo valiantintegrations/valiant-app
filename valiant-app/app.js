@@ -4092,7 +4092,7 @@ function injectRightPanel() {
         #right-panel.rp-mobile-open .rp-mobile-close{display:flex!important;position:absolute;top:10px;right:12px;z-index:10;background:#21262D;border:1px solid #30363D;color:#C9D1D9;width:30px;height:30px;border-radius:8px;align-items:center;justify-content:center;font-size:15px;line-height:1;cursor:pointer;-webkit-tap-highlight-color:transparent}
         #right-panel.rp-mobile-open .rpanel-header{padding-top:max(12px,env(safe-area-inset-top))!important;padding-left:max(22px,env(safe-area-inset-left))!important;padding-right:max(22px,env(safe-area-inset-right))!important}
         #right-panel.rp-mobile-open #msg-list{padding-left:max(22px,env(safe-area-inset-left))!important;padding-right:max(22px,env(safe-area-inset-right))!important;padding-top:6px!important}
-        #right-panel.rp-mobile-open .msg-composer{padding-left:max(18px,env(safe-area-inset-left))!important;padding-right:max(18px,env(safe-area-inset-right))!important;padding-bottom:max(12px,env(safe-area-inset-bottom))!important}
+        #right-panel.rp-mobile-open .msg-composer{padding-left:max(14px,env(safe-area-inset-left))!important;padding-right:max(14px,env(safe-area-inset-right))!important;padding-bottom:max(20px,env(safe-area-inset-bottom))!important}
         #right-panel.rp-mobile-open .rp-mobile-close{top:max(10px,env(safe-area-inset-top))!important;right:max(12px,env(safe-area-inset-right))!important}
         .rpanel-resize{display:none!important}
       }
@@ -4418,19 +4418,19 @@ function renderRightPanelHTML() {
           ${headerSub ? `<div style="font-size:10px;color:${headerColor}">${esc(headerSub)}</div>` : ''}
         </div>
       </div>
-      <div style="font-size:9px;color:#6E7681;padding:3px 8px;background:#0D1117;flex-shrink:0;text-align:center;letter-spacing:0.03em">b:mm6 · sync:${window.VI_SYNC_BUILD||'STALE'} · me #${myId} · ${esc(state.activeConversation)} · cloud:${_lastCloudMsgCount}</div>
+      <div style="font-size:9px;color:#6E7681;padding:3px 8px;background:#0D1117;flex-shrink:0;text-align:center;letter-spacing:0.03em">b:mm7 · sync:${window.VI_SYNC_BUILD||'STALE'} · me #${myId} · ${esc(state.activeConversation)} · cloud:${_lastCloudMsgCount}</div>
       <div id="msg-list" class="rpanel-body" style="flex:1;display:flex;flex-direction:column">
         ${renderMessagesList(state.activeConversation)}
       </div>
-      <div class="msg-composer" style="padding:10px;border-top:1px solid #1C2333;flex-shrink:0">
-        <div style="display:flex;gap:6px;align-items:flex-end">
+      <div class="msg-composer" style="padding:8px 12px;border-top:1px solid #1C2333;flex-shrink:0">
+        <div class="msg-inputwrap" style="display:flex;align-items:flex-end;gap:6px;background:#0D1117;border:1px solid #30363D;border-radius:22px;padding:4px 4px 4px 16px">
           <textarea id="msg-input" placeholder="Message ${esc(headerName)}…"
-            style="flex:1;background:#0D1117;border:1px solid #30363D;border-radius:8px;color:#E6EDF3;font-size:12px;font-family:'DM Sans',sans-serif;padding:8px 10px;resize:none;outline:none;line-height:1.4;max-height:80px;min-height:36px"
+            style="flex:1;background:transparent;border:none;color:#E6EDF3;font-size:16px;font-family:'DM Sans',sans-serif;padding:8px 0;resize:none;outline:none;line-height:1.3;max-height:100px;min-height:24px"
             rows="1"
             onkeydown="if(event.key==='Enter'&&!event.shiftKey){event.preventDefault();sendMessage()}"
-            oninput="this.style.height='auto';this.style.height=Math.min(this.scrollHeight,80)+'px'"></textarea>
-          <button onclick="sendMessage()" style="background:#1565C0;border:none;border-radius:8px;color:#fff;cursor:pointer;padding:8px 10px;-webkit-tap-highlight-color:transparent">
-            <svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M12 7L2 2l2.5 5L2 12l10-5z" fill="currentColor"/></svg>
+            oninput="this.style.height='auto';this.style.height=Math.min(this.scrollHeight,100)+'px'"></textarea>
+          <button onclick="sendMessage()" aria-label="Send" style="background:#1565C0;border:none;border-radius:50%;width:34px;height:34px;min-width:34px;display:flex;align-items:center;justify-content:center;color:#fff;cursor:pointer;flex-shrink:0;-webkit-tap-highlight-color:transparent;margin-bottom:1px">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20V5M6 11l6-6 6 6"/></svg>
           </button>
         </div>
       </div>`;
