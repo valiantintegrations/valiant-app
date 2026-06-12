@@ -1,4 +1,4 @@
-=// ── Valiant Integrations App ──
+// ── Valiant Integrations App ──
 // API calls handled via /api/jetbuilt proxy
 
 // ── State ──
