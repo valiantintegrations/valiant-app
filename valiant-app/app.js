@@ -2795,6 +2795,10 @@ function toggleMoreMenu() {
       <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M18 8a6 6 0 0 0-12 0c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.7 21a2 2 0 0 1-3.4 0"/></svg>
       Enable Notifications
     </div>
+    <div onclick="document.getElementById('more-menu')?.remove();viTestPush()" style="padding:14px 20px;color:#C9D1D9;font-size:14px;cursor:pointer;display:flex;align-items:center;gap:10px;-webkit-tap-highlight-color:transparent">
+      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M22 2 11 13"/><path d="m22 2-7 20-4-9-9-4 20-7z"/></svg>
+      Send Test Notification
+    </div>
     <div style="border-top:1px solid #30363D;margin:4px 0"></div>
     <div onclick="syncJetbuilt();document.getElementById('more-menu')?.remove()" style="padding:14px 20px;color:#58A6FF;font-size:14px;cursor:pointer;display:flex;align-items:center;gap:10px;-webkit-tap-highlight-color:transparent">
       <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M20 12A8 8 0 1 1 12 4"/><path d="M12 4l3-3M12 4l3 3"/></svg>
@@ -3799,6 +3803,19 @@ function _pruneExpiredSubs(endpoints) {
     if (all[k] && endpoints.indexOf(all[k].endpoint) !== -1) { delete all[k]; changed = true; }
   });
   if (changed) save('vi_push_subs', all);
+}
+
+// Send a test push to THIS device's own subscription (verification only).
+function viTestPush() {
+  const mine = _getPushSubs()[getActiveTeamMemberId()];
+  if (!mine) { alert('Enable notifications on this device first.'); return; }
+  fetch('/api/push-send', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ subscriptions: [mine], title: 'Valiant', body: 'Test notification \u2705', url: '/', tag: 'test' })
+  }).then(r => r.json())
+    .then(() => alert('Test sent \u2014 watch for the notification.'))
+    .catch(() => alert('Test failed to send.'));
 }
 
 // Apply an incoming message change pushed live by the realtime layer (no reload).
@@ -17588,121 +17605,6 @@ function renderCalendarSubscribeCard() {
       </div>`;
 }
 
-// ═══════════════════════════════════════════════════════════════════
-// PUSH NOTIFICATIONS
-// ═══════════════════════════════════════════════════════════════════
-const VAPID_PUBLIC_KEY = 'BKBXdIAHhiL1LOh81EirR_dNSjfCuKInHLNQtn2d7RFx0eYLvlTxeoAjLq2xs16C8olOZGblJlpUvffxqn-7F6g';
-
-function _urlBase64ToUint8Array(base64String) {
-  const padding = '='.repeat((4 - (base64String.length % 4)) % 4);
-  const base64 = (base64String + padding).replace(/-/g, '+').replace(/_/g, '/');
-  const raw = atob(base64);
-  const arr = new Uint8Array(raw.length);
-  for (let i = 0; i < raw.length; i++) arr[i] = raw.charCodeAt(i);
-  return arr;
-}
-
-function pushSupported() {
-  return ('serviceWorker' in navigator) && ('PushManager' in window) && ('Notification' in window);
-}
-function pushIsEnabled() {
-  return localStorage.getItem('vi_push_enabled') === '1' &&
-         (typeof Notification !== 'undefined') && Notification.permission === 'granted';
-}
-
-async function enablePushNotifications() {
-  try {
-    if (!pushSupported()) { showToast('This device/browser can\'t show notifications', 'error'); return; }
-    const perm = await Notification.requestPermission();
-    if (perm !== 'granted') { showToast('Notifications were not allowed', 'error'); return; }
-    const reg = await navigator.serviceWorker.ready;
-    let sub = await reg.pushManager.getSubscription();
-    if (!sub) {
-      sub = await reg.pushManager.subscribe({
-        userVisibleOnly: true,
-        applicationServerKey: _urlBase64ToUint8Array(VAPID_PUBLIC_KEY)
-      });
-    }
-    const j = sub.toJSON();
-    const memberId = getActiveTeamMemberId();
-    if (window._sb) {
-      await window._sb.from('push_subscriptions').upsert({
-        endpoint: j.endpoint,
-        member_id: memberId,
-        p256dh: j.keys.p256dh,
-        auth: j.keys.auth,
-        updated_at: new Date().toISOString()
-      }, { onConflict: 'endpoint' });
-    }
-    localStorage.setItem('vi_push_enabled', '1');
-    showToast('Notifications enabled on this device', 'success');
-    renderCurrentPage();
-  } catch (e) {
-    console.warn('enablePush failed', e);
-    showToast('Could not enable notifications', 'error');
-  }
-}
-
-async function disablePushNotifications() {
-  try {
-    const reg = await navigator.serviceWorker.ready;
-    const sub = await reg.pushManager.getSubscription();
-    if (sub) {
-      const j = sub.toJSON();
-      if (window._sb) { try { await window._sb.from('push_subscriptions').delete().eq('endpoint', j.endpoint); } catch (e) {} }
-      try { await sub.unsubscribe(); } catch (e) {}
-    }
-    localStorage.removeItem('vi_push_enabled');
-    showToast('Notifications turned off on this device', 'success');
-    renderCurrentPage();
-  } catch (e) { console.warn('disablePush failed', e); }
-}
-
-// Fire a push to one or more team members. Used by message / meeting / approval triggers.
-async function sendPush(memberIds, payload) {
-  try {
-    const ids = (Array.isArray(memberIds) ? memberIds : [memberIds]).filter(x => x != null);
-    if (!ids.length) return;
-    await fetch('/api/push-send', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ memberIds: ids, title: payload.title, body: payload.body, url: payload.url || '/' })
-    });
-  } catch (e) { console.warn('sendPush failed', e); }
-}
-
-async function sendTestPush() {
-  const id = getActiveTeamMemberId();
-  if (id == null) { showToast('No active member', 'error'); return; }
-  await sendPush([id], { title: 'Valiant', body: 'Test notification \u2705', url: '/' });
-  showToast('Test sent \u2014 watch for the notification', 'success');
-}
-
-function renderPushNotificationsCard() {
-  if (!pushSupported()) {
-    return `
-      <div class="dashboard-card" style="margin-bottom:14px">
-        <div style="font-size:11px;font-weight:600;color:#6E7681;text-transform:uppercase;letter-spacing:0.08em;margin-bottom:4px">Notifications</div>
-        <div style="font-size:14px;font-weight:600;color:#E6EDF3;margin-bottom:2px">Push notifications</div>
-        <div style="font-size:12px;color:#8B949E">This device/browser can't show push notifications. On iPhone: Share &rarr; Add to Home Screen, then open the app from that icon and come back here.</div>
-      </div>`;
-  }
-  const enabled = pushIsEnabled();
-  return `
-    <div class="dashboard-card" style="margin-bottom:14px">
-      <div style="font-size:11px;font-weight:600;color:#6E7681;text-transform:uppercase;letter-spacing:0.08em;margin-bottom:4px">Notifications</div>
-      <div style="font-size:14px;font-weight:600;color:#E6EDF3;margin-bottom:2px">Push notifications</div>
-      <div style="font-size:12px;color:#8B949E;margin-bottom:12px">Alerts on this device for new messages, meetings scheduled with you, and approvals you owe. Turn this on for each device you want pinged. (iPhone: add to Home Screen first.)</div>
-      <div style="display:flex;gap:8px;flex-wrap:wrap">
-        ${enabled
-          ? `<button type="button" class="btn btn-sm" onclick="sendTestPush()">Send test</button>
-             <button type="button" class="btn btn-sm" onclick="disablePushNotifications()">Turn off</button>`
-          : `<button type="button" class="btn-primary" style="font-size:12px;padding:6px 14px" onclick="enablePushNotifications()">Enable notifications</button>`}
-      </div>
-      <div style="font-size:11px;color:${enabled ? '#3FB950' : '#6E7681'};margin-top:8px">${enabled ? '\u25CF Enabled on this device' : '\u25CB Not enabled on this device'}</div>
-    </div>`;
-}
-
 function renderSettings(c) {
   const size = state.textSize || 'normal';
   c.innerHTML = `
@@ -17726,7 +17628,6 @@ function renderSettings(c) {
           <button type="button" class="btn btn-sm" onclick="window.viSignOut && window.viSignOut()">Sign out</button>
         </div>
       </div>
-      ${renderPushNotificationsCard()}
       ${renderCalendarSubscribeCard()}
     </div>
   `;
@@ -19265,13 +19166,6 @@ document.addEventListener('click', (e) => {
     try { t.showPicker(); } catch (_) {}
   }
 });
-
-// Register the push service worker (served from the site root as /sw.js).
-if ('serviceWorker' in navigator) {
-  window.addEventListener('load', () => {
-    navigator.serviceWorker.register('/sw.js').catch(() => {});
-  });
-}
 
 // Defer the first render until the entire script has finished evaluating, so every
 // module-level const declared further down (MEETING_TYPES, etc.) is initialized
