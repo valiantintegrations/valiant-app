@@ -202,7 +202,7 @@
   const SB_KEY = 'sb_publishable_DyNIu6h1YuJzKnxxPmNz6Q_ygeTgEZw';
 
   // Keys kept on this device only (not shared): the in-app identity picker.
-  const LOCAL_ONLY = new Set(['vi_role', 'vi_user']);
+  const LOCAL_ONLY = new Set(['vi_role', 'vi_user', 'vi_last_read_ch', 'vi_last_read']);
   const isViKey = k => typeof k === 'string' && k.startsWith('vi_');
   const shouldSync = k => isViKey(k) && !LOCAL_ONLY.has(k);
 
@@ -217,12 +217,39 @@
   const $ = id => document.getElementById(id);
   const setStatus = t => { const s = $('vi-status'); if (s) s.textContent = t || ''; };
 
+  // Append-style logs that many people edit at once. Writing the whole array blindly
+  // lets a stale copy clobber someone else's just-added item, so for these we union
+  // with the current cloud copy (by id) right before writing.
+  const MERGE_KEYS = new Set(['vi_messages']);
+  window.VI_SYNC_BUILD = 'merge2';
+  function _unionById(a, b) {
+    const byId = new Map();
+    (a || []).forEach(x => { if (x && x.id != null) byId.set(x.id, x); });
+    (b || []).forEach(x => { if (x && x.id != null) byId.set(x.id, x); }); // b wins on same id
+    return Array.from(byId.values());
+  }
+  async function _mergeWithCloud(key, localArr) {
+    if (!Array.isArray(localArr)) return localArr;
+    try {
+      const { data } = await sb.from('app_data').select('value').eq('key', key).single();
+      const cloudArr = (data && Array.isArray(data.value)) ? data.value : [];
+      return _unionById(cloudArr, localArr); // local wins on same id
+    } catch (e) { return localArr; }
+  }
+
   async function mirrorSet(key, raw) {
     if (!sb || !shouldSync(key)) return;
     let value; try { value = JSON.parse(raw); } catch { value = raw; }
     pendingWrites.set(key, value);            // unconfirmed until the upsert resolves
     suppressUntil = Date.now() + 4000;
     try {
+      if (MERGE_KEYS.has(key) && Array.isArray(value)) {
+        value = await _mergeWithCloud(key, value);
+        pendingWrites.set(key, value);        // track the merged value for confirm/flush
+        hydrating = true;
+        try { rawSet(key, JSON.stringify(value)); } finally { hydrating = false; }
+        if (typeof window.viOnLiveKey === 'function') { try { window.viOnLiveKey(key); } catch (e) {} }
+      }
       const { error } = await sb.from('app_data').upsert({ key, value }, { onConflict: 'key' });
       if (error) { console.warn('sync up failed', key, error); }
       else if (pendingWrites.get(key) === value) { pendingWrites.delete(key); }
@@ -286,6 +313,7 @@
         // Cloud is source of truth — mirror it exactly onto this device.
         clearLocalViKeys();
         data.forEach(row => {
+          if (LOCAL_ONLY.has(row.key)) return;  // device-local keys (read state, role) never pulled from cloud
           const v = (typeof row.value === 'string') ? row.value : JSON.stringify(row.value);
           rawSet(row.key, v);
         });
@@ -332,7 +360,24 @@
           if (key && LIVE_KEYS.has(key)) {
             // Apply chat changes straight into local storage + notify the app — no reload.
             const applyVal = (raw) => {
-              const v = (typeof raw === 'string') ? raw : JSON.stringify(raw);
+              let v = (typeof raw === 'string') ? raw : JSON.stringify(raw);
+              if (MERGE_KEYS.has(key)) {
+                // Union incoming with what we already have, so a live update can't drop
+                // a message this device sent that the sender hadn't seen yet.
+                try {
+                  const incoming = JSON.parse(v);
+                  const localCur = JSON.parse(localStorage.getItem(key) || '[]');
+                  if (Array.isArray(incoming) && Array.isArray(localCur)) {
+                    const union = _unionById(localCur, incoming);
+                    v = JSON.stringify(union);
+                    if (union.length > incoming.length) {
+                      // We hold messages the cloud copy is missing — push the union back
+                      // so the cloud converges instead of losing them.
+                      setTimeout(() => { try { mirrorSet(key, v); } catch (e) {} }, 60);
+                    }
+                  }
+                } catch (e) {}
+              }
               hydrating = true;
               try { rawSet(key, v); } finally { hydrating = false; }
               if (typeof window.viOnLiveKey === 'function') { try { window.viOnLiveKey(key); } catch (e) {} }
