@@ -4058,9 +4058,9 @@ function injectRightPanel() {
         #right-panel.rp-mobile-open .rpanel-strip{display:none!important}
         #right-panel.rp-mobile-open .rpanel-content{width:100vw!important;max-width:100vw!important;height:100%!important;height:100dvh!important;display:flex!important;flex-direction:column!important}
         #right-panel.rp-mobile-open .rp-mobile-close{display:flex!important;position:absolute;top:10px;right:12px;z-index:10;background:#21262D;border:1px solid #30363D;color:#C9D1D9;width:30px;height:30px;border-radius:8px;align-items:center;justify-content:center;font-size:15px;line-height:1;cursor:pointer;-webkit-tap-highlight-color:transparent}
-        #right-panel.rp-mobile-open .rpanel-header{padding-top:max(12px,env(safe-area-inset-top))!important;padding-left:max(16px,env(safe-area-inset-left))!important;padding-right:max(16px,env(safe-area-inset-right))!important}
-        #right-panel.rp-mobile-open #msg-list{padding-left:max(16px,env(safe-area-inset-left))!important;padding-right:max(16px,env(safe-area-inset-right))!important}
-        #right-panel.rp-mobile-open .msg-composer{padding-left:max(14px,env(safe-area-inset-left))!important;padding-right:max(14px,env(safe-area-inset-right))!important;padding-bottom:max(10px,env(safe-area-inset-bottom))!important}
+        #right-panel.rp-mobile-open .rpanel-header{padding-top:max(12px,env(safe-area-inset-top))!important;padding-left:max(22px,env(safe-area-inset-left))!important;padding-right:max(22px,env(safe-area-inset-right))!important}
+        #right-panel.rp-mobile-open #msg-list{padding-left:max(22px,env(safe-area-inset-left))!important;padding-right:max(22px,env(safe-area-inset-right))!important;padding-top:6px!important}
+        #right-panel.rp-mobile-open .msg-composer{padding-left:max(18px,env(safe-area-inset-left))!important;padding-right:max(18px,env(safe-area-inset-right))!important;padding-bottom:max(12px,env(safe-area-inset-bottom))!important}
         #right-panel.rp-mobile-open .rp-mobile-close{top:max(10px,env(safe-area-inset-top))!important;right:max(12px,env(safe-area-inset-right))!important}
         .rpanel-resize{display:none!important}
       }
@@ -4386,7 +4386,7 @@ function renderRightPanelHTML() {
           ${headerSub ? `<div style="font-size:10px;color:${headerColor}">${esc(headerSub)}</div>` : ''}
         </div>
       </div>
-      <div style="font-size:9px;color:#6E7681;padding:3px 8px;background:#0D1117;flex-shrink:0;text-align:center;letter-spacing:0.03em">b:mm3 · me #${myId} · ${esc(state.activeConversation)}</div>
+      <div style="font-size:9px;color:#6E7681;padding:3px 8px;background:#0D1117;flex-shrink:0;text-align:center;letter-spacing:0.03em">b:mm4 · me #${myId} · ${esc(state.activeConversation)}</div>
       <div id="msg-list" class="rpanel-body" style="flex:1;display:flex;flex-direction:column">
         ${renderMessagesList(state.activeConversation)}
       </div>
