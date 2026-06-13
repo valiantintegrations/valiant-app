@@ -3746,7 +3746,13 @@ function _getPushSubs() {
 }
 function _savePushSub(memberId, subJSON) {
   if (memberId == null) return;
-  save(_pushSubKey(memberId), subJSON); // own row — synced, cannot be clobbered by others
+  save(_pushSubKey(memberId), subJSON); // local (and mirrored by the sync layer)
+  // Belt-and-suspenders: write straight to the cloud too, since the localStorage
+  // mirror can be skipped if a hydrate is in flight at save time.
+  try {
+    const sb = window._sb;
+    if (sb) sb.from('app_data').upsert({ key: _pushSubKey(memberId), value: subJSON }, { onConflict: 'key' });
+  } catch (e) {}
 }
 // Pull subscriptions for specific members straight from the cloud (freshest source).
 async function _fetchSubsFor(ids) {
@@ -3879,14 +3885,14 @@ async function viTestPush() {
   const myId = getActiveTeamMemberId();
   const mine = _getMyPushSub();
   if (!mine) { alert('Enable notifications on this device first.'); return; }
-  let inCloud = '?';
+  let writeResult = 'skipped (no db)';
   try {
     const sb = window._sb;
     if (sb) {
-      const { data } = await sb.from('app_data').select('key').eq('key', _pushSubKey(myId));
-      inCloud = (data && data.length) ? 'yes' : 'NO (did not sync up!)';
+      const { error } = await sb.from('app_data').upsert({ key: _pushSubKey(myId), value: mine }, { onConflict: 'key' });
+      writeResult = error ? ('FAILED: ' + (error.message || JSON.stringify(error))) : 'ok (uploaded)';
     }
-  } catch (e) { inCloud = 'check failed'; }
+  } catch (e) { writeResult = 'threw: ' + (e && e.message ? e.message : e); }
   try {
     const r = await fetch('/api/push-send', {
       method: 'POST',
@@ -3896,7 +3902,7 @@ async function viTestPush() {
     const text = await r.text();
     if (!r.ok) { alert('Push endpoint error ' + r.status + ':\n' + text.slice(0, 300)); return; }
     let data = null; try { data = JSON.parse(text); } catch (e) {}
-    const tail = '\n\nThis device is #' + myId + ' · its sub in cloud: ' + inCloud;
+    const tail = '\n\nDevice #' + myId + ' · upload sub to cloud: ' + writeResult;
     if (data && typeof data.sent === 'number') {
       if (data.sent > 0) alert('Test sent \u2014 watch for the notification.' + tail);
       else alert('Endpoint reachable but sent 0 (VAPID env vars?).' + tail);
@@ -4492,7 +4498,7 @@ function renderRightPanelHTML() {
           ${headerSub ? `<div style="font-size:10px;color:${headerColor}">${esc(headerSub)}</div>` : ''}
         </div>
       </div>
-      <div style="font-size:9px;color:#6E7681;padding:3px 8px;background:#0D1117;flex-shrink:0;text-align:center;letter-spacing:0.03em">b:mm13 · sync:${window.VI_SYNC_BUILD||'STALE'} · me #${myId} · ${esc(state.activeConversation)} · cloud:${_lastCloudMsgCount}</div>
+      <div style="font-size:9px;color:#6E7681;padding:3px 8px;background:#0D1117;flex-shrink:0;text-align:center;letter-spacing:0.03em">b:mm14 · sync:${window.VI_SYNC_BUILD||'STALE'} · me #${myId} · ${esc(state.activeConversation)} · cloud:${_lastCloudMsgCount}</div>
       <div id="msg-list" class="rpanel-body" style="flex:1;display:flex;flex-direction:column">
         ${renderMessagesList(state.activeConversation)}
       </div>
