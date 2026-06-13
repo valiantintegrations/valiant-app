@@ -3769,7 +3769,7 @@ function _groupComposerHTML() {
         <label class="form-label">Link projects <span style="color:#6E7681;font-weight:400;text-transform:none;letter-spacing:0">(optional — anyone on a linked project can see &amp; post)</span></label>
         <input id="grp-proj-search" oninput="_grpFilter('grp-projects', this.value)" placeholder="Search projects…" style="${srch}">
         <div id="grp-projects" style="display:flex;flex-wrap:wrap;gap:6px;max-height:180px;overflow:auto">
-          ${projects.length ? projects.map(p => `<span class="grp-chip" data-pid="${p.id}" data-name="${esc((p.name || '').toLowerCase())}" data-on="0" onclick="_grpToggle(this)" style="${chip}">${esc(p.name || ('Project ' + p.id))}</span>`).join('') : '<span style="font-size:12px;color:#6E7681">No active projects</span>'}
+          ${projects.length ? projects.map(p => `<span class="grp-chip" data-pid="${p.id}" data-name="${esc(((p.name || '') + ' ' + (p.client_name || '')).toLowerCase())}" data-on="0" onclick="_grpToggle(this)" style="${chip}">${esc(p.name || ('Project ' + p.id))}${p.client_name ? ` <span style="opacity:0.6;font-weight:400">\u00b7 ${esc(p.client_name)}</span>` : ''}</span>`).join('') : '<span style="font-size:12px;color:#6E7681">No active projects</span>'}
         </div>
       </div>
       <button class="btn-primary" onclick="createGroupChat()" style="width:100%;padding:10px;font-size:13px;margin-top:4px">Create chat</button>
