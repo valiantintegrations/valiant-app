@@ -3832,7 +3832,15 @@ async function _pushNotifyMessage(sender, text, channelId) {
     const subs = await _fetchSubsFor(recipientIds);
     const targets = recipientIds.map(id => subs[id]).filter(Boolean);
     if (!targets.length) {
-      alert('Push debug: nobody to send to.\nRecipient #' + recipientIds.join(',') + '\nRegistered phones: ' + (Object.keys(subs).join(',') || 'NONE'));
+      let cloudList = '?';
+      try {
+        const sb = window._sb;
+        if (sb) {
+          const { data } = await sb.from('app_data').select('key').like('key', 'vi_push_sub_%');
+          cloudList = (data || []).map(r => '#' + r.key.slice('vi_push_sub_'.length)).join(',') || 'NONE in cloud';
+        }
+      } catch (e) { cloudList = 'query failed: ' + (e && e.message ? e.message : e); }
+      alert('Push debug: nobody to send to.\nNeed a subscription for #' + recipientIds.join(',') + '\nCloud currently has subs for: ' + cloudList);
       return;
     }
     const title = channelId === 'team' ? `${sender.name} \u00b7 Team` : sender.name;
@@ -3868,8 +3876,17 @@ function _pruneExpiredSubs(endpoints) {
 
 // Send a test push to THIS device's own subscription (verification only).
 async function viTestPush() {
+  const myId = getActiveTeamMemberId();
   const mine = _getMyPushSub();
   if (!mine) { alert('Enable notifications on this device first.'); return; }
+  let inCloud = '?';
+  try {
+    const sb = window._sb;
+    if (sb) {
+      const { data } = await sb.from('app_data').select('key').eq('key', _pushSubKey(myId));
+      inCloud = (data && data.length) ? 'yes' : 'NO (did not sync up!)';
+    }
+  } catch (e) { inCloud = 'check failed'; }
   try {
     const r = await fetch('/api/push-send', {
       method: 'POST',
@@ -3879,11 +3896,12 @@ async function viTestPush() {
     const text = await r.text();
     if (!r.ok) { alert('Push endpoint error ' + r.status + ':\n' + text.slice(0, 300)); return; }
     let data = null; try { data = JSON.parse(text); } catch (e) {}
+    const tail = '\n\nThis device is #' + myId + ' · its sub in cloud: ' + inCloud;
     if (data && typeof data.sent === 'number') {
-      if (data.sent > 0) alert('Test sent \u2014 watch for the notification.');
-      else alert('Endpoint reachable but sent 0 \u2014 likely the VAPID_PUBLIC_KEY / VAPID_PRIVATE_KEY env vars are missing, or this subscription is stale.');
+      if (data.sent > 0) alert('Test sent \u2014 watch for the notification.' + tail);
+      else alert('Endpoint reachable but sent 0 (VAPID env vars?).' + tail);
     } else {
-      alert('Unexpected response from push endpoint:\n' + text.slice(0, 300));
+      alert('Unexpected response:\n' + text.slice(0, 200) + tail);
     }
   } catch (e) {
     alert('Could not reach /api/push-send (route missing or network):\n' + (e && e.message ? e.message : e));
@@ -4474,7 +4492,7 @@ function renderRightPanelHTML() {
           ${headerSub ? `<div style="font-size:10px;color:${headerColor}">${esc(headerSub)}</div>` : ''}
         </div>
       </div>
-      <div style="font-size:9px;color:#6E7681;padding:3px 8px;background:#0D1117;flex-shrink:0;text-align:center;letter-spacing:0.03em">b:mm12 · sync:${window.VI_SYNC_BUILD||'STALE'} · me #${myId} · ${esc(state.activeConversation)} · cloud:${_lastCloudMsgCount}</div>
+      <div style="font-size:9px;color:#6E7681;padding:3px 8px;background:#0D1117;flex-shrink:0;text-align:center;letter-spacing:0.03em">b:mm13 · sync:${window.VI_SYNC_BUILD||'STALE'} · me #${myId} · ${esc(state.activeConversation)} · cloud:${_lastCloudMsgCount}</div>
       <div id="msg-list" class="rpanel-body" style="flex:1;display:flex;flex-direction:column">
         ${renderMessagesList(state.activeConversation)}
       </div>
