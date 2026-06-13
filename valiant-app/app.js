@@ -3839,6 +3839,7 @@ function getUnreadCount() {
 function openConversation(channelId) {
   state.activeConversation = channelId;
   state.composingGroup = false;
+  state._pendingAttach = [];
   markChannelRead(channelId);
   updateRightPanel();
   setTimeout(() => {
@@ -3855,7 +3856,8 @@ function closeConversation() {
 function sendMessage() {
   const input = document.getElementById('msg-input');
   const text = input?.value?.trim();
-  if (!text) return;
+  const attachments = (state._pendingAttach || []).slice();
+  if (!text && !attachments.length) return;
   const member = getTeamMember(getActiveTeamMemberId());
   if (!member) return;
   state.messages.push({
@@ -3864,12 +3866,15 @@ function sendMessage() {
     senderName: member.name,
     senderInitials: member.initials || getInitials(member.name),
     senderColor: DASHBOARD_ACCESS.find(d => d.key === member.primaryRole)?.color || '#6E7681',
-    text,
+    text: text || '',
     channelId: state.activeConversation || 'team',
-    timestamp: Date.now()
+    timestamp: Date.now(),
+    attachments
   });
   save('vi_messages', state.messages);
-  _pushNotifyMessage(member, text, state.activeConversation || 'team');
+  _pushNotifyMessage(member, text || ('\ud83d\udcce ' + ((attachments[0] && attachments[0].name) || 'Attachment')), state.activeConversation || 'team');
+  state._pendingAttach = [];
+  state._attachUploading = false;
   if (input) input.value = '';
   updateRightPanel();
   setTimeout(() => { const list = document.getElementById('msg-list'); if (list) list.scrollTop = list.scrollHeight; }, 50);
@@ -4373,7 +4378,7 @@ function renderMessagesList(channelId) {
         ${!isMe ? `<div style="width:26px;height:26px;border-radius:50%;background:${m.senderColor}22;border:1px solid ${m.senderColor}66;display:flex;align-items:center;justify-content:center;font-size:9px;font-weight:600;color:${m.senderColor};flex-shrink:0">${esc(m.senderInitials)}</div>` : ''}
         <div style="max-width:80%">
           ${!isMe ? `<div style="font-size:10px;color:#6E7681;margin-bottom:2px;padding-left:2px">${esc(m.senderName)}</div>` : ''}
-          <div style="background:${isMe ? '#1565C0' : '#161B22'};border:1px solid ${isMe ? '#1565C066' : '#30363D'};border-radius:${isMe ? '10px 10px 2px 10px' : '10px 10px 10px 2px'};padding:7px 10px;font-size:12px;color:#E6EDF3;line-height:1.4;word-break:break-word">${esc(m.text)}</div>
+          ${m.text ? `<div style="background:${isMe ? '#1565C0' : '#161B22'};border:1px solid ${isMe ? '#1565C066' : '#30363D'};border-radius:${isMe ? '10px 10px 2px 10px' : '10px 10px 10px 2px'};padding:7px 10px;font-size:12px;color:#E6EDF3;line-height:1.4;word-break:break-word">${esc(m.text)}</div>` : ''}${_attachmentsHTML(m, isMe)}
           <div style="font-size:9px;color:#6E7681;margin-top:2px;text-align:${isMe ? 'right' : 'left'};padding:0 2px">${timeStr}</div>
         </div>
       </div>`;
@@ -4387,14 +4392,14 @@ function _convListHTML() {
   const teamUnread = getChannelUnread('team');
   const teamLast = getChannelMessages('team').slice(-1)[0];
   const teamPreview = teamLast
-    ? (teamLast.senderId === myId ? 'You: ' : '') + teamLast.text.slice(0, 32) + (teamLast.text.length > 32 ? '\u2026' : '')
+    ? (teamLast.senderId === myId ? 'You: ' : '') + _msgPreview(teamLast, 32)
     : 'No messages yet';
   const dms = state.team.filter(m => m.id !== myId).map(m => {
     const chId = getDMChannelId(myId, m.id);
     const last = getChannelMessages(chId).slice(-1)[0];
     const unread = getChannelUnread(chId);
     const preview = last
-      ? (last.senderId === myId ? 'You: ' : '') + last.text.slice(0, 32) + (last.text.length > 32 ? '\u2026' : '')
+      ? (last.senderId === myId ? 'You: ' : '') + _msgPreview(last, 32)
       : 'Start a conversation\u2026';
     const color = DASHBOARD_ACCESS.find(d => d.key === m.primaryRole)?.color || '#6E7681';
     return { m, chId, preview, unread, color };
@@ -4417,7 +4422,7 @@ function _convListHTML() {
         const last = getChannelMessages(c.id).slice(-1)[0];
         const unread = getChannelUnread(c.id);
         const who = last ? (last.senderId === myId ? 'You' : ((getTeamMember(last.senderId) || {}).name || '').split(' ')[0]) : '';
-        const preview = last ? (who + ': ' + last.text.slice(0, 28) + (last.text.length > 28 ? '\u2026' : '')) : 'No messages yet';
+        const preview = last ? (who + ': ' + _msgPreview(last, 28)) : 'No messages yet';
         return { c, last, unread, preview };
       }).sort((a, b) => ((b.last && b.last.timestamp) || 0) - ((a.last && a.last.timestamp) || 0));
       if (!groups.length) return '';
@@ -4488,7 +4493,7 @@ function _msgSearchResultsHTML(query) {
   if (!q) return _convListHTML();
   const myId = getActiveTeamMemberId();
   const matches = state.messages
-    .filter(m => _isMyChannel(m.channelId || 'team', myId) && (m.text || '').toLowerCase().includes(q))
+    .filter(m => _isMyChannel(m.channelId || 'team', myId) && (((m.text || '').toLowerCase().includes(q)) || (m.attachments || []).some(a => (a.name || '').toLowerCase().includes(q))))
     .sort((a, b) => b.timestamp - a.timestamp);
   if (!matches.length) {
     return `<div style="text-align:center;padding:28px 12px;color:#6E7681;font-size:12px">No messages match \u201c${esc(query)}\u201d.</div>`;
@@ -4500,7 +4505,7 @@ function _msgSearchResultsHTML(query) {
       const ch = m.channelId || 'team';
       const dt = new Date(m.timestamp);
       const when = dt.toLocaleDateString('en-US', { month: 'short', day: 'numeric' }) + ' \u00b7 ' + dt.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' });
-      const snippet = _highlightSnippet(m.text, q);
+      const snippet = (m.text || '').toLowerCase().includes(q) ? _highlightSnippet(m.text, q) : ('\ud83d\udcce ' + esc((((m.attachments || []).find(a => (a.name || '').toLowerCase().includes(q))) || {}).name || 'Attachment'));
       return `<div onclick="_openSearchHit('${ch}', ${m.id})" style="padding:9px 10px;border-radius:8px;cursor:pointer;margin-bottom:4px;background:#161B22;border:1px solid #1C2333;-webkit-tap-highlight-color:transparent">
         <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:3px">
           <span style="font-size:12px;font-weight:600;color:#E6EDF3;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${esc(m.senderName || '')}</span>
@@ -4541,6 +4546,69 @@ function _openSearchHit(channelId, msgId) {
   }, 130);
 }
 
+function _isImageAttach(a) {
+  if (!a) return false;
+  if (a.type && a.type.indexOf('image/') === 0) return true;
+  return /\.(png|jpe?g|gif|webp|bmp|heic|heif)$/i.test(a.url || a.name || '');
+}
+function _attachmentsHTML(m, isMe) {
+  const list = (m && m.attachments) || [];
+  if (!list.length) return '';
+  return list.map(a => {
+    const url = a.url || '', name = a.name || 'file';
+    if (_isImageAttach(a)) {
+      return `<a href="${esc(url)}" target="_blank" rel="noopener" style="display:block;margin-top:4px"><img src="${esc(url)}" alt="${esc(name)}" style="max-width:200px;max-height:220px;border-radius:10px;border:1px solid #30363D;display:block"></a>`;
+    }
+    return `<a href="${esc(url)}" target="_blank" rel="noopener" download style="display:flex;align-items:center;gap:8px;margin-top:4px;background:${isMe ? '#1565C0' : '#161B22'};border:1px solid ${isMe ? '#1565C066' : '#30363D'};border-radius:10px;padding:8px 10px;text-decoration:none;max-width:220px">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#A371F7" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink:0"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/></svg>
+      <span style="font-size:12px;color:#E6EDF3;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${esc(name)}</span>
+    </a>`;
+  }).join('');
+}
+// Conversation-list preview text: message text, or an attachment label if text is empty.
+function _msgPreview(m, n) {
+  let t = (m && m.text) ? m.text : '';
+  if (!t) { const a = m && m.attachments && m.attachments[0]; if (a) t = '\ud83d\udcce ' + (a.name || 'Attachment'); }
+  n = n || 32;
+  return t.length > n ? t.slice(0, n) + '\u2026' : t;
+}
+function _renderAttachStrip() {
+  const el = document.getElementById('msg-attach-strip');
+  if (!el) return;
+  const list = state._pendingAttach || [];
+  if (!list.length && !state._attachUploading) { el.style.display = 'none'; el.innerHTML = ''; return; }
+  el.style.display = 'flex';
+  el.innerHTML = list.map((a, i) => `<div style="display:flex;align-items:center;gap:6px;background:#161B22;border:1px solid #30363D;border-radius:8px;padding:4px 4px 4px 8px;max-width:170px">
+      <span style="font-size:11px;color:#C9D1D9;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${_isImageAttach(a) ? '\ud83d\uddbc ' : '\ud83d\udcce '}${esc(a.name || 'file')}</span>
+      <button onclick="removeAttach(${i})" aria-label="Remove" style="background:none;border:none;color:#6E7681;cursor:pointer;font-size:14px;line-height:1;padding:2px;-webkit-tap-highlight-color:transparent">\u00d7</button>
+    </div>`).join('') + (state._attachUploading ? `<div style="display:flex;align-items:center;color:#6E7681;font-size:11px;padding:4px 8px">Uploading\u2026</div>` : '');
+}
+function removeAttach(i) {
+  if (!state._pendingAttach) return;
+  state._pendingAttach.splice(i, 1);
+  _renderAttachStrip();
+}
+async function viHandleAttach(fileList) {
+  const files = Array.from(fileList || []);
+  if (!files.length) return;
+  const sb = window._sb;
+  if (!sb || !sb.storage) { alert('File storage isn\u2019t set up yet.'); return; }
+  state._pendingAttach = state._pendingAttach || [];
+  state._attachUploading = true; _renderAttachStrip();
+  for (const file of files) {
+    try {
+      if (file.size > 25 * 1024 * 1024) { alert((file.name || 'File') + ' is over 25MB \u2014 skipped.'); continue; }
+      const safe = (file.name || 'file').replace(/[^\w.\-]+/g, '_');
+      const path = Date.now() + '_' + Math.floor(Math.random() * 1e6) + '_' + safe;
+      const up = await sb.storage.from('chat-files').upload(path, file, { contentType: file.type || undefined, upsert: false });
+      if (up.error) { alert('Upload failed: ' + (up.error.message || 'unknown')); continue; }
+      const url = sb.storage.from('chat-files').getPublicUrl(path).data.publicUrl;
+      state._pendingAttach.push({ url, name: file.name || 'file', type: file.type || '', size: file.size || 0 });
+    } catch (e) { alert('Upload error'); }
+  }
+  state._attachUploading = false; _renderAttachStrip();
+  const inp = document.getElementById('msg-file-input'); if (inp) inp.value = '';
+}
 function injectRightPanel() {
   if (document.getElementById('right-panel')) return;
   if (!document.getElementById('rpanel-extra-style')) {
@@ -4600,6 +4668,7 @@ function updateRightPanel() {
   if (state.rightPanel === 'messages' && state.activeConversation) {
     const list = document.getElementById('msg-list');
     if (list) list.scrollTop = list.scrollHeight;
+    try { _renderAttachStrip(); } catch (e) {}
   }
   updateBottomNavMsgBadge();
 }
@@ -4872,7 +4941,12 @@ function renderRightPanelHTML() {
         ${renderMessagesList(state.activeConversation)}
       </div>
       <div class="msg-composer" style="padding:8px 12px;border-top:1px solid #1C2333;flex-shrink:0">
-        <div class="msg-inputwrap" style="display:flex;align-items:flex-end;gap:6px;background:#0D1117;border:1px solid #30363D;border-radius:22px;padding:4px 4px 4px 16px">
+        <div id="msg-attach-strip" style="display:none;flex-wrap:wrap;gap:6px;margin-bottom:6px"></div>
+        <input type="file" id="msg-file-input" multiple style="display:none" onchange="viHandleAttach(this.files)">
+        <div class="msg-inputwrap" style="display:flex;align-items:flex-end;gap:6px;background:#0D1117;border:1px solid #30363D;border-radius:22px;padding:4px 4px 4px 8px">
+          <button onclick="document.getElementById('msg-file-input').click()" aria-label="Attach file" style="background:none;border:none;color:#6E7681;cursor:pointer;padding:6px;display:flex;align-items:center;flex-shrink:0;-webkit-tap-highlight-color:transparent;margin-bottom:1px">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21.44 11.05l-9.19 9.19a5 5 0 0 1-7.07-7.07l9.19-9.19a3 3 0 0 1 4.24 4.24l-9.2 9.19a1 1 0 0 1-1.41-1.41l8.49-8.49"/></svg>
+          </button>
           <textarea id="msg-input" placeholder="Message ${esc(headerName)}…"
             style="flex:1;background:transparent;border:none;color:#E6EDF3;font-size:16px;font-family:'DM Sans',sans-serif;padding:8px 0;resize:none;outline:none;line-height:1.3;max-height:100px;min-height:24px"
             rows="1"
@@ -8600,7 +8674,7 @@ function renderProjectChatsSection(p) {
     const unread = getChannelUnread(c.id);
     const memCount = (c.memberIds || []).length;
     const who = last ? (last.senderId === myId ? 'You' : ((getTeamMember(last.senderId) || {}).name || '').split(' ')[0]) : '';
-    const preview = last ? (who + ': ' + last.text.slice(0, 40) + (last.text.length > 40 ? '\u2026' : '')) : 'No messages yet';
+    const preview = last ? (who + ': ' + _msgPreview(last, 40)) : 'No messages yet';
     return `
       <div style="display:flex;align-items:center;gap:8px;padding:9px 0;border-bottom:1px solid #161B22">
         <div onclick="openChatFromProject('${c.id}')" style="flex:1;min-width:0;cursor:pointer;display:flex;align-items:center;gap:10px">
