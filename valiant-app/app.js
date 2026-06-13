@@ -3800,10 +3800,9 @@ async function ensurePushSubscribed() {
 // Fire a push to the recipients of a just-sent message.
 async function _pushNotifyMessage(sender, text, channelId) {
   try {
-    if (!window.VI_VAPID_PUBLIC || !sender) return;
+    if (!sender) { alert('Push debug: no sender resolved'); return; }
+    if (!window.VI_VAPID_PUBLIC) { alert('Push debug: notifications key missing (index.html not deployed yet)'); return; }
     let subs = _getPushSubs();
-    // Pull the freshest subscriptions from the cloud — the local copy can be stale or
-    // clobbered by the shared blob, which would drop the recipient and send nothing.
     try {
       const sb = window._sb;
       if (sb) {
@@ -3821,22 +3820,23 @@ async function _pushNotifyMessage(sender, text, channelId) {
     }
     const targets = recipientIds.map(id => subs[id]).filter(Boolean);
     if (!targets.length) {
-      try { showToast('🔔 no push subscription on file for #' + recipientIds.join(',') + ' · have: ' + (Object.keys(subs).join(',') || 'none')); } catch (e) {}
+      alert('Push debug: nobody to send to.\nRecipient #' + recipientIds.join(',') + '\nRegistered phones: ' + (Object.keys(subs).join(',') || 'NONE'));
       return;
     }
     const title = channelId === 'team' ? `${sender.name} \u00b7 Team` : sender.name;
-    fetch('/api/push-send', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ subscriptions: targets, title, body: text.slice(0, 140), url: '/', tag: 'msg_' + channelId })
-    })
-      .then(r => r.json())
-      .then(res => {
-        try { showToast('🔔 push sent:' + (res && res.sent) + ' expired:' + ((res && res.expired && res.expired.length) || 0)); } catch (e) {}
-        if (res && Array.isArray(res.expired) && res.expired.length) _pruneExpiredSubs(res.expired);
-      })
-      .catch(() => { try { showToast('🔔 push send failed (network)'); } catch (e) {} });
-  } catch (e) { /* silent */ }
+    let r, t;
+    try {
+      r = await fetch('/api/push-send', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ subscriptions: targets, title, body: text.slice(0, 140), url: '/', tag: 'msg_' + channelId })
+      });
+      t = await r.text();
+    } catch (e) { alert('Push debug: could not reach the push server'); return; }
+    let res = null; try { res = JSON.parse(t); } catch (e) {}
+    alert('Push debug: tried ' + targets.length + ' phone(s)\nServer ' + r.status + ': ' + t.slice(0, 150));
+    if (res && Array.isArray(res.expired) && res.expired.length) _pruneExpiredSubs(res.expired);
+  } catch (e) { alert('Push debug error: ' + (e && e.message ? e.message : e)); }
 }
 function _pruneExpiredSubs(endpoints) {
   const all = _getPushSubs();
@@ -4455,7 +4455,7 @@ function renderRightPanelHTML() {
           ${headerSub ? `<div style="font-size:10px;color:${headerColor}">${esc(headerSub)}</div>` : ''}
         </div>
       </div>
-      <div style="font-size:9px;color:#6E7681;padding:3px 8px;background:#0D1117;flex-shrink:0;text-align:center;letter-spacing:0.03em">b:mm10 · sync:${window.VI_SYNC_BUILD||'STALE'} · me #${myId} · ${esc(state.activeConversation)} · cloud:${_lastCloudMsgCount}</div>
+      <div style="font-size:9px;color:#6E7681;padding:3px 8px;background:#0D1117;flex-shrink:0;text-align:center;letter-spacing:0.03em">b:mm11 · sync:${window.VI_SYNC_BUILD||'STALE'} · me #${myId} · ${esc(state.activeConversation)} · cloud:${_lastCloudMsgCount}</div>
       <div id="msg-list" class="rpanel-body" style="flex:1;display:flex;flex-direction:column">
         ${renderMessagesList(state.activeConversation)}
       </div>
