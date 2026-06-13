@@ -3725,25 +3725,44 @@ function sendMessage() {
 }
 
 // ===== Web Push notifications =====
-function _getPushSubs() {
-  try { return JSON.parse(localStorage.getItem('vi_push_subs') || '{}'); } catch (e) { return {}; }
+// Each device stores ITS OWN subscription under its own key (vi_push_sub_<id>), so
+// one device can never clobber another's (the old single shared blob did exactly that).
+function _pushSubKey(memberId) { return 'vi_push_sub_' + memberId; }
+function _getMyPushSub() {
+  try { const v = localStorage.getItem(_pushSubKey(getActiveTeamMemberId())); return v ? JSON.parse(v) : null; } catch (e) { return null; }
 }
-async function _savePushSub(memberId, subJSON) {
-  if (memberId == null) return;
-  const local = _getPushSubs();
-  local[memberId] = subJSON;
-  let merged = local;
-  // Merge with the cloud copy first so saving our own subscription doesn't clobber
-  // everyone else's in the shared blob (which would leave senders unable to reach us).
+function _getPushSubs() {
+  // Back-compat reader: gather any per-device keys present locally into one map.
+  const out = {};
   try {
-    const sb = window._sb;
-    if (sb) {
-      const { data } = await sb.from('app_data').select('value').eq('key', 'vi_push_subs').single();
-      const cloud = (data && data.value && typeof data.value === 'object') ? data.value : {};
-      merged = Object.assign({}, cloud, local); // union; our own values win
+    for (let i = 0; i < localStorage.length; i++) {
+      const k = localStorage.key(i);
+      if (k && k.indexOf('vi_push_sub_') === 0) {
+        try { out[k.slice('vi_push_sub_'.length)] = JSON.parse(localStorage.getItem(k)); } catch (e) {}
+      }
     }
   } catch (e) {}
-  save('vi_push_subs', merged); // vi_ key -> synced to all devices
+  return out;
+}
+function _savePushSub(memberId, subJSON) {
+  if (memberId == null) return;
+  save(_pushSubKey(memberId), subJSON); // own row — synced, cannot be clobbered by others
+}
+// Pull subscriptions for specific members straight from the cloud (freshest source).
+async function _fetchSubsFor(ids) {
+  const out = {};
+  ids.forEach(id => { try { const v = localStorage.getItem(_pushSubKey(id)); if (v) out[id] = JSON.parse(v); } catch (e) {} });
+  try {
+    const sb = window._sb;
+    if (sb && ids.length) {
+      const { data } = await sb.from('app_data').select('key,value').in('key', ids.map(_pushSubKey));
+      (data || []).forEach(row => {
+        const idNum = parseInt(row.key.slice('vi_push_sub_'.length));
+        if (row.value) out[idNum] = (typeof row.value === 'string') ? JSON.parse(row.value) : row.value;
+      });
+    }
+  } catch (e) {}
+  return out;
 }
 function _urlBase64ToUint8Array(base64String) {
   const padding = '='.repeat((4 - (base64String.length % 4)) % 4);
@@ -3802,14 +3821,6 @@ async function _pushNotifyMessage(sender, text, channelId) {
   try {
     if (!sender) { alert('Push debug: no sender resolved'); return; }
     if (!window.VI_VAPID_PUBLIC) { alert('Push debug: notifications key missing (index.html not deployed yet)'); return; }
-    let subs = _getPushSubs();
-    try {
-      const sb = window._sb;
-      if (sb) {
-        const { data } = await sb.from('app_data').select('value').eq('key', 'vi_push_subs').single();
-        if (data && data.value && typeof data.value === 'object') subs = Object.assign({}, subs, data.value);
-      }
-    } catch (e) {}
     let recipientIds = [];
     if (channelId === 'team') {
       recipientIds = state.team.map(m => m.id).filter(id => id !== sender.id);
@@ -3818,6 +3829,7 @@ async function _pushNotifyMessage(sender, text, channelId) {
       const a = parseInt(parts[1]), b = parseInt(parts[2]);
       recipientIds = [a === sender.id ? b : a];
     }
+    const subs = await _fetchSubsFor(recipientIds);
     const targets = recipientIds.map(id => subs[id]).filter(Boolean);
     if (!targets.length) {
       alert('Push debug: nobody to send to.\nRecipient #' + recipientIds.join(',') + '\nRegistered phones: ' + (Object.keys(subs).join(',') || 'NONE'));
@@ -3839,17 +3851,24 @@ async function _pushNotifyMessage(sender, text, channelId) {
   } catch (e) { alert('Push debug error: ' + (e && e.message ? e.message : e)); }
 }
 function _pruneExpiredSubs(endpoints) {
-  const all = _getPushSubs();
-  let changed = false;
-  Object.keys(all).forEach(k => {
-    if (all[k] && endpoints.indexOf(all[k].endpoint) !== -1) { delete all[k]; changed = true; }
-  });
-  if (changed) save('vi_push_subs', all);
+  try {
+    const keys = [];
+    for (let i = 0; i < localStorage.length; i++) {
+      const k = localStorage.key(i);
+      if (k && k.indexOf('vi_push_sub_') === 0) keys.push(k);
+    }
+    keys.forEach(k => {
+      try {
+        const v = JSON.parse(localStorage.getItem(k));
+        if (v && endpoints.indexOf(v.endpoint) !== -1) localStorage.removeItem(k); // also clears the cloud row
+      } catch (e) {}
+    });
+  } catch (e) {}
 }
 
 // Send a test push to THIS device's own subscription (verification only).
 async function viTestPush() {
-  const mine = _getPushSubs()[getActiveTeamMemberId()];
+  const mine = _getMyPushSub();
   if (!mine) { alert('Enable notifications on this device first.'); return; }
   try {
     const r = await fetch('/api/push-send', {
@@ -4455,7 +4474,7 @@ function renderRightPanelHTML() {
           ${headerSub ? `<div style="font-size:10px;color:${headerColor}">${esc(headerSub)}</div>` : ''}
         </div>
       </div>
-      <div style="font-size:9px;color:#6E7681;padding:3px 8px;background:#0D1117;flex-shrink:0;text-align:center;letter-spacing:0.03em">b:mm11 · sync:${window.VI_SYNC_BUILD||'STALE'} · me #${myId} · ${esc(state.activeConversation)} · cloud:${_lastCloudMsgCount}</div>
+      <div style="font-size:9px;color:#6E7681;padding:3px 8px;background:#0D1117;flex-shrink:0;text-align:center;letter-spacing:0.03em">b:mm12 · sync:${window.VI_SYNC_BUILD||'STALE'} · me #${myId} · ${esc(state.activeConversation)} · cloud:${_lastCloudMsgCount}</div>
       <div id="msg-list" class="rpanel-body" style="flex:1;display:flex;flex-direction:column">
         ${renderMessagesList(state.activeConversation)}
       </div>
