@@ -415,6 +415,8 @@ const state = {
   lastReadTime: parseInt(localStorage.getItem('vi_last_read') || '0'),
   lastReadByChannel: JSON.parse(localStorage.getItem('vi_last_read_ch') || '{}'),
   activeConversation: null,
+  composingGroup: false,
+  channels: JSON.parse(localStorage.getItem('vi_channels') || '[]'),
   meetings: JSON.parse(localStorage.getItem('vi_meetings') || '[]'),
   noteSections: JSON.parse(localStorage.getItem('vi_note_sections') || '{}'),
   projectDrive: JSON.parse(localStorage.getItem('vi_project_drive') || '{}'),
@@ -3635,7 +3637,7 @@ function getCloseRate() {
 // ── Right Panel ──
 function toggleRightPanel(panel) {
   state.rightPanel = state.rightPanel === panel ? null : panel;
-  if (state.rightPanel !== 'messages') state.activeConversation = null;
+  if (state.rightPanel !== 'messages') { state.activeConversation = null; state.composingGroup = false; }
   if (state.rightPanel === 'messages' && state.activeConversation) {
     markChannelRead(state.activeConversation);
   }
@@ -3675,7 +3677,82 @@ function _isMyChannel(channelId, myId) {
     const parts = channelId.split('_');
     return parseInt(parts[1]) === myId || parseInt(parts[2]) === myId;
   }
+  if (channelId.indexOf('grp_') === 0) {
+    const c = getChannel(channelId);
+    if (!c) return false;
+    if ((c.memberIds || []).map(Number).includes(myId)) return true;
+    return (c.projectIds || []).some(pid => _canViewProject(pid, myId));
+  }
   return true;
+}
+// ── Group chats ───────────────────────────────────────────────────
+function getChannel(id) { return (state.channels || []).find(c => c.id === id) || null; }
+function _isGroupChannel(ch) { return typeof ch === 'string' && ch.indexOf('grp_') === 0; }
+function _canViewProject(pid, myId) {
+  if (currentUserHasPermission('projects.view_all')) return true;
+  try { return isAssignedToProject(myId, pid); } catch (e) { return false; }
+}
+// Group chats the viewer can see: a member, or linked to a project they can view.
+function getMyChannels(myId) {
+  return (state.channels || []).filter(c =>
+    (c.memberIds || []).map(Number).includes(myId) ||
+    (c.projectIds || []).some(pid => _canViewProject(pid, myId))
+  );
+}
+function openGroupComposer() { state.composingGroup = true; updateRightPanel(); }
+function closeGroupComposer() { state.composingGroup = false; updateRightPanel(); }
+function createGroupChat() {
+  const name = (document.getElementById('grp-name')?.value || '').trim();
+  if (!name) { alert('Give the chat a name.'); return; }
+  const myId = getActiveTeamMemberId();
+  const memberIds = [myId];
+  document.querySelectorAll('#grp-members .qt-chip.active').forEach(el => {
+    const id = parseInt(el.dataset.id); if (id && !memberIds.includes(id)) memberIds.push(id);
+  });
+  const projectIds = [];
+  document.querySelectorAll('#grp-projects .qt-chip.active').forEach(el => {
+    const pid = parseInt(el.dataset.pid); if (pid) projectIds.push(pid);
+  });
+  if (memberIds.length < 2 && projectIds.length === 0) { alert('Add at least one other person, or link a project.'); return; }
+  const id = 'grp_' + Date.now() + '_' + Math.floor(Math.random() * 1000);
+  if (!state.channels) state.channels = [];
+  state.channels.push({ id, name, memberIds, projectIds, createdBy: myId, createdAt: Date.now() });
+  save('vi_channels', state.channels);
+  state.composingGroup = false;
+  openConversation(id);
+}
+function _groupComposerHTML() {
+  const myId = getActiveTeamMemberId();
+  const me = getTeamMember(myId);
+  const others = (state.team || []).filter(m => m.id !== myId);
+  const projects = (state.projects || []).filter(p => !(state.archived || {})[p.id])
+    .slice().sort((a, b) => (a.name || '').localeCompare(b.name || ''));
+  return `
+    <div class="rpanel-header" style="gap:8px">
+      <button onclick="closeGroupComposer()" style="background:none;border:none;color:#6E7681;cursor:pointer;padding:4px;display:flex;align-items:center;-webkit-tap-highlight-color:transparent">
+        <svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M9 2L4 7l5 5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+      </button>
+      <div style="font-size:13px;font-weight:600;color:#E6EDF3">New Group Chat</div>
+    </div>
+    <div class="rpanel-body" style="padding:12px">
+      <div class="form-group">
+        <label class="form-label">Name</label>
+        <input class="form-input" id="grp-name" placeholder="e.g. Grace Cathedral crew" style="font-size:16px">
+      </div>
+      <div class="form-group">
+        <label class="form-label">Members <span style="color:#6E7681;font-weight:400;text-transform:none;letter-spacing:0">(${esc((me?.name || 'you').split(' ')[0])} included)</span></label>
+        <div id="grp-members" style="display:flex;flex-wrap:wrap;gap:5px">
+          ${others.map(m => `<span class="qt-chip" data-id="${m.id}" onclick="this.classList.toggle('active')">${esc((m.name || '').split(' ')[0])}</span>`).join('')}
+        </div>
+      </div>
+      <div class="form-group">
+        <label class="form-label">Link projects <span style="color:#6E7681;font-weight:400;text-transform:none;letter-spacing:0">(optional — anyone on a linked project can see &amp; post)</span></label>
+        <div id="grp-projects" style="display:flex;flex-wrap:wrap;gap:5px;max-height:170px;overflow:auto">
+          ${projects.length ? projects.map(p => `<span class="qt-chip" data-pid="${p.id}" onclick="this.classList.toggle('active')">${esc(p.name || ('Project ' + p.id))}</span>`).join('') : '<span style="font-size:12px;color:#6E7681">No active projects</span>'}
+        </div>
+      </div>
+      <button class="btn-primary" onclick="createGroupChat()" style="width:100%;padding:10px;font-size:13px;margin-top:4px">Create chat</button>
+    </div>`;
 }
 function getUnreadCount() {
   const myId = getActiveTeamMemberId();
@@ -3689,6 +3766,7 @@ function getUnreadCount() {
 
 function openConversation(channelId) {
   state.activeConversation = channelId;
+  state.composingGroup = false;
   markChannelRead(channelId);
   updateRightPanel();
   setTimeout(() => {
@@ -3834,11 +3912,15 @@ async function _pushNotifyMessage(sender, text, channelId) {
       const parts = channelId.split('_');
       const a = parseInt(parts[1]), b = parseInt(parts[2]);
       recipientIds = [a === sender.id ? b : a];
+    } else if (channelId.indexOf('grp_') === 0) {
+      const c = getChannel(channelId);
+      if (c) recipientIds = (c.memberIds || []).map(Number).filter(id => id !== sender.id);
     }
     const subs = await _fetchSubsFor(recipientIds);
     const targets = recipientIds.map(id => subs[id]).filter(Boolean);
     if (!targets.length) return;
-    const title = channelId === 'team' ? `${sender.name} \u00b7 Team` : sender.name;
+    const title = channelId === 'team' ? `${sender.name} \u00b7 Team`
+      : (channelId.indexOf('grp_') === 0 ? `${sender.name} \u00b7 ${(getChannel(channelId) || {}).name || 'Group'}` : sender.name);
     fetch('/api/push-send', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -4258,6 +4340,30 @@ function _convListHTML() {
         <div style="font-size:11px;color:#6E7681;margin-top:1px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${esc(teamPreview)}</div>
       </div>
     </div>
+    ${(() => {
+      const groups = getMyChannels(myId).map(c => {
+        const last = getChannelMessages(c.id).slice(-1)[0];
+        const unread = getChannelUnread(c.id);
+        const who = last ? (last.senderId === myId ? 'You' : ((getTeamMember(last.senderId) || {}).name || '').split(' ')[0]) : '';
+        const preview = last ? (who + ': ' + last.text.slice(0, 28) + (last.text.length > 28 ? '\u2026' : '')) : 'No messages yet';
+        return { c, last, unread, preview };
+      }).sort((a, b) => ((b.last && b.last.timestamp) || 0) - ((a.last && a.last.timestamp) || 0));
+      if (!groups.length) return '';
+      return `<div style="font-size:10px;color:#6E7681;font-weight:600;text-transform:uppercase;letter-spacing:0.06em;padding:8px 4px 4px">Group Chats</div>` +
+        groups.map(({ c, unread, preview }) => `
+          <div onclick="openConversation('${c.id}')" style="display:flex;align-items:center;gap:10px;padding:10px;border-radius:8px;cursor:pointer;margin-bottom:4px;background:${unread > 0 ? '#0D1626' : 'transparent'};border:1px solid ${unread > 0 ? '#1565C044' : 'transparent'};-webkit-tap-highlight-color:transparent">
+            <div style="width:36px;height:36px;border-radius:50%;background:#8957E522;border:1.5px solid #8957E566;display:flex;align-items:center;justify-content:center;flex-shrink:0">
+              <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="#A371F7" stroke-width="1.3"><circle cx="5.5" cy="6" r="2"/><circle cx="10.5" cy="6" r="2"/><path d="M2 13c0-2.2 1.5-3.4 3.5-3.4S9 10.8 9 13"/><path d="M10 9.7c1.8 0 3 1 3 2.6"/></svg>
+            </div>
+            <div style="flex:1;min-width:0">
+              <div style="display:flex;align-items:center;justify-content:space-between">
+                <span style="font-size:13px;font-weight:${unread > 0 ? '600' : '500'};color:#E6EDF3;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${esc(c.name)}</span>
+                ${unread > 0 ? `<span style="font-size:10px;font-weight:700;padding:1px 6px;border-radius:10px;background:#DA3633;color:#fff">${unread}</span>` : ''}
+              </div>
+              <div style="font-size:11px;color:${unread > 0 ? '#C9D1D9' : '#6E7681'};margin-top:1px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${esc(preview)}</div>
+            </div>
+          </div>`).join('');
+    })()}
     <div style="font-size:10px;color:#6E7681;font-weight:600;text-transform:uppercase;letter-spacing:0.06em;padding:8px 4px 4px">Direct Messages</div>
     ${dms.length === 0 ? '<div style="font-size:12px;color:#6E7681;padding:8px 4px">Add team members to start DMs</div>' :
       dms.map(({ m, chId, preview, unread, color }) => `
@@ -4283,6 +4389,7 @@ function _channelLabel(ch, myId) {
     const other = getTeamMember(otherId);
     return other ? (other.name || '').split(' ')[0] : 'DM';
   }
+  if (ch.indexOf('grp_') === 0) { const c = getChannel(ch); return c ? c.name : 'Group'; }
   return 'Chat';
 }
 
@@ -4635,10 +4742,17 @@ function renderRightPanelHTML() {
   const myId = getActiveTeamMemberId();
   let messagesPanel;
 
-  if (!state.activeConversation) {
+  if (state.composingGroup) {
+    messagesPanel = _groupComposerHTML();
+  } else if (!state.activeConversation) {
     const _q = (state.msgSearch || '');
     messagesPanel = `
-      <div class="rpanel-header"><div class="rpanel-header-title">Messages</div></div>
+      <div class="rpanel-header" style="display:flex;align-items:center;justify-content:space-between;gap:8px">
+        <div class="rpanel-header-title">Messages</div>
+        <button onclick="openGroupComposer()" aria-label="New group chat" title="New group chat" style="background:#21262D;border:1px solid #30363D;color:#C9D1D9;width:28px;height:28px;border-radius:8px;display:flex;align-items:center;justify-content:center;cursor:pointer;flex-shrink:0;-webkit-tap-highlight-color:transparent">
+          <svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"><path d="M8 3.5v9M3.5 8h9"/></svg>
+        </button>
+      </div>
       <div class="rpanel-body" style="padding:8px">
         <div style="position:relative;margin-bottom:8px">
           <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="#6E7681" stroke-width="1.5" style="position:absolute;left:11px;top:50%;transform:translateY(-50%);pointer-events:none"><circle cx="7" cy="7" r="5"/><path d="M11 11l3 3" stroke-linecap="round"/></svg>
@@ -4656,6 +4770,13 @@ function renderRightPanelHTML() {
       headerName = 'Team';
       headerSub = `${state.team.length} members`;
       headerColor = '#58A6FF';
+    } else if (state.activeConversation.indexOf('grp_') === 0) {
+      const c = getChannel(state.activeConversation);
+      headerName = c ? c.name : 'Group';
+      headerColor = '#A371F7';
+      const memCount = c ? (c.memberIds || []).length : 0;
+      const projNames = c ? (c.projectIds || []).map(pid => (state.projects.find(p => p.id === pid) || {}).name).filter(Boolean) : [];
+      headerSub = memCount + ' member' + (memCount === 1 ? '' : 's') + (projNames.length ? ' \u00b7 ' + projNames.join(', ') : '');
     } else {
       const parts = state.activeConversation.split('_');
       const otherId = parseInt(parts[1]) === myId ? parseInt(parts[2]) : parseInt(parts[1]);
