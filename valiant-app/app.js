@@ -19368,7 +19368,7 @@ function devSwitchToUser(memberId) {
 // field pop the calendar picker (no-op on browsers without showPicker()).
 document.addEventListener('click', (e) => {
   const t = e.target;
-  if (t && t.tagName === 'INPUT' && t.type === 'date' && typeof t.showPicker === 'function') {
+  if (t && t.tagName === 'INPUT' && (t.type === 'date' || t.type === 'time') && typeof t.showPicker === 'function') {
     try { t.showPicker(); } catch (_) {}
   }
 });
