@@ -3822,16 +3822,27 @@ function _pruneExpiredSubs(endpoints) {
 }
 
 // Send a test push to THIS device's own subscription (verification only).
-function viTestPush() {
+async function viTestPush() {
   const mine = _getPushSubs()[getActiveTeamMemberId()];
   if (!mine) { alert('Enable notifications on this device first.'); return; }
-  fetch('/api/push-send', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ subscriptions: [mine], title: 'Valiant', body: 'Test notification \u2705', url: '/', tag: 'test' })
-  }).then(r => r.json())
-    .then(() => alert('Test sent \u2014 watch for the notification.'))
-    .catch(() => alert('Test failed to send.'));
+  try {
+    const r = await fetch('/api/push-send', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ subscriptions: [mine], title: 'Valiant', body: 'Test notification \u2705', url: '/', tag: 'test' })
+    });
+    const text = await r.text();
+    if (!r.ok) { alert('Push endpoint error ' + r.status + ':\n' + text.slice(0, 300)); return; }
+    let data = null; try { data = JSON.parse(text); } catch (e) {}
+    if (data && typeof data.sent === 'number') {
+      if (data.sent > 0) alert('Test sent \u2014 watch for the notification.');
+      else alert('Endpoint reachable but sent 0 \u2014 likely the VAPID_PUBLIC_KEY / VAPID_PRIVATE_KEY env vars are missing, or this subscription is stale.');
+    } else {
+      alert('Unexpected response from push endpoint:\n' + text.slice(0, 300));
+    }
+  } catch (e) {
+    alert('Could not reach /api/push-send (route missing or network):\n' + (e && e.message ? e.message : e));
+  }
 }
 
 // Apply an incoming message change pushed live by the realtime layer (no reload).
@@ -4418,7 +4429,7 @@ function renderRightPanelHTML() {
           ${headerSub ? `<div style="font-size:10px;color:${headerColor}">${esc(headerSub)}</div>` : ''}
         </div>
       </div>
-      <div style="font-size:9px;color:#6E7681;padding:3px 8px;background:#0D1117;flex-shrink:0;text-align:center;letter-spacing:0.03em">b:mm7 · sync:${window.VI_SYNC_BUILD||'STALE'} · me #${myId} · ${esc(state.activeConversation)} · cloud:${_lastCloudMsgCount}</div>
+      <div style="font-size:9px;color:#6E7681;padding:3px 8px;background:#0D1117;flex-shrink:0;text-align:center;letter-spacing:0.03em">b:mm8 · sync:${window.VI_SYNC_BUILD||'STALE'} · me #${myId} · ${esc(state.activeConversation)} · cloud:${_lastCloudMsgCount}</div>
       <div id="msg-list" class="rpanel-body" style="flex:1;display:flex;flex-direction:column">
         ${renderMessagesList(state.activeConversation)}
       </div>
