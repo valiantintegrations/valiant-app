@@ -3699,8 +3699,8 @@ function getMyChannels(myId) {
     (c.projectIds || []).some(pid => _canViewProject(pid, myId))
   );
 }
-function openGroupComposer() { state.composingGroup = true; updateRightPanel(); }
-function closeGroupComposer() { state.composingGroup = false; updateRightPanel(); }
+function openGroupComposer(prelinkPid) { state.composingGroup = true; state._grpPrelink = prelinkPid ? Number(prelinkPid) : null; updateRightPanel(); }
+function closeGroupComposer() { state.composingGroup = false; state._grpPrelink = null; updateRightPanel(); }
 function createGroupChat() {
   const name = (document.getElementById('grp-name')?.value || '').trim();
   if (!name) { alert('Give the chat a name.'); return; }
@@ -3719,6 +3719,7 @@ function createGroupChat() {
   state.channels.push({ id, name, memberIds, projectIds, createdBy: myId, createdAt: Date.now() });
   save('vi_channels', state.channels);
   state.composingGroup = false;
+  state._grpPrelink = null;
   openConversation(id);
 }
 function _grpToggle(el) {
@@ -3744,6 +3745,8 @@ function _groupComposerHTML() {
     .slice().sort((a, b) => (a.name || '').localeCompare(b.name || ''));
   const projects = (state.projects || []).filter(p => !(state.archived || {})[p.id])
     .slice().sort((a, b) => (a.name || '').localeCompare(b.name || ''));
+  const pre = state._grpPrelink || null;
+  const preName = pre ? ((state.projects.find(pp => pp.id === pre) || {}).name || '') : '';
   const chip = 'display:inline-block;padding:6px 11px;border-radius:14px;border:1px solid #30363D;background:#161B22;color:#C9D1D9;font-size:13px;cursor:pointer;-webkit-tap-highlight-color:transparent;user-select:none';
   const srch = "width:100%;box-sizing:border-box;background:#0D1117;border:1px solid #30363D;border-radius:8px;color:#E6EDF3;font-size:16px;font-family:'DM Sans',sans-serif;padding:7px 10px;outline:none;margin-bottom:7px";
   return `
@@ -3756,7 +3759,7 @@ function _groupComposerHTML() {
     <div class="rpanel-body" style="padding:12px">
       <div class="form-group">
         <label class="form-label">Name</label>
-        <input class="form-input" id="grp-name" placeholder="e.g. Grace Cathedral crew" style="font-size:16px">
+        <input class="form-input" id="grp-name" value="${esc(preName)}" placeholder="e.g. Grace Cathedral crew" style="font-size:16px">
       </div>
       <div class="form-group">
         <label class="form-label">Members <span style="color:#6E7681;font-weight:400;text-transform:none;letter-spacing:0">(${esc((me?.name || 'you').split(' ')[0])} included — tap to add others)</span></label>
@@ -3769,7 +3772,7 @@ function _groupComposerHTML() {
         <label class="form-label">Link projects <span style="color:#6E7681;font-weight:400;text-transform:none;letter-spacing:0">(optional — anyone on a linked project can see &amp; post)</span></label>
         <input id="grp-proj-search" oninput="_grpFilter('grp-projects', this.value)" placeholder="Search projects…" style="${srch}">
         <div id="grp-projects" style="display:flex;flex-wrap:wrap;gap:6px;max-height:180px;overflow:auto">
-          ${projects.length ? projects.map(p => `<span class="grp-chip" data-pid="${p.id}" data-name="${esc(((p.name || '') + ' ' + (p.client_name || '')).toLowerCase())}" data-on="0" onclick="_grpToggle(this)" style="${chip}">${esc(p.name || ('Project ' + p.id))}${p.client_name ? ` <span style="opacity:0.6;font-weight:400">\u00b7 ${esc(p.client_name)}</span>` : ''}</span>`).join('') : '<span style="font-size:12px;color:#6E7681">No active projects</span>'}
+          ${projects.length ? projects.map(p => `<span class="grp-chip" data-pid="${p.id}" data-name="${esc(((p.name || '') + ' ' + (p.client_name || '')).toLowerCase())}" data-on="${pre === p.id ? '1' : '0'}" onclick="_grpToggle(this)" style="${chip}${pre === p.id ? ';background:#1565C0;border-color:#1565C0;color:#fff' : ''}">${esc(p.name || ('Project ' + p.id))}${p.client_name ? ` <span style="opacity:0.6;font-weight:400">\u00b7 ${esc(p.client_name)}</span>` : ''}</span>`).join('') : '<span style="font-size:12px;color:#6E7681">No active projects</span>'}
         </div>
       </div>
       <button class="btn-primary" onclick="createGroupChat()" style="width:100%;padding:10px;font-size:13px;margin-top:4px">Create chat</button>
@@ -8354,6 +8357,8 @@ function renderProjectOverviewHTML(p) {
 
     ${renderProjectMeetingsSection(p)}
 
+    ${renderProjectChatsSection(p)}
+
     ${renderProjectScopeSection(p)}
   `;
 }
@@ -8521,7 +8526,67 @@ function renderProjectMeetingsSection(p) {
   `;
 }
 
-// ── Project Install Tasks planning section ──
+function getProjectChannels(pid) { return (state.channels || []).filter(c => (c.projectIds || []).includes(pid)); }
+function openChatFromProject(channelId) { state.rightPanel = 'messages'; openConversation(channelId); }
+function startProjectChat(pid) { state.rightPanel = 'messages'; openGroupComposer(pid); }
+function linkChatToProject(channelId, pid) {
+  const c = getChannel(channelId); if (!c) return;
+  pid = Number(pid);
+  c.projectIds = c.projectIds || [];
+  if (!c.projectIds.includes(pid)) { c.projectIds.push(pid); save('vi_channels', state.channels); }
+  renderCurrentPage();
+}
+function unlinkChatFromProject(channelId, pid) {
+  const c = getChannel(channelId); if (!c) return;
+  pid = Number(pid);
+  c.projectIds = (c.projectIds || []).filter(x => Number(x) !== pid);
+  save('vi_channels', state.channels);
+  renderCurrentPage();
+}
+function renderProjectChatsSection(p) {
+  const myId = getActiveTeamMemberId();
+  const linked = getProjectChannels(p.id);
+  const linkable = getMyChannels(myId).filter(c => !(c.projectIds || []).includes(p.id));
+  function row(c) {
+    const last = getChannelMessages(c.id).slice(-1)[0];
+    const unread = getChannelUnread(c.id);
+    const memCount = (c.memberIds || []).length;
+    const who = last ? (last.senderId === myId ? 'You' : ((getTeamMember(last.senderId) || {}).name || '').split(' ')[0]) : '';
+    const preview = last ? (who + ': ' + last.text.slice(0, 40) + (last.text.length > 40 ? '\u2026' : '')) : 'No messages yet';
+    return `
+      <div style="display:flex;align-items:center;gap:8px;padding:9px 0;border-bottom:1px solid #161B22">
+        <div onclick="openChatFromProject('${c.id}')" style="flex:1;min-width:0;cursor:pointer;display:flex;align-items:center;gap:10px">
+          <div style="width:34px;height:34px;border-radius:50%;background:#8957E522;border:1.5px solid #8957E566;display:flex;align-items:center;justify-content:center;flex-shrink:0">
+            <svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="#A371F7" stroke-width="1.3"><circle cx="5.5" cy="6" r="2"/><circle cx="10.5" cy="6" r="2"/><path d="M2 13c0-2.2 1.5-3.4 3.5-3.4S9 10.8 9 13"/><path d="M10 9.7c1.8 0 3 1 3 2.6"/></svg>
+          </div>
+          <div style="flex:1;min-width:0">
+            <div style="display:flex;align-items:center;gap:6px">
+              <span style="font-size:13px;font-weight:500;color:#E6EDF3;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${esc(c.name)}</span>
+              ${unread > 0 ? `<span style="font-size:9px;font-weight:700;padding:1px 6px;border-radius:10px;background:#DA3633;color:#fff;flex-shrink:0">${unread}</span>` : ''}
+            </div>
+            <div style="font-size:11px;color:#6E7681;margin-top:1px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${memCount} member${memCount === 1 ? '' : 's'} \u00b7 ${esc(preview)}</div>
+          </div>
+        </div>
+        <button onclick="unlinkChatFromProject('${c.id}', ${p.id})" title="Unlink from this project" style="background:none;border:none;color:#6E7681;cursor:pointer;padding:4px 6px;flex-shrink:0;font-size:15px;line-height:1;-webkit-tap-highlight-color:transparent">\u00d7</button>
+      </div>`;
+  }
+  const linkPicker = linkable.length ? `
+    <select onchange="if(this.value){linkChatToProject(this.value, ${p.id}); this.value='';}" style="margin-top:10px;width:100%;background:#0D1117;border:1px solid #30363D;border-radius:8px;color:#C9D1D9;font-size:12px;padding:7px 10px;font-family:'DM Sans',sans-serif">
+      <option value="">Link an existing chat\u2026</option>
+      ${linkable.map(c => `<option value="${c.id}">${esc(c.name)}</option>`).join('')}
+    </select>` : '';
+  return `
+    <div class="dashboard-card" style="margin-bottom:14px">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px">
+        <div style="font-size:11px;font-weight:600;color:#6E7681;text-transform:uppercase;letter-spacing:0.08em">Chats</div>
+        <button class="btn btn-sm" style="font-size:11px;padding:6px 12px" onclick="startProjectChat(${p.id})">+ Start a chat</button>
+      </div>
+      ${linked.length === 0 ? `<div style="font-size:12px;color:#6E7681;font-style:italic;padding:4px 0">No chats linked to this project yet.</div>` : linked.map(row).join('')}
+      ${linkPicker}
+    </div>`;
+}
+
+// \u2500\u2500 Project Install Tasks planning section \u2500\u2500
 function renderProjectTasksSection(p) {
   const tasks = getTasksForProject(p.id).slice().sort((a, b) => {
     // Milestones first by date, then template tasks, then manual
