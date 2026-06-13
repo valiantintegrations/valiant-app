@@ -3820,7 +3820,10 @@ async function _pushNotifyMessage(sender, text, channelId) {
       recipientIds = [a === sender.id ? b : a];
     }
     const targets = recipientIds.map(id => subs[id]).filter(Boolean);
-    if (!targets.length) return;
+    if (!targets.length) {
+      try { showToast('🔔 no push subscription on file for #' + recipientIds.join(',') + ' · have: ' + (Object.keys(subs).join(',') || 'none')); } catch (e) {}
+      return;
+    }
     const title = channelId === 'team' ? `${sender.name} \u00b7 Team` : sender.name;
     fetch('/api/push-send', {
       method: 'POST',
@@ -3828,8 +3831,11 @@ async function _pushNotifyMessage(sender, text, channelId) {
       body: JSON.stringify({ subscriptions: targets, title, body: text.slice(0, 140), url: '/', tag: 'msg_' + channelId })
     })
       .then(r => r.json())
-      .then(res => { if (res && Array.isArray(res.expired) && res.expired.length) _pruneExpiredSubs(res.expired); })
-      .catch(() => {});
+      .then(res => {
+        try { showToast('🔔 push sent:' + (res && res.sent) + ' expired:' + ((res && res.expired && res.expired.length) || 0)); } catch (e) {}
+        if (res && Array.isArray(res.expired) && res.expired.length) _pruneExpiredSubs(res.expired);
+      })
+      .catch(() => { try { showToast('🔔 push send failed (network)'); } catch (e) {} });
   } catch (e) { /* silent */ }
 }
 function _pruneExpiredSubs(endpoints) {
@@ -4449,7 +4455,7 @@ function renderRightPanelHTML() {
           ${headerSub ? `<div style="font-size:10px;color:${headerColor}">${esc(headerSub)}</div>` : ''}
         </div>
       </div>
-      <div style="font-size:9px;color:#6E7681;padding:3px 8px;background:#0D1117;flex-shrink:0;text-align:center;letter-spacing:0.03em">b:mm9 · sync:${window.VI_SYNC_BUILD||'STALE'} · me #${myId} · ${esc(state.activeConversation)} · cloud:${_lastCloudMsgCount}</div>
+      <div style="font-size:9px;color:#6E7681;padding:3px 8px;background:#0D1117;flex-shrink:0;text-align:center;letter-spacing:0.03em">b:mm10 · sync:${window.VI_SYNC_BUILD||'STALE'} · me #${myId} · ${esc(state.activeConversation)} · cloud:${_lastCloudMsgCount}</div>
       <div id="msg-list" class="rpanel-body" style="flex:1;display:flex;flex-direction:column">
         ${renderMessagesList(state.activeConversation)}
       </div>
