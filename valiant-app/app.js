@@ -1,4 +1,4 @@
-// ── Valiant Integrations App ──
+=// ── Valiant Integrations App ──
 // API calls handled via /api/jetbuilt proxy
 
 // ── State ──
@@ -1261,6 +1261,7 @@ function createInstallChangeRequest(projectId, requested) {
     note: requested.note || ''
   };
   save('vi_install_change_requests', state.installChangeRequests);
+  _pushNotifyInstallApproval(projectId);
 }
 
 // Who can approve a given project's pending install change: PM lead or Master Admin.
@@ -3825,8 +3826,7 @@ async function ensurePushSubscribed() {
 // Fire a push to the recipients of a just-sent message.
 async function _pushNotifyMessage(sender, text, channelId) {
   try {
-    if (!sender) { alert('Push debug: no sender resolved'); return; }
-    if (!window.VI_VAPID_PUBLIC) { alert('Push debug: notifications key missing (index.html not deployed yet)'); return; }
+    if (!sender || !window.VI_VAPID_PUBLIC) return;
     let recipientIds = [];
     if (channelId === 'team') {
       recipientIds = state.team.map(m => m.id).filter(id => id !== sender.id);
@@ -3837,32 +3837,17 @@ async function _pushNotifyMessage(sender, text, channelId) {
     }
     const subs = await _fetchSubsFor(recipientIds);
     const targets = recipientIds.map(id => subs[id]).filter(Boolean);
-    if (!targets.length) {
-      let cloudList = '?';
-      try {
-        const sb = window._sb;
-        if (sb) {
-          const { data } = await sb.from('app_data').select('key').like('key', 'vi_push_sub_%');
-          cloudList = (data || []).map(r => '#' + r.key.slice('vi_push_sub_'.length)).join(',') || 'NONE in cloud';
-        }
-      } catch (e) { cloudList = 'query failed: ' + (e && e.message ? e.message : e); }
-      alert('Push debug: nobody to send to.\nNeed a subscription for #' + recipientIds.join(',') + '\nCloud currently has subs for: ' + cloudList);
-      return;
-    }
+    if (!targets.length) return;
     const title = channelId === 'team' ? `${sender.name} \u00b7 Team` : sender.name;
-    let r, t;
-    try {
-      r = await fetch('/api/push-send', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ subscriptions: targets, title, body: text.slice(0, 140), url: '/', tag: 'msg_' + channelId })
-      });
-      t = await r.text();
-    } catch (e) { alert('Push debug: could not reach the push server'); return; }
-    let res = null; try { res = JSON.parse(t); } catch (e) {}
-    alert('Push debug: tried ' + targets.length + ' phone(s)\nServer ' + r.status + ': ' + t.slice(0, 150));
-    if (res && Array.isArray(res.expired) && res.expired.length) _pruneExpiredSubs(res.expired);
-  } catch (e) { alert('Push debug error: ' + (e && e.message ? e.message : e)); }
+    fetch('/api/push-send', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ subscriptions: targets, title, body: text.slice(0, 140), url: '/', tag: 'msg_' + channelId })
+    })
+      .then(r => r.json())
+      .then(res => { if (res && Array.isArray(res.expired) && res.expired.length) _pruneExpiredSubs(res.expired); })
+      .catch(() => {});
+  } catch (e) { /* silent */ }
 }
 function _pruneExpiredSubs(endpoints) {
   try {
@@ -3877,6 +3862,93 @@ function _pruneExpiredSubs(endpoints) {
         if (v && endpoints.indexOf(v.endpoint) !== -1) localStorage.removeItem(k); // also clears the cloud row
       } catch (e) {}
     });
+  } catch (e) {}
+}
+
+// Send a push to a set of subscription targets (shared by the triggers below).
+function _pushSend(targets, title, body, url, tag) {
+  try {
+    fetch('/api/push-send', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ subscriptions: targets, title, body: (body || '').slice(0, 140), url: url || '/', tag: tag || 'vi' })
+    })
+      .then(r => r.json())
+      .then(res => { if (res && Array.isArray(res.expired) && res.expired.length) _pruneExpiredSubs(res.expired); })
+      .catch(() => {});
+  } catch (e) {}
+}
+function _pushMeetingWhen(m) {
+  let s = '';
+  try { s = fmtDate(m.date) || ''; } catch (e) {}
+  const t = m.startTime || m.time || '';
+  if (t) {
+    let tt = t;
+    try { if (m.startTime && typeof _fmt12h === 'function') tt = _fmt12h(m.startTime); } catch (e) {}
+    s += (s ? ', ' : '') + tt;
+  }
+  return s;
+}
+// Trigger: a meeting was scheduled -> notify its attendees (except whoever created it).
+async function _pushNotifyMeeting(meeting) {
+  try {
+    if (!meeting || !window.VI_VAPID_PUBLIC) return;
+    const creatorId = meeting.createdBy;
+    const recipientIds = [...new Set((meeting.attendees || []).map(Number))].filter(id => id && id !== creatorId);
+    if (!recipientIds.length) return;
+    const subs = await _fetchSubsFor(recipientIds);
+    const targets = recipientIds.map(id => subs[id]).filter(Boolean);
+    if (!targets.length) return;
+    const creator = getTeamMember(creatorId);
+    const when = _pushMeetingWhen(meeting);
+    const title = 'New meeting: ' + (meeting.title || 'Meeting');
+    const body = (creator ? creator.name + ' scheduled this' : 'Meeting scheduled') + (when ? ' \u2014 ' + when : '');
+    _pushSend(targets, title, body, '/', 'meeting_' + meeting.id);
+  } catch (e) {}
+}
+// Trigger: a meeting needs conflict approval -> notify the conflicted members.
+async function _pushNotifyMeetingApproval(meeting, conflicts) {
+  try {
+    if (!meeting || !window.VI_VAPID_PUBLIC) return;
+    const ids = (conflicts || []).map(c => Number(c.memberId)).filter(Boolean);
+    const recipientIds = [...new Set(ids)].filter(id => id !== meeting.createdBy);
+    if (!recipientIds.length) return;
+    const subs = await _fetchSubsFor(recipientIds);
+    const targets = recipientIds.map(id => subs[id]).filter(Boolean);
+    if (!targets.length) return;
+    const requester = getTeamMember(meeting.createdBy);
+    const title = 'Approval needed';
+    const body = (requester ? requester.name : 'Someone') + ' wants to book \u201c' + (meeting.title || 'a meeting') + '\u201d during your booked time';
+    _pushSend(targets, title, body, '/', 'mtgappr_' + meeting.id);
+  } catch (e) {}
+}
+// Who can approve a project's install date-change: PM lead (fall back to any assigned PM).
+function _installApproverIds(projectId) {
+  try {
+    const a = getProjectAssignment(projectId);
+    let ids = [];
+    const lead = (a.pm || []).find(x => x.lead);
+    if (lead && lead.id != null) ids.push(Number(lead.id));
+    if (!ids.length) (a.pm || []).forEach(x => { if (x.id != null) ids.push(Number(x.id)); });
+    return [...new Set(ids)].filter(Boolean);
+  } catch (e) { return []; }
+}
+// Trigger: an install date-change was requested -> notify the approver(s).
+async function _pushNotifyInstallApproval(projectId) {
+  try {
+    if (!window.VI_VAPID_PUBLIC) return;
+    const req = (typeof getInstallChangeRequest === 'function') ? getInstallChangeRequest(projectId) : null;
+    const requesterId = req ? Number(req.requestedBy) : null;
+    const recipientIds = _installApproverIds(projectId).filter(id => id !== requesterId);
+    if (!recipientIds.length) return;
+    const subs = await _fetchSubsFor(recipientIds);
+    const targets = recipientIds.map(id => subs[id]).filter(Boolean);
+    if (!targets.length) return;
+    const p = state.projects.find(x => x.id === projectId);
+    const requester = getTeamMember(requesterId);
+    const title = 'Approval needed';
+    const body = (requester ? requester.name : 'Someone') + ' requested an install date change' + (p ? ' \u2014 ' + p.name : '');
+    _pushSend(targets, title, body, '/', 'installappr_' + projectId);
   } catch (e) {}
 }
 
@@ -3902,7 +3974,7 @@ async function viTestPush() {
     const text = await r.text();
     if (!r.ok) { alert('Push endpoint error ' + r.status + ':\n' + text.slice(0, 300)); return; }
     let data = null; try { data = JSON.parse(text); } catch (e) {}
-    const tail = '\n\nDevice #' + myId + ' · upload sub to cloud: ' + writeResult;
+    const tail = (writeResult === 'ok (uploaded)') ? '' : ('\n\nNote: ' + writeResult);
     if (data && typeof data.sent === 'number') {
       if (data.sent > 0) alert('Test sent \u2014 watch for the notification.' + tail);
       else alert('Endpoint reachable but sent 0 (VAPID env vars?).' + tail);
@@ -4282,11 +4354,13 @@ function scheduleMeeting() {
   document.querySelectorAll('#mtg-attendees [data-mid]').forEach(el => {
     if (el.classList.contains('selected')) attendees.push(parseInt(el.dataset.mid));
   });
-  state.meetings.push({
+  const _newMtg = {
     id: Date.now(), title, date, time, duration: dur,
     attendees, notes, createdBy: getActiveTeamMemberId(), createdAt: Date.now()
-  });
+  };
+  state.meetings.push(_newMtg);
   save('vi_meetings', state.meetings);
+  _pushNotifyMeeting(_newMtg);
   ['mtg-title','mtg-date','mtg-time','mtg-notes'].forEach(id => {
     const f = document.getElementById(id); if (f) f.value = '';
   });
@@ -4498,7 +4572,6 @@ function renderRightPanelHTML() {
           ${headerSub ? `<div style="font-size:10px;color:${headerColor}">${esc(headerSub)}</div>` : ''}
         </div>
       </div>
-      <div style="font-size:9px;color:#6E7681;padding:3px 8px;background:#0D1117;flex-shrink:0;text-align:center;letter-spacing:0.03em">b:mm14 · sync:${window.VI_SYNC_BUILD||'STALE'} · me #${myId} · ${esc(state.activeConversation)} · cloud:${_lastCloudMsgCount}</div>
       <div id="msg-list" class="rpanel-body" style="flex:1;display:flex;flex-direction:column">
         ${renderMessagesList(state.activeConversation)}
       </div>
@@ -22729,6 +22802,9 @@ function _mpConfirm() {
     };
     save('vi_meeting_approvals', state.meetingApprovals);
   }
+
+  if (status === 'pending_approval') _pushNotifyMeetingApproval(meeting, conflicts);
+  else _pushNotifyMeeting(meeting);
 
   const cb = s.onConfirm;
   const wasReschedule = !!s.replacingMeetingId;
