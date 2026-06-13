@@ -4215,7 +4215,7 @@ function renderMessagesList(channelId) {
       : '';
     lastDate = dateStr;
     return `${dateDivider}
-      <div style="display:flex;flex-direction:${isMe ? 'row-reverse' : 'row'};align-items:flex-end;gap:6px;margin-bottom:8px">
+      <div id="msg-${m.id}" style="display:flex;flex-direction:${isMe ? 'row-reverse' : 'row'};align-items:flex-end;gap:6px;margin-bottom:8px;border-radius:8px">
         ${!isMe ? `<div style="width:26px;height:26px;border-radius:50%;background:${m.senderColor}22;border:1px solid ${m.senderColor}66;display:flex;align-items:center;justify-content:center;font-size:9px;font-weight:600;color:${m.senderColor};flex-shrink:0">${esc(m.senderInitials)}</div>` : ''}
         <div style="max-width:80%">
           ${!isMe ? `<div style="font-size:10px;color:#6E7681;margin-bottom:2px;padding-left:2px">${esc(m.senderName)}</div>` : ''}
@@ -4224,6 +4224,142 @@ function renderMessagesList(channelId) {
         </div>
       </div>`;
   }).join('');
+}
+
+// ── Messages: conversation list + search ──────────────────────────
+// The Team + DM list, factored out so search can swap it in/out live.
+function _convListHTML() {
+  const myId = getActiveTeamMemberId();
+  const teamUnread = getChannelUnread('team');
+  const teamLast = getChannelMessages('team').slice(-1)[0];
+  const teamPreview = teamLast
+    ? (teamLast.senderId === myId ? 'You: ' : '') + teamLast.text.slice(0, 32) + (teamLast.text.length > 32 ? '\u2026' : '')
+    : 'No messages yet';
+  const dms = state.team.filter(m => m.id !== myId).map(m => {
+    const chId = getDMChannelId(myId, m.id);
+    const last = getChannelMessages(chId).slice(-1)[0];
+    const unread = getChannelUnread(chId);
+    const preview = last
+      ? (last.senderId === myId ? 'You: ' : '') + last.text.slice(0, 32) + (last.text.length > 32 ? '\u2026' : '')
+      : 'Start a conversation\u2026';
+    const color = DASHBOARD_ACCESS.find(d => d.key === m.primaryRole)?.color || '#6E7681';
+    return { m, chId, preview, unread, color };
+  });
+  return `
+    <div onclick="openConversation('team')" style="display:flex;align-items:center;gap:10px;padding:10px;border-radius:8px;cursor:pointer;margin-bottom:4px;background:#161B22;border:1px solid #1C2333;-webkit-tap-highlight-color:transparent">
+      <div style="width:36px;height:36px;border-radius:50%;background:#1565C022;border:1.5px solid #1565C0;display:flex;align-items:center;justify-content:center;flex-shrink:0">
+        <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="#58A6FF" stroke-width="1.3"><circle cx="5" cy="6" r="2.5"/><circle cx="11" cy="6" r="2"/><path d="M1 13c0-2.761 1.791-4 4-4s4 1.239 4 4"/><path d="M11 9.5c2 0 3.5.9 3.5 2.5"/></svg>
+      </div>
+      <div style="flex:1;min-width:0">
+        <div style="display:flex;align-items:center;justify-content:space-between">
+          <span style="font-size:13px;font-weight:500;color:#E6EDF3">Team</span>
+          ${teamUnread > 0 ? `<span style="font-size:10px;font-weight:700;padding:1px 6px;border-radius:10px;background:#DA3633;color:#fff">${teamUnread}</span>` : ''}
+        </div>
+        <div style="font-size:11px;color:#6E7681;margin-top:1px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${esc(teamPreview)}</div>
+      </div>
+    </div>
+    <div style="font-size:10px;color:#6E7681;font-weight:600;text-transform:uppercase;letter-spacing:0.06em;padding:8px 4px 4px">Direct Messages</div>
+    ${dms.length === 0 ? '<div style="font-size:12px;color:#6E7681;padding:8px 4px">Add team members to start DMs</div>' :
+      dms.map(({ m, chId, preview, unread, color }) => `
+        <div onclick="openConversation('${chId}')" style="display:flex;align-items:center;gap:10px;padding:10px;border-radius:8px;cursor:pointer;margin-bottom:4px;background:${unread > 0 ? '#0D1626' : 'transparent'};border:1px solid ${unread > 0 ? '#1565C044' : 'transparent'};-webkit-tap-highlight-color:transparent">
+          <div style="width:36px;height:36px;border-radius:50%;background:${color}22;border:1.5px solid ${color}66;display:flex;align-items:center;justify-content:center;font-size:12px;font-weight:600;color:${color};flex-shrink:0">${esc(m.initials || getInitials(m.name))}</div>
+          <div style="flex:1;min-width:0">
+            <div style="display:flex;align-items:center;justify-content:space-between">
+              <span style="font-size:13px;font-weight:${unread > 0 ? '600' : '500'};color:#E6EDF3">${esc(m.name)}</span>
+              ${unread > 0 ? `<span style="font-size:10px;font-weight:700;padding:1px 6px;border-radius:10px;background:#DA3633;color:#fff">${unread}</span>` : ''}
+            </div>
+            <div style="font-size:11px;color:${unread > 0 ? '#C9D1D9' : '#6E7681'};margin-top:1px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${esc(preview)}</div>
+          </div>
+        </div>
+      `).join('')}`;
+}
+
+// Human label for a channel id (extend here when group chats land).
+function _channelLabel(ch, myId) {
+  if (!ch || ch === 'team') return 'Team';
+  if (ch.indexOf('dm_') === 0) {
+    const parts = ch.split('_');
+    const otherId = parseInt(parts[1]) === myId ? parseInt(parts[2]) : parseInt(parts[1]);
+    const other = getTeamMember(otherId);
+    return other ? (other.name || '').split(' ')[0] : 'DM';
+  }
+  return 'Chat';
+}
+
+// Build a short snippet around the first match, with the match highlighted.
+function _highlightSnippet(text, qLower) {
+  const raw = text || '';
+  const lower = raw.toLowerCase();
+  const hit = lower.indexOf(qLower);
+  let start = 0, prefix = '';
+  if (hit > 30) { start = hit - 25; prefix = '\u2026'; }
+  const slice = raw.slice(start, start + 120);
+  const suffix = (start + 120 < raw.length) ? '\u2026' : '';
+  const i = slice.toLowerCase().indexOf(qLower);
+  if (i < 0) return esc(prefix + slice + suffix);
+  const before = slice.slice(0, i);
+  const match = slice.slice(i, i + qLower.length);
+  const after = slice.slice(i + qLower.length);
+  return esc(prefix) + esc(before) + '<mark style="background:#1565C066;color:#E6EDF3;border-radius:2px;padding:0 1px">' + esc(match) + '</mark>' + esc(after) + esc(suffix);
+}
+
+// Results list for the current query (only channels the viewer can see).
+function _msgSearchResultsHTML(query) {
+  const q = (query || '').trim().toLowerCase();
+  if (!q) return _convListHTML();
+  const myId = getActiveTeamMemberId();
+  const matches = state.messages
+    .filter(m => _isMyChannel(m.channelId || 'team', myId) && (m.text || '').toLowerCase().includes(q))
+    .sort((a, b) => b.timestamp - a.timestamp);
+  if (!matches.length) {
+    return `<div style="text-align:center;padding:28px 12px;color:#6E7681;font-size:12px">No messages match \u201c${esc(query)}\u201d.</div>`;
+  }
+  const cap = 60;
+  const shown = matches.slice(0, cap);
+  return `<div style="font-size:10px;color:#6E7681;font-weight:600;text-transform:uppercase;letter-spacing:0.06em;padding:4px 4px 6px">${matches.length} result${matches.length === 1 ? '' : 's'}</div>` +
+    shown.map(m => {
+      const ch = m.channelId || 'team';
+      const dt = new Date(m.timestamp);
+      const when = dt.toLocaleDateString('en-US', { month: 'short', day: 'numeric' }) + ' \u00b7 ' + dt.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' });
+      const snippet = _highlightSnippet(m.text, q);
+      return `<div onclick="_openSearchHit('${ch}', ${m.id})" style="padding:9px 10px;border-radius:8px;cursor:pointer;margin-bottom:4px;background:#161B22;border:1px solid #1C2333;-webkit-tap-highlight-color:transparent">
+        <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:3px">
+          <span style="font-size:12px;font-weight:600;color:#E6EDF3;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${esc(m.senderName || '')}</span>
+          <span style="font-size:9px;color:#6E7681;flex-shrink:0">${esc(_channelLabel(ch, myId))} \u00b7 ${when}</span>
+        </div>
+        <div style="font-size:12px;color:#C9D1D9;line-height:1.4;word-break:break-word">${snippet}</div>
+      </div>`;
+    }).join('') +
+    (matches.length > cap ? `<div style="text-align:center;font-size:10px;color:#6E7681;padding:8px">Showing newest ${cap}. Refine to narrow.</div>` : '');
+}
+
+// Live update as the user types (re-renders only the results area, keeps focus).
+function _onMsgSearch(val) {
+  state.msgSearch = val;
+  const area = document.getElementById('msg-conv-area');
+  if (area) area.innerHTML = (val || '').trim() ? _msgSearchResultsHTML(val) : _convListHTML();
+  const clr = document.getElementById('msg-search-clear');
+  if (clr) clr.style.display = (val || '') ? 'flex' : 'none';
+}
+function _clearMsgSearch() {
+  state.msgSearch = '';
+  const inp = document.getElementById('msg-search'); if (inp) inp.value = '';
+  const area = document.getElementById('msg-conv-area'); if (area) area.innerHTML = _convListHTML();
+  const clr = document.getElementById('msg-search-clear'); if (clr) clr.style.display = 'none';
+  if (inp) inp.focus();
+}
+// Open the conversation a search hit lives in, then scroll to + flash that message.
+function _openSearchHit(channelId, msgId) {
+  state.msgSearch = '';
+  openConversation(channelId);
+  setTimeout(() => {
+    const el = document.getElementById('msg-' + msgId);
+    if (el) {
+      el.scrollIntoView({ block: 'center' });
+      el.classList.add('msg-hit-flash');
+      setTimeout(() => el.classList.remove('msg-hit-flash'), 1600);
+    }
+  }, 130);
 }
 
 function injectRightPanel() {
@@ -4236,6 +4372,8 @@ function injectRightPanel() {
       .rpanel-resize:hover{background:linear-gradient(90deg,transparent,#1565C055)}
       #right-panel .rpanel-content{width:calc(var(--rp-w,336px) - 52px)!important}
       .rp-mobile-close{display:none}
+      .msg-hit-flash{animation:msgflash 1.6s ease}
+      @keyframes msgflash{0%{background:#1565C055}100%{background:transparent}}
       @media (max-width:768px){
         #right-panel:not(.rp-mobile-open){display:none!important}
         #right-panel.rp-mobile-open{position:fixed!important;inset:0!important;left:0!important;top:0!important;right:0!important;bottom:0!important;width:100vw!important;height:100%!important;height:100dvh!important;z-index:3000!important;display:block!important;background:#0D1117!important}
@@ -4498,53 +4636,18 @@ function renderRightPanelHTML() {
   let messagesPanel;
 
   if (!state.activeConversation) {
-    const teamUnread = getChannelUnread('team');
-    const teamLast = getChannelMessages('team').slice(-1)[0];
-    const teamPreview = teamLast
-      ? (teamLast.senderId === myId ? 'You: ' : '') + teamLast.text.slice(0, 32) + (teamLast.text.length > 32 ? '…' : '')
-      : 'No messages yet';
-
-    const dms = state.team.filter(m => m.id !== myId).map(m => {
-      const chId = getDMChannelId(myId, m.id);
-      const last = getChannelMessages(chId).slice(-1)[0];
-      const unread = getChannelUnread(chId);
-      const preview = last
-        ? (last.senderId === myId ? 'You: ' : '') + last.text.slice(0, 32) + (last.text.length > 32 ? '…' : '')
-        : 'Start a conversation…';
-      const color = DASHBOARD_ACCESS.find(d => d.key === m.primaryRole)?.color || '#6E7681';
-      return { m, chId, preview, unread, color, last };
-    });
-
+    const _q = (state.msgSearch || '');
     messagesPanel = `
       <div class="rpanel-header"><div class="rpanel-header-title">Messages</div></div>
       <div class="rpanel-body" style="padding:8px">
-        ${(() => { const d = _identityDiag(); return `<div style="font-size:10px;color:${d.warn ? '#F0883E' : '#8B949E'};background:#161B22;border:1px solid ${d.warn ? '#9E6A2E' : '#1C2333'};border-radius:6px;padding:6px 8px;margin-bottom:8px;line-height:1.45">${d.warn ? '⚠ ' : ''}You are <b style="color:#E6EDF3">${esc(d.name)}</b> (#${d.resolvedId}) · ${esc(d.via)}<br>login: ${esc(d.authEmail || '(none)')}</div>`; })()}
-        <div onclick="openConversation('team')" style="display:flex;align-items:center;gap:10px;padding:10px;border-radius:8px;cursor:pointer;margin-bottom:4px;background:#161B22;border:1px solid #1C2333;-webkit-tap-highlight-color:transparent">
-          <div style="width:36px;height:36px;border-radius:50%;background:#1565C022;border:1.5px solid #1565C0;display:flex;align-items:center;justify-content:center;flex-shrink:0">
-            <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="#58A6FF" stroke-width="1.3"><circle cx="5" cy="6" r="2.5"/><circle cx="11" cy="6" r="2"/><path d="M1 13c0-2.761 1.791-4 4-4s4 1.239 4 4"/><path d="M11 9.5c2 0 3.5.9 3.5 2.5"/></svg>
-          </div>
-          <div style="flex:1;min-width:0">
-            <div style="display:flex;align-items:center;justify-content:space-between">
-              <span style="font-size:13px;font-weight:500;color:#E6EDF3">Team</span>
-              ${teamUnread > 0 ? `<span style="font-size:10px;font-weight:700;padding:1px 6px;border-radius:10px;background:#DA3633;color:#fff">${teamUnread}</span>` : ''}
-            </div>
-            <div style="font-size:11px;color:#6E7681;margin-top:1px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${esc(teamPreview)}</div>
-          </div>
+        <div style="position:relative;margin-bottom:8px">
+          <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="#6E7681" stroke-width="1.5" style="position:absolute;left:11px;top:50%;transform:translateY(-50%);pointer-events:none"><circle cx="7" cy="7" r="5"/><path d="M11 11l3 3" stroke-linecap="round"/></svg>
+          <input id="msg-search" type="text" value="${esc(_q)}" placeholder="Search messages\u2026"
+            oninput="_onMsgSearch(this.value)"
+            style="width:100%;box-sizing:border-box;background:#0D1117;border:1px solid #30363D;border-radius:18px;color:#E6EDF3;font-size:16px;font-family:'DM Sans',sans-serif;padding:8px 32px 8px 32px;outline:none">
+          <button id="msg-search-clear" onclick="_clearMsgSearch()" aria-label="Clear search" style="display:${_q ? 'flex' : 'none'};position:absolute;right:8px;top:50%;transform:translateY(-50%);background:#21262D;border:none;color:#C9D1D9;width:20px;height:20px;border-radius:50%;align-items:center;justify-content:center;font-size:13px;line-height:1;cursor:pointer;-webkit-tap-highlight-color:transparent">\u00d7</button>
         </div>
-        <div style="font-size:10px;color:#6E7681;font-weight:600;text-transform:uppercase;letter-spacing:0.06em;padding:8px 4px 4px">Direct Messages</div>
-        ${dms.length === 0 ? '<div style="font-size:12px;color:#6E7681;padding:8px 4px">Add team members to start DMs</div>' :
-          dms.map(({ m, chId, preview, unread, color }) => `
-            <div onclick="openConversation('${chId}')" style="display:flex;align-items:center;gap:10px;padding:10px;border-radius:8px;cursor:pointer;margin-bottom:4px;background:${unread > 0 ? '#0D1626' : 'transparent'};border:1px solid ${unread > 0 ? '#1565C044' : 'transparent'};-webkit-tap-highlight-color:transparent">
-              <div style="width:36px;height:36px;border-radius:50%;background:${color}22;border:1.5px solid ${color}66;display:flex;align-items:center;justify-content:center;font-size:12px;font-weight:600;color:${color};flex-shrink:0">${esc(m.initials || getInitials(m.name))}</div>
-              <div style="flex:1;min-width:0">
-                <div style="display:flex;align-items:center;justify-content:space-between">
-                  <span style="font-size:13px;font-weight:${unread > 0 ? '600' : '500'};color:#E6EDF3">${esc(m.name)}</span>
-                  ${unread > 0 ? `<span style="font-size:10px;font-weight:700;padding:1px 6px;border-radius:10px;background:#DA3633;color:#fff">${unread}</span>` : ''}
-                </div>
-                <div style="font-size:11px;color:${unread > 0 ? '#C9D1D9' : '#6E7681'};margin-top:1px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${esc(preview)}</div>
-              </div>
-            </div>
-          `).join('')}
+        <div id="msg-conv-area">${_q.trim() ? _msgSearchResultsHTML(_q) : _convListHTML()}</div>
       </div>`;
   } else {
     const isTeam = state.activeConversation === 'team';
