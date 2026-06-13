@@ -3706,11 +3706,11 @@ function createGroupChat() {
   if (!name) { alert('Give the chat a name.'); return; }
   const myId = getActiveTeamMemberId();
   const memberIds = [myId];
-  document.querySelectorAll('#grp-members .qt-chip.active').forEach(el => {
+  document.querySelectorAll('#grp-members [data-on="1"]').forEach(el => {
     const id = parseInt(el.dataset.id); if (id && !memberIds.includes(id)) memberIds.push(id);
   });
   const projectIds = [];
-  document.querySelectorAll('#grp-projects .qt-chip.active').forEach(el => {
+  document.querySelectorAll('#grp-projects [data-on="1"]').forEach(el => {
     const pid = parseInt(el.dataset.pid); if (pid) projectIds.push(pid);
   });
   if (memberIds.length < 2 && projectIds.length === 0) { alert('Add at least one other person, or link a project.'); return; }
@@ -3721,12 +3721,31 @@ function createGroupChat() {
   state.composingGroup = false;
   openConversation(id);
 }
+function _grpToggle(el) {
+  if (el.getAttribute('data-on') === '1') {
+    el.setAttribute('data-on', '0');
+    el.style.background = '#161B22'; el.style.borderColor = '#30363D'; el.style.color = '#C9D1D9';
+  } else {
+    el.setAttribute('data-on', '1');
+    el.style.background = '#1565C0'; el.style.borderColor = '#1565C0'; el.style.color = '#fff';
+  }
+}
+function _grpFilter(containerId, val) {
+  const q = (val || '').trim().toLowerCase();
+  document.querySelectorAll('#' + containerId + ' .grp-chip').forEach(el => {
+    const name = el.getAttribute('data-name') || '';
+    el.style.display = (!q || name.indexOf(q) !== -1) ? 'inline-block' : 'none';
+  });
+}
 function _groupComposerHTML() {
   const myId = getActiveTeamMemberId();
   const me = getTeamMember(myId);
-  const others = (state.team || []).filter(m => m.id !== myId);
+  const others = (state.team || []).filter(m => m.id !== myId)
+    .slice().sort((a, b) => (a.name || '').localeCompare(b.name || ''));
   const projects = (state.projects || []).filter(p => !(state.archived || {})[p.id])
     .slice().sort((a, b) => (a.name || '').localeCompare(b.name || ''));
+  const chip = 'display:inline-block;padding:6px 11px;border-radius:14px;border:1px solid #30363D;background:#161B22;color:#C9D1D9;font-size:13px;cursor:pointer;-webkit-tap-highlight-color:transparent;user-select:none';
+  const srch = "width:100%;box-sizing:border-box;background:#0D1117;border:1px solid #30363D;border-radius:8px;color:#E6EDF3;font-size:16px;font-family:'DM Sans',sans-serif;padding:7px 10px;outline:none;margin-bottom:7px";
   return `
     <div class="rpanel-header" style="gap:8px">
       <button onclick="closeGroupComposer()" style="background:none;border:none;color:#6E7681;cursor:pointer;padding:4px;display:flex;align-items:center;-webkit-tap-highlight-color:transparent">
@@ -3740,15 +3759,17 @@ function _groupComposerHTML() {
         <input class="form-input" id="grp-name" placeholder="e.g. Grace Cathedral crew" style="font-size:16px">
       </div>
       <div class="form-group">
-        <label class="form-label">Members <span style="color:#6E7681;font-weight:400;text-transform:none;letter-spacing:0">(${esc((me?.name || 'you').split(' ')[0])} included)</span></label>
-        <div id="grp-members" style="display:flex;flex-wrap:wrap;gap:5px">
-          ${others.map(m => `<span class="qt-chip" data-id="${m.id}" onclick="this.classList.toggle('active')">${esc((m.name || '').split(' ')[0])}</span>`).join('')}
+        <label class="form-label">Members <span style="color:#6E7681;font-weight:400;text-transform:none;letter-spacing:0">(${esc((me?.name || 'you').split(' ')[0])} included — tap to add others)</span></label>
+        ${others.length > 6 ? `<input id="grp-mem-search" oninput="_grpFilter('grp-members', this.value)" placeholder="Search people…" style="${srch}">` : ''}
+        <div id="grp-members" style="display:flex;flex-wrap:wrap;gap:6px">
+          ${others.length ? others.map(m => `<span class="grp-chip" data-id="${m.id}" data-name="${esc((m.name || '').toLowerCase())}" data-on="0" onclick="_grpToggle(this)" style="${chip}">${esc((m.name || '').split(' ')[0])}</span>`).join('') : '<span style="font-size:12px;color:#6E7681">No other team members</span>'}
         </div>
       </div>
       <div class="form-group">
         <label class="form-label">Link projects <span style="color:#6E7681;font-weight:400;text-transform:none;letter-spacing:0">(optional — anyone on a linked project can see &amp; post)</span></label>
-        <div id="grp-projects" style="display:flex;flex-wrap:wrap;gap:5px;max-height:170px;overflow:auto">
-          ${projects.length ? projects.map(p => `<span class="qt-chip" data-pid="${p.id}" onclick="this.classList.toggle('active')">${esc(p.name || ('Project ' + p.id))}</span>`).join('') : '<span style="font-size:12px;color:#6E7681">No active projects</span>'}
+        <input id="grp-proj-search" oninput="_grpFilter('grp-projects', this.value)" placeholder="Search projects…" style="${srch}">
+        <div id="grp-projects" style="display:flex;flex-wrap:wrap;gap:6px;max-height:180px;overflow:auto">
+          ${projects.length ? projects.map(p => `<span class="grp-chip" data-pid="${p.id}" data-name="${esc((p.name || '').toLowerCase())}" data-on="0" onclick="_grpToggle(this)" style="${chip}">${esc(p.name || ('Project ' + p.id))}</span>`).join('') : '<span style="font-size:12px;color:#6E7681">No active projects</span>'}
         </div>
       </div>
       <button class="btn-primary" onclick="createGroupChat()" style="width:100%;padding:10px;font-size:13px;margin-top:4px">Create chat</button>
