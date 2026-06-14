@@ -2839,6 +2839,9 @@ function toggleMoreMenu() {
 function navigate(page) {
   state.currentPage = page;
   state.currentProject = null;
+  // Home/Dashboard nav exits the Notepad sub-view (the in-page "Dashboard" pill
+  // already did this; the bottom-nav Home button did not).
+  if (page === 'dashboard') state.myWorkLayout = 'cards';
   document.getElementById('more-menu')?.remove();
   if (typeof removeTopbarBackButton === 'function') removeTopbarBackButton();
   document.querySelectorAll('.nav-item').forEach(el => {
