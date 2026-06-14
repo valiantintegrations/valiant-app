@@ -13146,6 +13146,9 @@ function debouncedSaveSiteNotes(projectId, value) {
 function openSiteBriefing(projectId) {
   const p = state.projects.find(pr => pr.id === projectId);
   if (!p) return;
+  // Open the print window FIRST — the immediate result of the click — so popup
+  // blockers don't kill it. Doing the prep work before window.open made it "hit or miss".
+  const briefingWindow = window.open('', '_blank', 'width=900,height=1100');
   const address = getProjectAddressString(p);
   const pins = getProjectPins(projectId);
   const siteNotes = getProjectSiteNotes(projectId);
@@ -13169,12 +13172,6 @@ function openSiteBriefing(projectId) {
 
   const pinTypeMap = {};
   PIN_TYPES.forEach(pt => { pinTypeMap[pt.key] = pt; });
-
-  const briefingWindow = window.open('', '_blank', 'width=900,height=1100');
-  if (!briefingWindow) {
-    alert('Popup blocked. Please allow popups for this site to print briefings.');
-    return;
-  }
 
   const installWindowLine = win
     ? `${fmtDate(win.start)}${win.end && win.end !== win.start ? ' – ' + fmtDate(win.end) : ''} <span style="color:#888;font-size:10pt">(${win.source === 'booked' ? 'Booked' : 'Estimated'})</span>`
@@ -13403,8 +13400,34 @@ function openSiteBriefing(projectId) {
 </body>
 </html>`;
 
-  briefingWindow.document.write(html);
-  briefingWindow.document.close();
+  if (briefingWindow) {
+    briefingWindow.document.open();
+    briefingWindow.document.write(html);
+    briefingWindow.document.close();
+    return;
+  }
+
+  // Popup was blocked (common in the iOS standalone PWA / strict blockers) —
+  // fall back to a hidden iframe and print directly, so the briefing still works.
+  document.getElementById('briefing-print-frame')?.remove();
+  const _frame = document.createElement('iframe');
+  _frame.id = 'briefing-print-frame';
+  _frame.setAttribute('aria-hidden', 'true');
+  _frame.style.cssText = 'position:fixed;left:-9999px;top:0;width:1px;height:1px;opacity:0;border:0';
+  document.body.appendChild(_frame);
+  const _fdoc = _frame.contentWindow.document;
+  _fdoc.open(); _fdoc.write(html); _fdoc.close();
+  const _printFrame = () => { try { _frame.contentWindow.focus(); _frame.contentWindow.print(); } catch (e) {} };
+  const _ready = () => {
+    const imgs = Array.from(_fdoc.images || []);
+    const pending = imgs.filter(im => !im.complete);
+    if (!pending.length) { setTimeout(_printFrame, 200); return; }
+    let n = 0, fired = false;
+    const done = () => { if (++n >= pending.length && !fired) { fired = true; setTimeout(_printFrame, 200); } };
+    pending.forEach(im => { im.addEventListener('load', done); im.addEventListener('error', done); });
+    setTimeout(() => { if (!fired) { fired = true; _printFrame(); } }, 3000);
+  };
+  if (_fdoc.readyState === 'complete') _ready(); else _frame.onload = _ready;
 }
 
 // Build the Static Maps image URL with pins overlaid
