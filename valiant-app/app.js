@@ -2905,8 +2905,33 @@ function _ensureMobileFitStyles() {
   `;
   document.head.appendChild(st);
 }
+function _ensurePhaseFocusStyles() {
+  if (document.getElementById('vi-phase-focus')) return;
+  const st = document.createElement('style');
+  st.id = 'vi-phase-focus';
+  // Focus+context: completed/upcoming phase labels shrink to abbreviations; the
+  // phase(s) currently in progress grow to stay readable. Space is grow-weighted,
+  // so wider screens reveal more text. The progress BAR stays proportional.
+  st.textContent = `
+    .pmap-labels-focus { display: flex; gap: 5px; align-items: flex-start; }
+    .pmap-labels-focus .pmap-label { width: auto; min-width: 0; overflow: hidden; padding: 5px 0 0; text-align: left; }
+    .pmap-labels-focus .pmap-label.pmap-done,
+    .pmap-labels-focus .pmap-label.pmap-future { flex: 1 1 0; }
+    .pmap-labels-focus .pmap-label.pmap-active { flex: 5 1 0; }
+    .pmap-labels-focus .pmap-label-name { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .pmap-labels-focus .pmap-label.pmap-future .pmap-label-name { opacity: 0.6; }
+
+    .ready-sublabels-focus { display: flex; gap: 6px; }
+    .ready-sublabels-focus .ready-sales-sublabel { width: auto; min-width: 0; }
+    .ready-sublabels-focus .rsl-done,
+    .ready-sublabels-focus .rsl-future { flex: 1 1 0; }
+    .ready-sublabels-focus .rsl-active { flex: 5 1 0; }
+  `;
+  document.head.appendChild(st);
+}
 function renderCurrentPage() {
   _ensureMobileFitStyles();
+  _ensurePhaseFocusStyles();
   const c = document.getElementById('content');
   if (!c) return;
   // Cleanup any lingering floating tooltips before re-rendering. Defensive —
@@ -8156,12 +8181,13 @@ function renderProjectOverviewHTML(p) {
             `;
           }).join('')}
         </div>
-        <div class="pmap-labels">
+        <div class="pmap-labels pmap-labels-focus">
           ${phaseData.map(d => {
-            const width = (d.totalMilestones / totalMilestones) * 100;
+            const st = d.pct >= 1 ? 'done' : (d.pct > 0 ? 'active' : 'future');
+            const col = st === 'future' ? '#6E7681' : d.phase.color;
             return `
-              <div class="pmap-label" style="width:${width}%">
-                <div class="pmap-label-name" style="color:${d.pct >= 1 ? d.phase.color : '#8B949E'}">${d.phase.label}</div>
+              <div class="pmap-label pmap-${st}">
+                <div class="pmap-label-name" style="color:${col}">${d.phase.label}</div>
               </div>
             `;
           }).join('')}
@@ -8196,11 +8222,11 @@ function renderProjectOverviewHTML(p) {
                 `;
               }).join('')}
             </div>
-            <div class="ready-sales-sublabels">
+            <div class="ready-sales-sublabels ready-sublabels-focus">
               ${serialBeforeParallel.map(d => {
-                const w = (d.totalMilestones / salesMilestones) * 100;
+                const st = d.pct >= 1 ? 'done' : (d.pct > 0 ? 'active' : 'future');
                 return `
-                  <div class="ready-sales-sublabel" style="width:${w}%;color:${d.pct >= 1 ? d.phase.color : '#6E7681'}">
+                  <div class="ready-sales-sublabel rsl-${st}" style="color:${d.pct >= 1 ? d.phase.color : '#6E7681'}">
                     <span>${d.phase.label}</span>
                     <span class="ready-sales-sublabel-pct">${Math.round(d.pct * 100)}%</span>
                   </div>
