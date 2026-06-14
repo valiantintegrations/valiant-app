@@ -5598,6 +5598,15 @@ const WIDGETS = [
     scopes: ['mine'],
     render: (ctx) => renderPendingApprovalsCard()
   },
+  {
+    id: 'photo_approvals',
+    label: 'Photo Approvals',
+    defaultSpan: 6,
+    minSpan: 4,
+    scopes: ['mine'],
+    availableTo: () => (getActiveUserBundleKey() === 'install_admin' || currentUserHasPermission('admin.system')),
+    render: (ctx) => renderPhotoApprovalsCard()
+  },
   // Role-section widgets — one per assignment role. Each renders only when
   // the user has assignments in that role. Hidden cells are filtered out
   // automatically by the grid render.
@@ -5676,6 +5685,7 @@ const DASHBOARDS = {
       { id: 'on_site',           order: 5, span: 12, hidden: false },
       { id: 'back_of_house',     order: 6, span: 12, hidden: false },
       { id: 'pending_approvals', order: 7, span: 6,  hidden: false },
+      { id: 'photo_approvals',   order: 7.5, span: 6,  hidden: false },
       { id: 'crew_scheduling',   order: 8, span: 12, hidden: false },
       { id: 'role_sales',        order: 9, span: 12, hidden: false },
       { id: 'role_design',       order: 10, span: 12, hidden: false },
@@ -6624,7 +6634,7 @@ function getNotepadItemsForMember(memberId) {
         subs.forEach(sub => {
           const ids = (sub.assigneeIds && sub.assigneeIds.length) ? sub.assigneeIds : (t.assigneeIds || []);
           if (ids.includes(memberId)) {
-            add(t.projectId, { taskId: t.id, subId: sub.id, phase, title: sub.title, parent: t.title, done: !!sub.done, date: sub.date || null, photoRequired: !!sub.photoRequired, photo: sub.photo || null });
+            add(t.projectId, { taskId: t.id, subId: sub.id, phase, title: sub.title, parent: t.title, done: !!sub.done, date: sub.date || null, photoRequired: !!sub.photoRequired, photo: sub.photo || null, photoReview: sub.photoReview || null });
           }
         });
       } else if ((t.assigneeIds || []).includes(memberId)) {
@@ -6702,10 +6712,10 @@ function renderMyWorkNotepad(memberId) {
     const lines = g.lines.map(ln => {
       const isAction = ln.type === 'action';
       const rowClick = (p.id != null) ? (isAction ? `openProject(${p.id})` : `openProject(${p.id}, '${ln.phase === 'design' ? 'design' : 'install'}', 'task-${ln.taskId}')`) : '';
-      const photoGated = !isAction && ln.photoRequired && !ln.photo;
+      const photoGated = !isAction && ln.photoRequired && !_photoApproved(ln);
       const checkHandler = isAction
         ? `completeAction('${ln.key}')`
-        : (photoGated ? `showToast('Upload a completion photo first','info')` : `${ln.subId != null ? `toggleSubtaskDone(${ln.taskId}, ${ln.subId})` : `toggleTaskDone(${ln.taskId})`}; renderCurrentPage()`);
+        : (photoGated ? `showToast('Photo must be approved first','info')` : `${ln.subId != null ? `toggleSubtaskDone(${ln.taskId}, ${ln.subId})` : `toggleTaskDone(${ln.taskId})`}; renderCurrentPage()`);
       const photoAff = (!isAction && ln.photoRequired)
         ? (ln.photo
             ? `<a class="np-photo" href="${esc(ln.photo)}" target="_blank" rel="noopener" onclick="event.stopPropagation()" title="View completion photo">📷</a>`
@@ -6936,7 +6946,7 @@ function _gatherOnSite(memberId) {
     if (subs.length) {
       subs.forEach(sub => {
         const ids = (sub.assigneeIds && sub.assigneeIds.length) ? sub.assigneeIds : (t.assigneeIds || []);
-        if (ids.includes(memberId)) add(t.projectId, { type: 'task', taskId: t.id, subId: sub.id, phase: 'install', title: sub.title, parent: t.title, done: !!sub.done, date: sub.date || null, photoRequired: !!sub.photoRequired, photo: sub.photo || null });
+        if (ids.includes(memberId)) add(t.projectId, { type: 'task', taskId: t.id, subId: sub.id, phase: 'install', title: sub.title, parent: t.title, done: !!sub.done, date: sub.date || null, photoRequired: !!sub.photoRequired, photo: sub.photo || null, photoReview: sub.photoReview || null });
       });
     } else if ((t.assigneeIds || []).includes(memberId)) {
       const dr = getTaskDateRange(t);
@@ -6965,7 +6975,7 @@ function _gatherBackOfHouse(memberId) {
     if (subs.length) {
       subs.forEach(sub => {
         const ids = (sub.assigneeIds && sub.assigneeIds.length) ? sub.assigneeIds : (t.assigneeIds || []);
-        if (ids.includes(memberId)) { const g = ensure(t.projectId); if (g) g.lines.push({ type: 'task', taskId: t.id, subId: sub.id, phase: 'design', title: sub.title, parent: t.title, done: !!sub.done, date: sub.date || null, photoRequired: !!sub.photoRequired, photo: sub.photo || null }); }
+        if (ids.includes(memberId)) { const g = ensure(t.projectId); if (g) g.lines.push({ type: 'task', taskId: t.id, subId: sub.id, phase: 'design', title: sub.title, parent: t.title, done: !!sub.done, date: sub.date || null, photoRequired: !!sub.photoRequired, photo: sub.photo || null, photoReview: sub.photoReview || null }); }
       });
     } else if ((t.assigneeIds || []).includes(memberId)) {
       const dr = getTaskDateRange(t);
@@ -7023,9 +7033,9 @@ function _renderWorkBucket(memberId, bucketId, title, groups) {
         cb = `<span class="mt-cb${ln.done ? ' done' : ''}" onclick="event.stopPropagation(); completeAction('${ln.key}'); renderCurrentPage()">${ln.done ? check : ''}</span>`;
       } else {
         tag = ln.phase === 'design' ? 'Design' : 'Install'; tagCls = 'mt-' + ln.phase;
-        const photoGated = ln.photoRequired && !ln.photo;
+        const photoGated = ln.photoRequired && !_photoApproved(ln);
         const handler = photoGated
-          ? `showToast('Upload a completion photo first','info')`
+          ? `showToast('Photo must be approved first','info')`
           : `${ln.subId != null ? `toggleSubtaskDone(${ln.taskId}, ${ln.subId})` : `toggleTaskDone(${ln.taskId})`}; renderCurrentPage()`;
         rowClick = p.id != null ? `openProject(${p.id}, '${ln.phase === 'design' ? 'design' : 'install'}', 'task-${ln.taskId}')` : '';
         cb = `<span class="mt-cb${ln.done ? ' done' : ''}${photoGated ? ' gated' : ''}" onclick="event.stopPropagation(); ${handler}">${ln.done ? check : ''}</span>`;
@@ -7037,7 +7047,7 @@ function _renderWorkBucket(memberId, bucketId, title, groups) {
           <div style="flex:1;min-width:0">
             <div class="mt-line-title">${esc(ln.title)}</div>
             <div class="mt-line-meta">${meta}</div>
-            ${ln.photoRequired ? _photoCardHTML(ln.taskId, ln.subId, ln.photo) : ''}
+            ${ln.photoRequired ? _photoCardHTML(ln.taskId, ln.subId, ln.photo, ln.photoReview) : ''}
           </div>
           ${cdHtml(ln)}
           ${rowClick ? `<span class="mt-goproj" onclick="event.stopPropagation();${rowClick}" title="Open in project"><svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M5 3l4 4-4 4" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></svg></span>` : ''}
@@ -8869,12 +8879,12 @@ function renderProjectTasksSection(p) {
   function subtaskRow(t, s, rowIdx) {
     const isEditing = window._editingTaskId === t.id;
     const isSelected = isEditing && window._selectedSubtaskIds.has(s.id);
-    const photoGated = s.photoRequired && !s.photo;
+    const photoGated = s.photoRequired && !_photoApproved(s);
     const checkClickHandler = photoGated
-      ? `event.stopPropagation();showToast('Upload a completion photo first','info')`
+      ? `event.stopPropagation();showToast('Photo must be approved first','info')`
       : `event.stopPropagation();toggleInstallSubtaskDone(${t.id},${s.id});renderCurrentPage()`;
     const checkClasses = `itask-check${photoGated ? ' is-gated' : ''}`;
-    const photoBadge = s.photoRequired ? _photoCardHTML(t.id, s.id, s.photo) : '';
+    const photoBadge = s.photoRequired ? _photoCardHTML(t.id, s.id, s.photo, s.photoReview) : '';
 
     if (!isEditing) {
       // Normal display mode
@@ -9076,12 +9086,12 @@ function renderProjectDesignTasksSection(p) {
   function subtaskRow(t, s, rowIdx) {
     const isEditing = window._editingTaskId === t.id;
     const isSelected = isEditing && window._selectedSubtaskIds.has(s.id);
-    const photoGated = s.photoRequired && !s.photo;
+    const photoGated = s.photoRequired && !_photoApproved(s);
     const checkClickHandler = photoGated
-      ? `event.stopPropagation();showToast('Upload a completion photo first','info')`
+      ? `event.stopPropagation();showToast('Photo must be approved first','info')`
       : `event.stopPropagation();toggleSubtaskDone(${t.id},${s.id});renderCurrentPage()`;
     const checkClasses = `itask-check${photoGated ? ' is-gated' : ''}`;
-    const photoBadge = s.photoRequired ? _photoCardHTML(t.id, s.id, s.photo) : '';
+    const photoBadge = s.photoRequired ? _photoCardHTML(t.id, s.id, s.photo, s.photoReview) : '';
 
     if (!isEditing) {
       return `
@@ -9488,6 +9498,8 @@ function _ensurePhotoCardStyles() {
     .photo-card{display:flex;align-items:center;gap:10px;margin-top:6px;padding:7px 9px;border-radius:8px;background:#0D1117;border:1px solid #30363D;max-width:340px}
     .photo-card.req{border-color:#9E6A03;background:#1A150D}
     .photo-card.has{border-color:rgba(35,134,54,0.6);background:#0D1F0D}
+    .photo-card.pending{border-color:#9E6A03;background:#1A150D}
+    .photo-card.rejected{border-color:#5A1F1F;background:#1A0D0D}
     .photo-card-thumb{flex:0 0 auto;display:block}
     .photo-card-thumb img{width:42px;height:42px;border-radius:6px;object-fit:cover;display:block;border:1px solid #30363D}
     .photo-card-main{min-width:0;flex:1}
@@ -9501,8 +9513,35 @@ function _ensurePhotoCardStyles() {
   document.head.appendChild(st);
 }
 // Photo-required card: shows status + view/replace/delete (or upload when missing).
-function _photoCardHTML(taskId, subId, photo) {
+function _photoCardHTML(taskId, subId, photo, review) {
   _ensurePhotoCardStyles();
+  const _pst = (review && review.status) ? review.status : null;
+  if (photo && _pst === 'pending') {
+    return `<div class="photo-card pending" onclick="event.stopPropagation()">
+      <a href="${esc(photo)}" target="_blank" rel="noopener" class="photo-card-thumb" title="View photo"><img src="${esc(photo)}" alt="completion photo"></a>
+      <div class="photo-card-main">
+        <div class="photo-card-label" style="color:#D29922">⏳ Awaiting approval</div>
+        <div class="photo-card-actions">
+          <a href="${esc(photo)}" target="_blank" rel="noopener" class="photo-card-btn">View</a>
+          <button class="photo-card-btn" onclick="_uploadSubtaskPhoto(${taskId}, ${subId})">Replace</button>
+        </div>
+      </div>
+    </div>`;
+  }
+  if (photo && _pst === 'rejected') {
+    const _rr = (review && review.reason) ? review.reason : '';
+    return `<div class="photo-card rejected" onclick="event.stopPropagation()">
+      <a href="${esc(photo)}" target="_blank" rel="noopener" class="photo-card-thumb" title="View photo"><img src="${esc(photo)}" alt="completion photo"></a>
+      <div class="photo-card-main">
+        <div class="photo-card-label" style="color:#F85149">✖ Rejected — redo</div>
+        ${_rr ? `<div style="font-size:11px;color:#F85149;margin-top:2px">${esc(_rr)}</div>` : ''}
+        <div class="photo-card-actions">
+          <a href="${esc(photo)}" target="_blank" rel="noopener" class="photo-card-btn">View</a>
+          <button class="photo-card-btn amber" onclick="_uploadSubtaskPhoto(${taskId}, ${subId})">Re-upload</button>
+        </div>
+      </div>
+    </div>`;
+  }
   if (photo) {
     return `<div class="photo-card has" onclick="event.stopPropagation()">
       <a href="${esc(photo)}" target="_blank" rel="noopener" class="photo-card-thumb" title="View photo"><img src="${esc(photo)}" alt="completion photo"></a>
@@ -9524,6 +9563,126 @@ function _photoCardHTML(taskId, subId, photo) {
       </div>
     </div>
   </div>`;
+}
+// ── Photo approval queue ──────────────────────────────────
+// A required completion photo enters 'pending' review on upload. Approvers
+// (Install Manager + Master Admin) approve (marks the step done) or reject
+// with a reason (sends it back for a redo). Photos with no review object are
+// grandfathered as approved so existing data isn't disturbed.
+function _photoApproved(o){ return !!(o && o.photo && (!o.photoReview || o.photoReview.status === 'approved')); }
+function _photoPending(o){ return !!(o && o.photo && o.photoReview && o.photoReview.status === 'pending'); }
+function _photoRejected(o){ return !!(o && o.photoReview && o.photoReview.status === 'rejected'); }
+
+function _isPhotoApprover(){
+  const bk = (typeof getActiveUserBundleKey === 'function') ? getActiveUserBundleKey() : null;
+  return bk === 'install_admin' || currentUserHasPermission('admin.system');
+}
+function _photoApproverIds(){
+  const out = [];
+  (state.team || []).forEach(m => {
+    const b = state.userPermissions?.[m.id]?.bundle;
+    if (b === 'install_admin' || b === 'master_admin') out.push(m.id);
+  });
+  return [...new Set(out)];
+}
+function _getPendingPhotoApprovals(){
+  const items = [];
+  const scan = (store, phase) => (store || []).forEach(t => (t.subtasks || []).forEach(sub => {
+    if (sub.photoRequired && _photoPending(sub)) items.push({
+      projectId: t.projectId, taskId: t.id, subId: sub.id, phase,
+      taskTitle: t.title || '', subTitle: sub.title || '',
+      photo: sub.photo, assigneeIds: sub.assigneeIds || [], at: sub.photoReview?.at || null
+    });
+  }));
+  scan(state.installTasks, 'install');
+  scan(state.designTasks, 'design');
+  items.sort((a,b) => (a.at || '').localeCompare(b.at || ''));
+  return items;
+}
+function _findSubForReview(taskId, subId){
+  const t = _getTaskByIdAnyPhase(taskId);
+  if (!t) return null;
+  const sub = (t.subtasks || []).find(x => x.id === subId);
+  if (!sub) return null;
+  return { t, sub, persist: () => {
+    if (_getTaskPhase(taskId) === 'design') save('vi_design_tasks', state.designTasks);
+    else save('vi_install_tasks', state.installTasks);
+  }};
+}
+function _approvePhoto(taskId, subId){
+  const r = _findSubForReview(taskId, subId);
+  if (!r) { showToast('Step not found', 'error'); return; }
+  r.sub.photoReview = { status: 'approved', by: getActiveTeamMemberId(), at: new Date().toISOString(), reason: null };
+  r.sub.done = true;
+  r.persist();
+  showToast('Photo approved', 'success');
+  try { _notifyPhotoDecision(r.t, r.sub, 'approved', ''); } catch (e) {}
+  renderCurrentPage();
+}
+function _rejectPhoto(taskId, subId){
+  const reason = (prompt('Reason for rejection (sent to the installer):', '') || '').trim();
+  const r = _findSubForReview(taskId, subId);
+  if (!r) { showToast('Step not found', 'error'); return; }
+  r.sub.photoReview = { status: 'rejected', by: getActiveTeamMemberId(), at: new Date().toISOString(), reason: reason || null };
+  r.sub.done = false;
+  r.persist();
+  showToast('Photo rejected — sent back', 'info');
+  try { _notifyPhotoDecision(r.t, r.sub, 'rejected', reason); } catch (e) {}
+  renderCurrentPage();
+}
+async function _notifyPhotoSubmitted(task, sub){
+  try {
+    if (!window.VI_VAPID_PUBLIC) return;
+    const me = getActiveTeamMemberId();
+    const ids = _photoApproverIds().filter(id => id && id !== me);
+    if (!ids.length) return;
+    const subs = await _fetchSubsFor(ids);
+    const targets = ids.map(id => subs[id]).filter(Boolean);
+    if (!targets.length) return;
+    const proj = state.projects.find(p => p.id === task.projectId);
+    const who = getTeamMember(me); const wn = who ? who.name.split(' ')[0] : 'Someone';
+    _pushSend(targets, 'Photo needs approval', wn + ': ' + (sub.title || 'step') + (proj ? ' — ' + proj.name : ''), '/', 'photoapprove_' + sub.id);
+  } catch (e) {}
+}
+async function _notifyPhotoDecision(task, sub, decision, reason){
+  try {
+    if (!window.VI_VAPID_PUBLIC) return;
+    const me = getActiveTeamMemberId();
+    const ids = [...new Set((sub.assigneeIds || []).map(Number))].filter(id => id && id !== me);
+    if (!ids.length) return;
+    const subs = await _fetchSubsFor(ids);
+    const targets = ids.map(id => subs[id]).filter(Boolean);
+    if (!targets.length) return;
+    const title = decision === 'approved' ? 'Photo approved' : 'Photo needs redo';
+    const body = decision === 'approved' ? (sub.title || 'step') : ((sub.title || 'step') + (reason ? ' — ' + reason : ''));
+    _pushSend(targets, title, body, '/', 'photodecision_' + sub.id);
+  } catch (e) {}
+}
+function renderPhotoApprovalsCard(){
+  if (!_isPhotoApprover()) return '';
+  const items = _getPendingPhotoApprovals();
+  if (!items.length) return '';
+  const rows = items.map(it => {
+    const proj = state.projects.find(p => p.id === it.projectId);
+    const color = getProjectColor(it.projectId);
+    const names = (it.assigneeIds || []).map(id => { const m = getTeamMember(id); return m ? m.name.split(' ')[0] : null; }).filter(Boolean).join(', ');
+    return `
+      <div style="background:#0D1117;border:1px solid #1C2333;border-radius:6px;padding:10px 12px;margin-bottom:6px;box-shadow:inset 4px 0 0 ${color}">
+        <div style="display:flex;gap:10px;align-items:flex-start">
+          <a href="${esc(it.photo)}" target="_blank" rel="noopener" style="flex:0 0 auto" title="View photo"><img src="${esc(it.photo)}" alt="photo" style="width:46px;height:46px;border-radius:6px;object-fit:cover;border:1px solid #30363D;display:block"></a>
+          <div style="min-width:0;flex:1">
+            <div style="font-size:11px;color:#D29922;font-weight:600;text-transform:uppercase;letter-spacing:0.04em;margin-bottom:2px">Photo review${it.phase === 'design' ? ' · design' : ''}</div>
+            <div style="font-size:13px;color:#E6EDF3;font-weight:500">${esc(it.subTitle || it.taskTitle)}</div>
+            <div style="font-size:11px;color:#8B949E;margin-top:2px">${esc(proj ? proj.name : 'Project')}${names ? ' · ' + esc(names) : ''}</div>
+            <div style="display:flex;gap:6px;margin-top:8px">
+              <button type="button" class="btn btn-sm" onclick="_rejectPhoto(${it.taskId}, ${it.subId})" style="font-size:11px;padding:4px 10px">Reject</button>
+              <button type="button" class="btn-primary" onclick="_approvePhoto(${it.taskId}, ${it.subId})" style="font-size:11px;padding:4px 10px;background:#238636;border-color:#2EA043">Approve</button>
+            </div>
+          </div>
+        </div>
+      </div>`;
+  }).join('');
+  return `<div style="margin-bottom:6px;font-size:11px;color:#8B949E">${items.length} photo${items.length===1?'':'s'} awaiting your approval</div>` + rows;
 }
 function _deleteSubtaskPhoto(taskId, subtaskId) {
   if (!confirm('Delete this completion photo?')) return;
@@ -9555,9 +9714,12 @@ function _uploadSubtaskPhoto(taskId, subtaskId) {
       const sub = (t.subtasks || []).find(x => x.id === subtaskId);
       if (!sub) { showToast('Step not found', 'error'); return; }
       sub.photo = url;
+      sub.photoReview = { status: 'pending', by: null, at: new Date().toISOString(), reason: null };
+      if (sub.done) sub.done = false; // re-enters review; not complete until approved
       if (_getTaskPhase(taskId) === 'design') save('vi_design_tasks', state.designTasks);
       else save('vi_install_tasks', state.installTasks);
-      showToast('Photo attached \u2014 you can check this off now', 'success');
+      showToast('Photo submitted for approval', 'success');
+      try { _notifyPhotoSubmitted(t, sub); } catch (e) {}
       renderCurrentPage();
     } catch (e) { showToast('Upload error', 'error'); }
   };
