@@ -6614,7 +6614,7 @@ function renderMyWorkNotepad(memberId) {
     const arrow = '<svg class="np-arrow" width="13" height="13" viewBox="0 0 14 14" fill="none"><path d="M5 3l4 4-4 4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>';
     const lines = g.lines.map(ln => {
       const isAction = ln.type === 'action';
-      const rowClick = (p.id != null) ? `openProject(${p.id})` : '';
+      const rowClick = (p.id != null) ? (isAction ? `openProject(${p.id})` : `openProject(${p.id}, '${ln.phase === 'design' ? 'design' : 'install'}', 'task-${ln.taskId}')`) : '';
       const photoGated = !isAction && ln.photoRequired && !ln.photo;
       const checkHandler = isAction
         ? `completeAction('${ln.key}')`
@@ -7352,7 +7352,7 @@ function renderMyCalendarCard(memberId) {
             </div>
             <div class="my-cal-day-items">
               ${d.items.slice(0, 3).map(item => `
-                <div class="my-cal-item" style="border-left-color:${item.color}">
+                <div class="my-cal-item" style="border-left-color:${item.color}${(item.type === 'meeting' && item.sourceRef && item.sourceRef.id != null) ? ';cursor:pointer' : ''}"${(item.type === 'meeting' && item.sourceRef && item.sourceRef.id != null) ? ` onclick="event.stopPropagation();openMeetingDetail(${item.sourceRef.id})"` : ''}>
                   <span class="my-cal-item-dot" style="background:${item.color}"></span>
                   <span class="my-cal-item-title">${esc(item.title)}</span>
                   ${item.startTime ? `<span class="my-cal-item-time">${esc(_fmt12hRange(item.startTime, item.endTime))}</span>` : ''}
