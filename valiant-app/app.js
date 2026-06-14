@@ -4596,6 +4596,16 @@ function removeAttach(i) {
   state._pendingAttach.splice(i, 1);
   _renderAttachStrip();
 }
+async function viUploadFile(file, prefix) {
+  const sb = window._sb;
+  if (!sb || !sb.storage) throw new Error('no storage');
+  if (file.size > 25 * 1024 * 1024) { alert((file.name || 'File') + ' is over 25MB.'); return null; }
+  const safe = (file.name || 'file').replace(/[^\w.\-]+/g, '_');
+  const path = (prefix ? prefix + '_' : '') + Date.now() + '_' + Math.floor(Math.random() * 1e6) + '_' + safe;
+  const up = await sb.storage.from('chat-files').upload(path, file, { contentType: file.type || undefined, upsert: false });
+  if (up.error) { alert('Upload failed: ' + (up.error.message || 'unknown')); return null; }
+  return sb.storage.from('chat-files').getPublicUrl(path).data.publicUrl;
+}
 async function viHandleAttach(fileList) {
   const files = Array.from(fileList || []);
   if (!files.length) return;
@@ -8754,7 +8764,7 @@ function renderProjectTasksSection(p) {
     const checkClasses = `itask-check${photoGated ? ' is-gated' : ''}`;
     const photoBadge = s.photoRequired
       ? (s.photo
-          ? `<span class="itask-photo-badge has-photo" title="Photo attached">📷</span>`
+          ? `<a class="itask-photo-badge has-photo" href="${esc(s.photo)}" target="_blank" rel="noopener" onclick="event.stopPropagation()" title="View completion photo">📷</a>`
           : `<button class="itask-photo-btn" onclick="event.stopPropagation();_uploadSubtaskPhoto(${t.id},${s.id})" title="Upload completion photo">📷 Upload photo</button>`)
       : '';
 
@@ -8965,7 +8975,7 @@ function renderProjectDesignTasksSection(p) {
     const checkClasses = `itask-check${photoGated ? ' is-gated' : ''}`;
     const photoBadge = s.photoRequired
       ? (s.photo
-          ? `<span class="itask-photo-badge has-photo" title="Photo attached">📷</span>`
+          ? `<a class="itask-photo-badge has-photo" href="${esc(s.photo)}" target="_blank" rel="noopener" onclick="event.stopPropagation()" title="View completion photo">📷</a>`
           : `<button class="itask-photo-btn" onclick="event.stopPropagation();_uploadSubtaskPhoto(${t.id},${s.id})" title="Upload completion photo">📷 Upload photo</button>`)
       : '';
 
@@ -9367,9 +9377,30 @@ function _subAddRow() {
 // When the backend lands, replace this stub with a real upload that writes
 // the photo and sets s.photo to a real reference.
 function _uploadSubtaskPhoto(taskId, subtaskId) {
-  showToast('Photo upload activates when the backend is connected. The check-off gate is already in place.', 'info');
-  // Optional dev-mode shortcut to test the gate release: hold Shift while clicking.
-  // (We don't implement that here; keeping the stub purely informational.)
+  const sb = window._sb;
+  if (!sb || !sb.storage) { showToast('Photo storage isn\u2019t set up yet.', 'error'); return; }
+  const inp = document.createElement('input');
+  inp.type = 'file';
+  inp.accept = 'image/*';
+  inp.onchange = async () => {
+    const file = inp.files && inp.files[0];
+    if (!file) return;
+    showToast('Uploading photo\u2026', 'info');
+    try {
+      const url = await viUploadFile(file, 'taskphoto');
+      if (!url) return;
+      const t = _getTaskByIdAnyPhase(taskId);
+      if (!t) { showToast('Task not found', 'error'); return; }
+      const sub = (t.subtasks || []).find(x => x.id === subtaskId);
+      if (!sub) { showToast('Step not found', 'error'); return; }
+      sub.photo = url;
+      if (_getTaskPhase(taskId) === 'design') save('vi_design_tasks', state.designTasks);
+      else save('vi_install_tasks', state.installTasks);
+      showToast('Photo attached \u2014 you can check this off now', 'success');
+      renderCurrentPage();
+    } catch (e) { showToast('Upload error', 'error'); }
+  };
+  inp.click();
 }
 
 function _subRemoveRow(i) {
