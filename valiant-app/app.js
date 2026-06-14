@@ -2871,7 +2871,9 @@ function _persistNav() {
     localStorage.setItem('nav_last', JSON.stringify({
       page: state.currentPage,
       projectId: state.currentPage === 'project' ? (state.currentProject?.id ?? null) : null,
-      projectTab: state.currentPage === 'project' ? (state.projectTab || null) : null
+      projectTab: state.currentPage === 'project' ? (state.projectTab || null) : null,
+      rightPanel: state.rightPanel || null,
+      activeConversation: state.rightPanel === 'messages' ? (state.activeConversation || null) : null
     }));
   } catch (e) {}
 }
@@ -4692,6 +4694,7 @@ function updateRightPanel() {
     try { _renderAttachStrip(); } catch (e) {}
   }
   updateBottomNavMsgBadge();
+  try { _persistNav(); } catch (e) {}
 }
 
 // Live unread badge on the mobile bottom-nav Messages button.
@@ -19810,6 +19813,10 @@ async function init() {
         }
       } else if (nav.page !== 'dashboard') {
         state.currentPage = nav.page;
+      }
+      if (nav.rightPanel) {
+        state.rightPanel = nav.rightPanel;
+        if (nav.rightPanel === 'messages') state.activeConversation = nav.activeConversation || null;
       }
     }
   } catch (e) {}
