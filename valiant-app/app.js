@@ -6537,7 +6537,7 @@ function getNotepadItemsForMember(memberId) {
         subs.forEach(sub => {
           const ids = (sub.assigneeIds && sub.assigneeIds.length) ? sub.assigneeIds : (t.assigneeIds || []);
           if (ids.includes(memberId)) {
-            add(t.projectId, { taskId: t.id, subId: sub.id, phase, title: sub.title, parent: t.title, done: !!sub.done, date: sub.date || null });
+            add(t.projectId, { taskId: t.id, subId: sub.id, phase, title: sub.title, parent: t.title, done: !!sub.done, date: sub.date || null, photoRequired: !!sub.photoRequired, photo: sub.photo || null });
           }
         });
       } else if ((t.assigneeIds || []).includes(memberId)) {
@@ -6615,20 +6615,27 @@ function renderMyWorkNotepad(memberId) {
     const lines = g.lines.map(ln => {
       const isAction = ln.type === 'action';
       const rowClick = (p.id != null) ? `openProject(${p.id})` : '';
+      const photoGated = !isAction && ln.photoRequired && !ln.photo;
       const checkHandler = isAction
         ? `completeAction('${ln.key}')`
-        : `${ln.subId != null ? `toggleSubtaskDone(${ln.taskId}, ${ln.subId})` : `toggleTaskDone(${ln.taskId})`}; renderCurrentPage()`;
+        : (photoGated ? `showToast('Upload a completion photo first','info')` : `${ln.subId != null ? `toggleSubtaskDone(${ln.taskId}, ${ln.subId})` : `toggleTaskDone(${ln.taskId})`}; renderCurrentPage()`);
+      const photoAff = (!isAction && ln.photoRequired)
+        ? (ln.photo
+            ? `<a class="np-photo" href="${esc(ln.photo)}" target="_blank" rel="noopener" onclick="event.stopPropagation()" title="View completion photo">📷</a>`
+            : `<button class="np-photo-btn" onclick="event.stopPropagation();_uploadSubtaskPhoto(${ln.taskId}, ${ln.subId})" title="Upload completion photo">📷</button>`)
+        : '';
       const meta = isAction
         ? `<div class="np-line-meta">Action</div>`
         : ((ln.parent || ln.date) ? `<div class="np-line-meta">${ln.parent ? esc(ln.parent) : ''}${ln.parent && ln.date ? ' · ' : ''}${ln.date ? esc(shortDate(ln.date)) : ''}</div>` : '');
       return `
-      <div class="np-line${ln.done ? ' done' : ''}" onclick="${rowClick}">
-        <span class="np-cb${ln.done ? ' done' : ''}" onclick="event.stopPropagation(); ${checkHandler}">${ln.done ? check : ''}</span>
+      <div class="np-line${ln.done ? ' done' : ''}">
+        <span class="np-cb${ln.done ? ' done' : ''}${photoGated ? ' gated' : ''}" onclick="event.stopPropagation(); ${checkHandler}">${ln.done ? check : ''}</span>
         <div style="flex:1;min-width:0">
           <div class="np-line-title">${esc(ln.title)}</div>
           ${meta}
         </div>
-        ${p.id != null ? arrow : ''}
+        ${photoAff}
+        ${p.id != null ? `<span class="np-goproj" onclick="event.stopPropagation();${rowClick}" title="Go to project">${arrow}</span>` : ''}
       </div>`;
     }).join('');
     return `
@@ -6647,13 +6654,13 @@ function renderMyWorkNotepad(memberId) {
   const personalLines = myPersonal.map(t => {
     const proj = t.projectId != null ? (state.projects || []).find(x => x.id === t.projectId) : null;
     return `
-      <div class="np-line${t.done ? ' done' : ''}" onclick="${proj ? `openProject(${proj.id})` : ''}">
+      <div class="np-line${t.done ? ' done' : ''}">
         <span class="np-cb${t.done ? ' done' : ''}" onclick="event.stopPropagation(); toggleTask(${t.id})">${t.done ? check : ''}</span>
         <div style="flex:1;min-width:0">
           <div class="np-line-title">${esc(t.text)}</div>
           ${(proj || t.dueDate) ? `<div class="np-line-meta">${proj ? esc(proj.name) : ''}${proj && t.dueDate ? ' · ' : ''}${t.dueDate ? esc(shortDate(t.dueDate)) : ''}</div>` : ''}
         </div>
-        ${proj ? arrow2 : ''}
+        ${proj ? `<span class="np-goproj" onclick="event.stopPropagation();openProject(${proj.id})" title="Go to project">${arrow2}</span>` : ''}
       </div>`;
   }).join('');
   const personalSection = personalLines ? `
@@ -6678,6 +6685,11 @@ function renderMyWorkNotepad(memberId) {
       .np-group-sub{font-size:11px;color:#6E7681;margin:1px 0 6px}
       .np-line{display:flex;align-items:flex-start;gap:11px;padding:8px 4px;border-bottom:1px solid #161B22;cursor:pointer}
       .np-line:hover{background:#0F141B}
+      .np-goproj{display:flex;align-items:center;justify-content:center;padding:8px 6px;margin:-8px -2px -8px 2px;color:#6E7681;cursor:pointer;flex-shrink:0;-webkit-tap-highlight-color:transparent;border-radius:6px}
+      .np-goproj:hover{color:#58A6FF;background:#161B22}
+      .np-photo{display:flex;align-items:center;text-decoration:none;font-size:14px;padding:4px;flex-shrink:0;-webkit-tap-highlight-color:transparent}
+      .np-photo-btn{background:#1A150D;border:1px solid #9E6A03;color:#D29922;border-radius:6px;font-size:12px;padding:3px 7px;cursor:pointer;flex-shrink:0;-webkit-tap-highlight-color:transparent}
+      .np-cb.gated{border-color:#9E6A03 !important}
       .np-cb{width:18px;height:18px;border-radius:50%;border:1.6px solid #30363D;flex:0 0 auto;display:flex;align-items:center;justify-content:center;margin-top:1px;cursor:pointer}
       .np-cb.done{background:#238636;border-color:#238636}
       .np-line-title{font-size:13px;color:#C9D1D9;line-height:1.4}
