@@ -4551,6 +4551,11 @@ function _isImageAttach(a) {
   if (a.type && a.type.indexOf('image/') === 0) return true;
   return /\.(png|jpe?g|gif|webp|bmp|heic|heif)$/i.test(a.url || a.name || '');
 }
+function _isVideoAttach(a) {
+  if (!a) return false;
+  if (a.type && a.type.indexOf('video/') === 0) return true;
+  return /\.(mp4|mov|m4v|webm|ogg|ogv|avi|mkv)$/i.test(a.url || a.name || '');
+}
 function _attachmentsHTML(m, isMe) {
   const list = (m && m.attachments) || [];
   if (!list.length) return '';
@@ -4558,6 +4563,9 @@ function _attachmentsHTML(m, isMe) {
     const url = a.url || '', name = a.name || 'file';
     if (_isImageAttach(a)) {
       return `<a href="${esc(url)}" target="_blank" rel="noopener" style="display:block;margin-top:4px"><img src="${esc(url)}" alt="${esc(name)}" style="max-width:200px;max-height:220px;border-radius:10px;border:1px solid #30363D;display:block"></a>`;
+    }
+    if (_isVideoAttach(a)) {
+      return `<video src="${esc(url)}" controls playsinline preload="metadata" style="max-width:240px;max-height:280px;border-radius:10px;border:1px solid #30363D;display:block;margin-top:4px;background:#000"></video>`;
     }
     return `<a href="${esc(url)}" target="_blank" rel="noopener" download style="display:flex;align-items:center;gap:8px;margin-top:4px;background:${isMe ? '#1565C0' : '#161B22'};border:1px solid ${isMe ? '#1565C066' : '#30363D'};border-radius:10px;padding:8px 10px;text-decoration:none;max-width:220px">
       <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#A371F7" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink:0"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/></svg>
@@ -4579,7 +4587,7 @@ function _renderAttachStrip() {
   if (!list.length && !state._attachUploading) { el.style.display = 'none'; el.innerHTML = ''; return; }
   el.style.display = 'flex';
   el.innerHTML = list.map((a, i) => `<div style="display:flex;align-items:center;gap:6px;background:#161B22;border:1px solid #30363D;border-radius:8px;padding:4px 4px 4px 8px;max-width:170px">
-      <span style="font-size:11px;color:#C9D1D9;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${_isImageAttach(a) ? '\ud83d\uddbc ' : '\ud83d\udcce '}${esc(a.name || 'file')}</span>
+      <span style="font-size:11px;color:#C9D1D9;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${_isVideoAttach(a) ? '\ud83c\udfac ' : (_isImageAttach(a) ? '\ud83d\uddbc ' : '\ud83d\udcce ')}${esc(a.name || 'file')}</span>
       <button onclick="removeAttach(${i})" aria-label="Remove" style="background:none;border:none;color:#6E7681;cursor:pointer;font-size:14px;line-height:1;padding:2px;-webkit-tap-highlight-color:transparent">\u00d7</button>
     </div>`).join('') + (state._attachUploading ? `<div style="display:flex;align-items:center;color:#6E7681;font-size:11px;padding:4px 8px">Uploading\u2026</div>` : '');
 }
