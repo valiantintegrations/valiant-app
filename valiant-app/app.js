@@ -6940,13 +6940,8 @@ function _renderWorkBucket(memberId, bucketId, title, groups) {
         const handler = photoGated
           ? `showToast('Upload a completion photo first','info')`
           : `${ln.subId != null ? `toggleSubtaskDone(${ln.taskId}, ${ln.subId})` : `toggleTaskDone(${ln.taskId})`}; renderCurrentPage()`;
-        rowClick = p.id != null ? `openProject(${p.id})` : '';
+        rowClick = p.id != null ? `openProject(${p.id}, '${ln.phase === 'design' ? 'design' : 'install'}', 'task-${ln.taskId}')` : '';
         cb = `<span class="mt-cb${ln.done ? ' done' : ''}${photoGated ? ' gated' : ''}" onclick="event.stopPropagation(); ${handler}">${ln.done ? check : ''}</span>`;
-        photoAff = ln.photoRequired
-          ? (ln.photo
-              ? `<a class="mt-photo" href="${esc(ln.photo)}" target="_blank" rel="noopener" onclick="event.stopPropagation()" title="View completion photo">📷</a>`
-              : `<button class="mt-photo-btn" onclick="event.stopPropagation();_uploadSubtaskPhoto(${ln.taskId}, ${ln.subId})" title="Upload completion photo">📷</button>`)
-          : '';
       }
       const meta = `<span class="mt-tag ${tagCls}">${tag}</span>${ln.parent ? ' \u00b7 ' + esc(ln.parent) : ''}${ln.date ? ' \u00b7 ' + esc(shortDate(ln.date)) + (ln.time ? ' ' + esc(ln.time) : '') : ''}`;
       return `
@@ -6955,10 +6950,10 @@ function _renderWorkBucket(memberId, bucketId, title, groups) {
           <div style="flex:1;min-width:0">
             <div class="mt-line-title">${esc(ln.title)}</div>
             <div class="mt-line-meta">${meta}</div>
+            ${ln.photoRequired ? _photoCardHTML(ln.taskId, ln.subId, ln.photo) : ''}
           </div>
-          ${photoAff}
           ${cdHtml(ln)}
-          ${rowClick ? `<span class="mt-goproj" onclick="event.stopPropagation();${rowClick}" title="Open"><svg width="13" height="13" viewBox="0 0 14 14" fill="none"><path d="M5 3l4 4-4 4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg></span>` : `<svg class="mt-arrow" width="13" height="13" viewBox="0 0 14 14" fill="none"><path d="M5 3l4 4-4 4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>`}
+          ${rowClick ? `<span class="mt-goproj" onclick="event.stopPropagation();${rowClick}" title="Open in project"><svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M5 3l4 4-4 4" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></svg></span>` : ''}
         </div>`;
     }).join('');
     return `
@@ -8788,11 +8783,7 @@ function renderProjectTasksSection(p) {
       ? `event.stopPropagation();showToast('Upload a completion photo first','info')`
       : `event.stopPropagation();toggleInstallSubtaskDone(${t.id},${s.id});renderCurrentPage()`;
     const checkClasses = `itask-check${photoGated ? ' is-gated' : ''}`;
-    const photoBadge = s.photoRequired
-      ? (s.photo
-          ? `<a class="itask-photo-badge has-photo" href="${esc(s.photo)}" target="_blank" rel="noopener" onclick="event.stopPropagation()" title="View completion photo">📷</a>`
-          : `<button class="itask-photo-btn" onclick="event.stopPropagation();_uploadSubtaskPhoto(${t.id},${s.id})" title="Upload completion photo">📷 Upload photo</button>`)
-      : '';
+    const photoBadge = s.photoRequired ? _photoCardHTML(t.id, s.id, s.photo) : '';
 
     if (!isEditing) {
       // Normal display mode
@@ -8804,8 +8795,8 @@ function renderProjectTasksSection(p) {
             <div class="itask-sub-meta">
               ${s.date ? esc(fmtDateLocal(s.date)) : '<span class="itask-nodate">No date</span>'}
               <span class="itask-sub-assignees">${assigneeChips(s.assigneeIds)}</span>
-              ${photoBadge}
             </div>
+            ${photoBadge}
             ${s.notes ? `<div class="itask-sub-notes">${esc(s.notes)}</div>` : ''}
           </div>
           <span class="itask-del" onclick="event.stopPropagation();if(confirm('Delete this step?')){deleteInstallSubtask(${t.id},${s.id});renderCurrentPage();}">×</span>
@@ -8891,7 +8882,7 @@ function renderProjectTasksSection(p) {
       : '';
 
     return `
-      <div class="itask-card${t.done ? ' is-done' : ''}${t.isMilestone ? ' is-milestone' : ''}${isEditing ? ' is-editing' : ''}">
+      <div class="itask-card${t.done ? ' is-done' : ''}${t.isMilestone ? ' is-milestone' : ''}${isEditing ? ' is-editing' : ''}" data-project-anchor="task-${t.id}">
         <div class="itask-head">
           <span class="itask-check itask-check-main" onclick="event.stopPropagation();toggleInstallTaskDone(${t.id});renderCurrentPage()">${t.done ? '✓' : ''}</span>
           <div class="itask-head-body" ${isEditing ? '' : `onclick="openTaskDialog(${p.id},${t.id})"`}>
@@ -8999,11 +8990,7 @@ function renderProjectDesignTasksSection(p) {
       ? `event.stopPropagation();showToast('Upload a completion photo first','info')`
       : `event.stopPropagation();toggleSubtaskDone(${t.id},${s.id});renderCurrentPage()`;
     const checkClasses = `itask-check${photoGated ? ' is-gated' : ''}`;
-    const photoBadge = s.photoRequired
-      ? (s.photo
-          ? `<a class="itask-photo-badge has-photo" href="${esc(s.photo)}" target="_blank" rel="noopener" onclick="event.stopPropagation()" title="View completion photo">📷</a>`
-          : `<button class="itask-photo-btn" onclick="event.stopPropagation();_uploadSubtaskPhoto(${t.id},${s.id})" title="Upload completion photo">📷 Upload photo</button>`)
-      : '';
+    const photoBadge = s.photoRequired ? _photoCardHTML(t.id, s.id, s.photo) : '';
 
     if (!isEditing) {
       return `
@@ -9014,8 +9001,8 @@ function renderProjectDesignTasksSection(p) {
             <div class="itask-sub-meta">
               ${s.date ? esc(fmtDateLocal(s.date)) : '<span class="itask-nodate">No date</span>'}
               <span class="itask-sub-assignees">${assigneeChips(s.assigneeIds)}</span>
-              ${photoBadge}
             </div>
+            ${photoBadge}
             ${s.notes ? `<div class="itask-sub-notes">${esc(s.notes)}</div>` : ''}
           </div>
           <span class="itask-del" onclick="event.stopPropagation();if(confirm('Delete this step?')){deleteSubtask(${t.id},${s.id});renderCurrentPage();}">×</span>
@@ -9095,7 +9082,7 @@ function renderProjectDesignTasksSection(p) {
       : '';
 
     return `
-      <div class="itask-card${t.done ? ' is-done' : ''}${t.isMilestone ? ' is-milestone' : ''}${isEditing ? ' is-editing' : ''}">
+      <div class="itask-card${t.done ? ' is-done' : ''}${t.isMilestone ? ' is-milestone' : ''}${isEditing ? ' is-editing' : ''}" data-project-anchor="task-${t.id}">
         <div class="itask-head">
           <span class="itask-check itask-check-main" onclick="event.stopPropagation();toggleTaskDone(${t.id});renderCurrentPage()">${t.done ? '✓' : ''}</span>
           <div class="itask-head-body" ${isEditing ? '' : `onclick="openTaskDialog(${p.id},${t.id},'design')"`}>
@@ -9402,6 +9389,63 @@ function _subAddRow() {
 // "Long-Range Vision — Installer Field Experience" + photo upload note).
 // When the backend lands, replace this stub with a real upload that writes
 // the photo and sets s.photo to a real reference.
+function _ensurePhotoCardStyles() {
+  if (document.getElementById('vi-photocard-style')) return;
+  const st = document.createElement('style');
+  st.id = 'vi-photocard-style';
+  st.textContent = `
+    .photo-card{display:flex;align-items:center;gap:10px;margin-top:6px;padding:7px 9px;border-radius:8px;background:#0D1117;border:1px solid #30363D;max-width:340px}
+    .photo-card.req{border-color:#9E6A03;background:#1A150D}
+    .photo-card.has{border-color:rgba(35,134,54,0.6);background:#0D1F0D}
+    .photo-card-thumb{flex:0 0 auto;display:block}
+    .photo-card-thumb img{width:42px;height:42px;border-radius:6px;object-fit:cover;display:block;border:1px solid #30363D}
+    .photo-card-main{min-width:0;flex:1}
+    .photo-card-label{font-size:11px;font-weight:600;color:#D29922;white-space:nowrap}
+    .photo-card.has .photo-card-label{color:#3FB950}
+    .photo-card-actions{display:flex;gap:6px;margin-top:5px;flex-wrap:wrap}
+    .photo-card-btn{font-size:11px;padding:3px 9px;border-radius:6px;border:1px solid #30363D;background:#161B22;color:#C9D1D9;cursor:pointer;text-decoration:none;display:inline-block;-webkit-tap-highlight-color:transparent}
+    .photo-card-btn.amber{background:#1A150D;border-color:#9E6A03;color:#D29922}
+    .photo-card-btn.danger{color:#F85149;border-color:#5A1F1F}
+  `;
+  document.head.appendChild(st);
+}
+// Photo-required card: shows status + view/replace/delete (or upload when missing).
+function _photoCardHTML(taskId, subId, photo) {
+  _ensurePhotoCardStyles();
+  if (photo) {
+    return `<div class="photo-card has" onclick="event.stopPropagation()">
+      <a href="${esc(photo)}" target="_blank" rel="noopener" class="photo-card-thumb" title="View photo"><img src="${esc(photo)}" alt="completion photo"></a>
+      <div class="photo-card-main">
+        <div class="photo-card-label">\U0001F4F7 Photo attached</div>
+        <div class="photo-card-actions">
+          <a href="${esc(photo)}" target="_blank" rel="noopener" class="photo-card-btn">View</a>
+          <button class="photo-card-btn" onclick="_uploadSubtaskPhoto(${taskId}, ${subId})">Replace</button>
+          <button class="photo-card-btn danger" onclick="_deleteSubtaskPhoto(${taskId}, ${subId})">Delete</button>
+        </div>
+      </div>
+    </div>`;
+  }
+  return `<div class="photo-card req" onclick="event.stopPropagation()">
+    <div class="photo-card-main">
+      <div class="photo-card-label">\U0001F4F7 Photo required</div>
+      <div class="photo-card-actions">
+        <button class="photo-card-btn amber" onclick="_uploadSubtaskPhoto(${taskId}, ${subId})">Upload photo</button>
+      </div>
+    </div>
+  </div>`;
+}
+function _deleteSubtaskPhoto(taskId, subtaskId) {
+  if (!confirm('Delete this completion photo?')) return;
+  const t = _getTaskByIdAnyPhase(taskId);
+  if (!t) return;
+  const sub = (t.subtasks || []).find(x => x.id === subtaskId);
+  if (!sub) return;
+  sub.photo = null;
+  if (_getTaskPhase(taskId) === 'design') save('vi_design_tasks', state.designTasks);
+  else save('vi_install_tasks', state.installTasks);
+  showToast('Photo removed', 'info');
+  renderCurrentPage();
+}
 function _uploadSubtaskPhoto(taskId, subtaskId) {
   const sb = window._sb;
   if (!sb || !sb.storage) { showToast('Photo storage isn\u2019t set up yet.', 'error'); return; }
