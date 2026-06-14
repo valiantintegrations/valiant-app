@@ -2913,8 +2913,16 @@ function _ensurePhaseFocusStyles() {
   // phase(s) currently in progress grow to stay readable. Space is grow-weighted,
   // so wider screens reveal more text. The progress BAR stays proportional.
   st.textContent = `
-    .pmap-labels-focus { display: flex; gap: 5px; align-items: flex-start; }
-    .pmap-labels-focus .pmap-label { width: auto; min-width: 0; overflow: hidden; padding: 5px 0 0; text-align: left; }
+    /* Bar segments share the SAME focus weights as the labels (zero gap on both),
+       so each phase's segment sits directly above its label. */
+    .pmap-track-focus { display: flex; gap: 0; }
+    .pmap-track-focus .pmap-seg { width: auto; min-width: 0; }
+    .pmap-track-focus .pmap-seg.pmap-seg-done,
+    .pmap-track-focus .pmap-seg.pmap-seg-future { flex: 1 1 0; }
+    .pmap-track-focus .pmap-seg.pmap-seg-active { flex: 5 1 0; }
+
+    .pmap-labels-focus { display: flex; gap: 0; align-items: flex-start; }
+    .pmap-labels-focus .pmap-label { width: auto; min-width: 0; overflow: hidden; padding: 5px 5px 0 0; text-align: left; box-sizing: border-box; }
     .pmap-labels-focus .pmap-label.pmap-done,
     .pmap-labels-focus .pmap-label.pmap-future { flex: 1 1 0; }
     .pmap-labels-focus .pmap-label.pmap-active { flex: 5 1 0; }
@@ -8171,11 +8179,11 @@ function renderProjectOverviewHTML(p) {
 
       <!-- Segmented linear progress map -->
       <div class="pmap-wrap">
-        <div class="pmap-track">
+        <div class="pmap-track pmap-track-focus">
           ${phaseData.map(d => {
-            const width = (d.totalMilestones / totalMilestones) * 100;
+            const st = d.pct >= 1 ? 'done' : (d.pct > 0 ? 'active' : 'future');
             return `
-              <div class="pmap-seg" style="width:${width}%;--seg-color:${d.phase.color}" title="${d.phase.label}: ${Math.round(d.pct * 100)}%">
+              <div class="pmap-seg pmap-seg-${st}" style="--seg-color:${d.phase.color}" title="${d.phase.label}: ${Math.round(d.pct * 100)}%">
                 <div class="pmap-seg-fill" style="width:${Math.round(d.pct * 100)}%;background:${d.phase.color}"></div>
               </div>
             `;
