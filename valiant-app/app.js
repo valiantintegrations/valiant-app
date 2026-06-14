@@ -5806,11 +5806,11 @@ function _viewerOverdueFlags(p) {
     if (subs.length) {
       subs.forEach(sub => {
         const ids = (sub.assigneeIds && sub.assigneeIds.length) ? sub.assigneeIds : (t.assigneeIds || []);
-        if (sub.date && !sub.done && ids.includes(mid) && sub.date < todayStr) out.push({ level: 'red', text: 'Overdue: ' + sub.title });
+        if (sub.date && !sub.done && ids.includes(mid) && sub.date < todayStr) out.push({ level: 'red', text: 'Overdue: ' + sub.title, tab: store === state.designTasks ? 'design' : 'install', anchor: 'task-' + t.id });
       });
     } else if ((t.assigneeIds || []).includes(mid) && !t.done) {
       const dr = getTaskDateRange(t);
-      if (dr && dr.end < todayStr) out.push({ level: 'red', text: 'Overdue: ' + t.title });
+      if (dr && dr.end < todayStr) out.push({ level: 'red', text: 'Overdue: ' + t.title, tab: store === state.designTasks ? 'design' : 'install', anchor: 'task-' + t.id });
     }
   });
   scan(state.installTasks); scan(state.designTasks);
@@ -5826,6 +5826,13 @@ function _viewerRelevantFlags(p) {
   return flags;
 }
 
+function _toggleNaPop(cardEl) {
+  const pop = cardEl.querySelector('.na-pop-click');
+  if (!pop) return;
+  const open = pop.style.display !== 'none';
+  document.querySelectorAll('.na-pop-click').forEach(el => { if (el !== pop) el.style.display = 'none'; });
+  pop.style.display = open ? 'none' : 'block';
+}
 function renderMetricsWidget(ctx) {
   const { myProjects, myAssignments, urgentProjects } = ctx;
   const roleCount = Object.keys(myAssignments).filter(k => myAssignments[k].length > 0).length;
@@ -5845,14 +5852,14 @@ function renderMetricsWidget(ctx) {
         </div>
       ` : ''}
       ${flagged.length > 0 ? `
-        <div class="metric-card na-metric" style="border-color:#9E6A03;position:relative;cursor:help">
+        <div class="metric-card na-metric" style="border-color:#9E6A03;position:relative;cursor:pointer" onclick="_toggleNaPop(this)">
           <div class="metric-label">Needs Attention</div>
           <div class="metric-value" style="color:#D29922">${flagged.length}</div>
-          <div class="metric-sub">needs your action</div>
-          <div class="na-pop">
-            ${flagged.map(({ p, flags }) => `<div class="na-proj">
-                <div class="na-proj-name">${esc(p.name)}</div>
-                ${flags.map(fl => `<div class="na-flag"><span class="na-dot ${fl.level}"></span><span>${fl.text}</span></div>`).join('')}
+          <div class="metric-sub">needs your action <span style="opacity:0.55">▾</span></div>
+          <div class="na-pop-click" style="display:none;position:absolute;top:100%;left:0;right:0;margin-top:6px;background:#0D1117;border:1px solid #30363D;border-radius:10px;padding:8px;z-index:50;max-height:340px;overflow:auto;box-shadow:0 10px 28px rgba(0,0,0,0.55);text-align:left">
+            ${flagged.map(({ p, flags }) => `<div class="na-proj" style="margin-bottom:9px">
+                <div class="na-proj-name" style="font-size:11px;font-weight:700;color:#E6EDF3;margin-bottom:2px">${esc(p.name)}</div>
+                ${flags.map(fl => `<div class="na-flag" onclick="event.stopPropagation();openProject(${p.id}${fl.tab ? `, '${fl.tab}'` : ''}${fl.anchor ? `, '${fl.anchor}'` : ''})" style="display:flex;align-items:center;gap:7px;padding:6px;border-radius:6px;cursor:pointer;font-size:12px;color:#C9D1D9;-webkit-tap-highlight-color:transparent" onmouseover="this.style.background='#161B22'" onmouseout="this.style.background='transparent'"><span class="na-dot ${fl.level}"></span><span style="flex:1;min-width:0">${fl.text}</span><span style="color:#6E7681">›</span></div>`).join('')}
               </div>`).join('')}
           </div>
         </div>
@@ -11793,40 +11800,40 @@ function computeProjectFlags(p) {
   if (p.jb_price_valid_until) {
     const validDays = daysUntil(p.jb_price_valid_until);
     if (validDays !== null && validDays >= 0 && validDays <= 14) {
-      flags.sales.push({ level: validDays <= 7 ? 'red' : 'yellow', text: `Proposal expires ${fmtCountdown(p.jb_price_valid_until)}` });
+      flags.sales.push({ level: validDays <= 7 ? 'red' : 'yellow', text: `Proposal expires ${fmtCountdown(p.jb_price_valid_until)}`, tab: 'overview' });
     } else if (validDays !== null && validDays < 0 && stage === 'proposal') {
-      flags.sales.push({ level: 'red', text: `Proposal expired ${fmtCountdown(p.jb_price_valid_until)}` });
+      flags.sales.push({ level: 'red', text: `Proposal expired ${fmtCountdown(p.jb_price_valid_until)}`, tab: 'overview' });
     }
   }
   // Stage stale check — no updates in 30+ days for active stages
   if (['lead', 'proposal', 'contract'].includes(stage) && p.updated_at) {
     const daysSinceUpdate = Math.abs(daysUntil(p.updated_at.slice(0, 10)));
     if (daysSinceUpdate > 30) {
-      flags.sales.push({ level: 'yellow', text: `No activity in ${daysSinceUpdate}d` });
+      flags.sales.push({ level: 'yellow', text: `No activity in ${daysSinceUpdate}d`, tab: 'overview' });
     }
   }
 
   // MANAGEMENT flags
   if (stage === 'contract' && !contractDate) {
-    flags.management.push({ level: 'yellow', text: 'Contract date not set' });
+    flags.management.push({ level: 'yellow', text: 'Contract date not set', tab: 'overview' });
   }
   if (isContractNeedsReview(p)) {
-    flags.management.push({ level: 'red', text: 'Contract needs review' });
+    flags.management.push({ level: 'red', text: 'Contract needs review', tab: 'overview' });
   }
   if (stage === 'contract' && !booked) {
-    flags.management.push({ level: 'yellow', text: 'Install dates not booked' });
+    flags.management.push({ level: 'yellow', text: 'Install dates not booked', tab: 'install' });
   }
 
   // DESIGN flags
   if (stage === 'contract' && p.systems.length === 0) {
-    flags.design.push({ level: 'yellow', text: 'No scope tags detected' });
+    flags.design.push({ level: 'yellow', text: 'No scope tags detected', tab: 'overview' });
   }
 
   // INSTALL flags
   if (installWin) {
     const startDays = daysUntil(installWin.start);
     if (startDays !== null && startDays >= 0 && startDays <= 14 && stage !== 'install') {
-      flags.install.push({ level: startDays <= 7 ? 'red' : 'yellow', text: `Install ${fmtCountdown(installWin.start)} &mdash; prep readiness?` });
+      flags.install.push({ level: startDays <= 7 ? 'red' : 'yellow', text: `Install ${fmtCountdown(installWin.start)} &mdash; prep readiness?`, tab: 'install' });
     }
   }
 
