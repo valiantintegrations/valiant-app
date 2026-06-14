@@ -4756,6 +4756,12 @@ function getUpcomingMeetings() {
     .slice(0, 5);
 }
 
+function _hhmmAddMinutes(hhmm, mins) {
+  if (!hhmm || !/^\d{1,2}:\d{2}$/.test(hhmm)) return null;
+  const [h, m] = hhmm.split(':').map(Number);
+  const total = Math.max(0, Math.min(24 * 60 - 1, h * 60 + m + mins));
+  return String(Math.floor(total / 60)).padStart(2, '0') + ':' + String(total % 60).padStart(2, '0');
+}
 function scheduleMeeting() {
   const title = document.getElementById('mtg-title')?.value?.trim();
   const date  = document.getElementById('mtg-date')?.value;
@@ -4767,8 +4773,14 @@ function scheduleMeeting() {
   document.querySelectorAll('#mtg-attendees [data-mid]').forEach(el => {
     if (el.classList.contains('selected')) attendees.push(parseInt(el.dataset.mid));
   });
+  // Build a shape-complete meeting (startTime/endTime/status) so the calendar can
+  // place and show it immediately in every view — matching addMeeting()'s shape.
+  const _durMins = { '30min': 30, '1hr': 60, '2hr': 120, 'halfday': 240, 'allday': 480 }[dur] || 60;
+  const startTime = time || null;
+  const endTime = startTime ? _hhmmAddMinutes(startTime, _durMins) : null;
   const _newMtg = {
     id: Date.now(), title, date, time, duration: dur,
+    startTime, endTime, status: 'confirmed', type: 'misc', projectId: null, source: 'manual',
     attendees, notes, createdBy: getActiveTeamMemberId(), createdAt: Date.now()
   };
   state.meetings.push(_newMtg);
