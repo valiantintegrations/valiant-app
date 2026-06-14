@@ -8040,10 +8040,13 @@ function renderProjectTabContent() {
     const existing = localStorage.getItem(noteKey) || '';
     body.innerHTML = `
       <div class="dashboard-card">
-        <div class="dashboard-card-title">Project Notes</div>
-        <textarea class="form-textarea" id="project-notes" rows="12" placeholder="Add notes about this project…"
+        <div class="dashboard-card-title" style="display:flex;align-items:center;justify-content:space-between">
+          <span>Project Notes</span>
+          <button type="button" id="notes-mic-btn" onclick="_toggleNotesDictation('project-notes')" title="Voice to text" style="display:inline-flex;align-items:center;gap:5px;font-size:11px;padding:5px 11px;border-radius:7px;border:1px solid #30363D;background:#161B22;color:#C9D1D9;cursor:pointer;-webkit-tap-highlight-color:transparent">🎤 <span id="notes-mic-label">Voice</span></button>
+        </div>
+        <textarea class="form-textarea" id="project-notes" rows="12" placeholder="Add notes about this project…" data-notekey="${noteKey}"
           oninput="localStorage.setItem('${noteKey}', this.value)">${esc(existing)}</textarea>
-        <div style="margin-top:8px;font-size:11px;color:#6E7681">Notes save automatically</div>
+        <div style="margin-top:8px;font-size:11px;color:#6E7681">Notes save automatically · on iPhone, tap the 🎤 on your keyboard to dictate</div>
       </div>
     `;
   }
@@ -20211,15 +20214,57 @@ function quickActionProjectPicker(promptLabel, onProjectChosen) {
   });
 }
 
+function _toggleNotesDictation(targetId) {
+  const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+  const ta = document.getElementById(targetId);
+  if (!ta) return;
+  const label = document.getElementById('notes-mic-label');
+  const btn = document.getElementById('notes-mic-btn');
+  if (window._notesRec) { try { window._notesRec.stop(); } catch (e) {} return; }
+  if (!SR) {
+    ta.focus();
+    showToast('Voice typing isn\u2019t available in this browser — tap the mic on your keyboard instead', 'info');
+    return;
+  }
+  const rec = new SR();
+  rec.lang = 'en-US'; rec.interimResults = true; rec.continuous = true;
+  window._notesRec = rec;
+  if (label) label.textContent = 'Listening…';
+  if (btn) { btn.style.borderColor = '#DA3633'; btn.style.color = '#F85149'; }
+  let committed = ta.value;
+  rec.onresult = (e) => {
+    let finalT = '', interim = '';
+    for (let i = e.resultIndex; i < e.results.length; i++) {
+      const seg = e.results[i][0].transcript;
+      if (e.results[i].isFinal) finalT += seg; else interim += seg;
+    }
+    if (finalT) committed = (committed ? committed.replace(/\s*$/, '') + ' ' : '') + finalT.trim();
+    ta.value = committed + (interim ? (committed ? ' ' : '') + interim.trim() : '');
+    const k = ta.getAttribute('data-notekey'); if (k) localStorage.setItem(k, ta.value);
+  };
+  const stop = () => {
+    window._notesRec = null;
+    if (label) label.textContent = 'Voice';
+    if (btn) { btn.style.borderColor = '#30363D'; btn.style.color = '#C9D1D9'; }
+  };
+  rec.onend = stop; rec.onerror = stop;
+  try { rec.start(); } catch (e) { stop(); }
+}
 function quickActionLogMeeting() {
   quickActionProjectPicker('Log a meeting — for which project?', (projectId) => {
-    if (typeof showLogMeetingDialog === 'function') {
-      showLogMeetingDialog(projectId);
-    } else {
-      // Open the project's Overview tab where meeting log entry exists in milestones
-      openProject(projectId);
-      showToast('Open the relevant milestone to log the meeting', 'info');
-    }
+    openProject(projectId);
+    state.projectTab = 'notes';
+    renderCurrentPage();
+    setTimeout(() => {
+      const ta = document.getElementById('project-notes');
+      if (!ta) return;
+      const stamp = `Meeting — ${new Date().toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}: `;
+      ta.value = ta.value ? ta.value.replace(/\s*$/, '') + '\n\n' + stamp : stamp;
+      localStorage.setItem('vi_notes_' + projectId, ta.value);
+      ta.focus();
+      try { ta.setSelectionRange(ta.value.length, ta.value.length); } catch (e) {}
+      ta.scrollTop = ta.scrollHeight;
+    }, 260);
   });
 }
 
@@ -20242,8 +20287,8 @@ function quickActionCreateNote() {
     state.projectTab = 'notes';
     renderCurrentPage();
     setTimeout(() => {
-      const ta = document.querySelector('#content textarea[onblur*="saveNotes"], #content textarea[oninput*="saveNotes"]');
-      if (ta) ta.focus();
+      const ta = document.getElementById('project-notes');
+      if (ta) { ta.focus(); try { ta.setSelectionRange(ta.value.length, ta.value.length); } catch (e) {} }
     }, 200);
   });
 }
