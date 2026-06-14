@@ -2893,12 +2893,13 @@ function _ensureMobileFitStyles() {
   st.textContent = `
     @media (max-width: 768px) {
       html, body { max-width: 100vw; overflow-x: hidden; }
-      #app, #main, #content { max-width: 100vw; min-width: 0; }
-      #content img { max-width: 100%; height: auto; }
+      #app, #main { max-width: 100vw; overflow-x: hidden; }
+      #main { min-width: 0; }
+      #content { width: 100vw !important; max-width: 100vw !important; min-width: 0; overflow-x: hidden; box-sizing: border-box; }
       #content .dashboard-card { max-width: 100%; box-sizing: border-box; }
+      #content .dashboard-card * { max-width: 100%; }
+      #content img { height: auto; }
       .attn-grid { grid-template-columns: 1fr !important; }
-      .pmap-wrap, .pmap-track, .pmap-labels,
-      .ready-sales-track, .ready-sales-sublabels { max-width: 100%; }
     }
   `;
   document.head.appendChild(st);
