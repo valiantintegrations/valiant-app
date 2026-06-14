@@ -17822,6 +17822,7 @@ function migrateShopWork() {
       const m = state.team.find(tm => tm.name === t.assignee);
       if (m) { t.assignee_id = m.id; changed = true; }
     }
+    if (t.assignee_ids == null) { t.assignee_ids = (t.assignee_id != null ? [t.assignee_id] : []); changed = true; }
     if (!t.status) { t.status = 'open'; changed = true; }
     if (t.project && typeof t.project === 'string' && !t.project_id) {
       const p = state.projects.find(pr => pr.name === t.project);
@@ -17893,8 +17894,16 @@ function renderShopWork(c) {
 }
 
 function renderShopWorkItem(t) {
-  const assignee = t.assignee_id ? getTeamMember(t.assignee_id) : null;
+  const assigneeIds = (t.assignee_ids && t.assignee_ids.length) ? t.assignee_ids : (t.assignee_id != null ? [t.assignee_id] : []);
+  const assigneeNames = assigneeIds.map(id => (getTeamMember(id) || {}).name).filter(Boolean);
   const project = t.project_id ? state.projects.find(p => p.id === t.project_id) : null;
+  let dueChip = '';
+  if (t.due_date) {
+    const dd = daysUntil(t.due_date);
+    let col = '#6E7681';
+    if (t.status !== 'done' && dd != null) { if (dd < 0) col = '#F85149'; else if (dd <= 7) col = '#D29922'; }
+    dueChip = `<span style="color:${col};font-weight:600">Due ${esc(fmtDateLocal(t.due_date))}</span>`;
+  }
   const priorityColors = { high: '#F85149', med: '#D29922', low: '#6E7681' };
   const priorityColor = priorityColors[t.priority] || '#6E7681';
   const isDone = t.status === 'done';
@@ -17908,7 +17917,8 @@ function renderShopWorkItem(t) {
       <div style="flex:1;min-width:0">
         <div style="font-size:13px;color:#E6EDF3;${isDone ? 'text-decoration:line-through' : ''}">${esc(t.text)}</div>
         <div style="display:flex;gap:10px;margin-top:3px;font-size:11px;color:#6E7681;flex-wrap:wrap">
-          ${assignee ? `<span>${esc(assignee.name)}</span>` : '<span style="color:#D29922">Unassigned</span>'}
+          ${assigneeNames.length ? `<span>${esc(assigneeNames.join(', '))}</span>` : '<span style="color:#D29922">Unassigned</span>'}
+          ${dueChip}
           ${project ? `<span onclick="openProject(${project.id})" style="color:#58A6FF;cursor:pointer;-webkit-tap-highlight-color:transparent">${esc(project.name)}</span>` : ''}
         </div>
       </div>
@@ -17926,6 +17936,7 @@ function renderShopWorkItem(t) {
 function showShopWorkDialog(taskId) {
   const task = taskId ? state.shopwork.find(t => t.id === taskId) : null;
   const isEdit = !!task;
+  const curAssignees = task ? ((task.assignee_ids && task.assignee_ids.length) ? task.assignee_ids : (task.assignee_id != null ? [task.assignee_id] : [])) : [];
   document.getElementById('shopwork-dialog')?.remove();
   const modal = document.createElement('div');
   modal.id = 'shopwork-dialog';
@@ -17946,16 +17957,11 @@ function showShopWorkDialog(taskId) {
         <label style="font-size:11px;color:#8B949E;font-weight:500;display:block;margin-bottom:4px">Task</label>
         <textarea id="sw-text" class="form-textarea" rows="2" placeholder="What needs to happen..." style="width:100%;margin-bottom:12px">${esc(task?.text || '')}</textarea>
 
+        <label style="font-size:11px;color:#8B949E;font-weight:500;display:block;margin-bottom:4px">Assigned to <span style="color:#6E7681;font-weight:400">(tap to select — multiple OK)</span></label>
+        <div id="sw-assignees" style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:12px">
+          ${state.team.filter(m => m.status !== 'inactive').map(m => { const sel = curAssignees.includes(m.id); return `<span data-mid="${m.id}" data-on="${sel ? '1' : '0'}" onclick="_grpToggle(this)" style="${_grpChipStyle(sel)}">${esc((m.name || '').split(' ')[0])}</span>`; }).join('')}
+        </div>
         <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:12px">
-          <div>
-            <label style="font-size:11px;color:#8B949E;font-weight:500;display:block;margin-bottom:4px">Assigned to</label>
-            <select id="sw-assignee" class="form-input" style="width:100%">
-              <option value="">Unassigned</option>
-              ${state.team.filter(m => m.status !== 'inactive').map(m => `
-                <option value="${m.id}" ${task?.assignee_id === m.id ? 'selected' : ''}>${esc(m.name)}</option>
-              `).join('')}
-            </select>
-          </div>
           <div>
             <label style="font-size:11px;color:#8B949E;font-weight:500;display:block;margin-bottom:4px">Priority</label>
             <select id="sw-priority" class="form-input" style="width:100%">
@@ -17963,6 +17969,10 @@ function showShopWorkDialog(taskId) {
               <option value="med" ${task?.priority === 'med' ? 'selected' : ''}>Medium</option>
               <option value="high" ${task?.priority === 'high' ? 'selected' : ''}>High</option>
             </select>
+          </div>
+          <div>
+            <label style="font-size:11px;color:#8B949E;font-weight:500;display:block;margin-bottom:4px">Due date (optional)</label>
+            <input type="date" id="sw-due" class="form-input" value="${task?.due_date || ''}" style="width:100%">
           </div>
         </div>
 
@@ -17985,34 +17995,56 @@ function showShopWorkDialog(taskId) {
   document.body.appendChild(modal);
 }
 
+async function _pushNotifyShopWork(item, recipientIds) {
+  try {
+    if (!item || !window.VI_VAPID_PUBLIC) return;
+    const me = getActiveTeamMemberId();
+    const ids = [...new Set((recipientIds || item.assignee_ids || []).map(Number))].filter(id => id && id !== me);
+    if (!ids.length) return;
+    const subs = await _fetchSubsFor(ids);
+    const targets = ids.map(id => subs[id]).filter(Boolean);
+    if (!targets.length) return;
+    const due = item.due_date ? (' — due ' + fmtDateLocal(item.due_date)) : '';
+    _pushSend(targets, 'Shop work assigned to you', (item.text || 'New task').slice(0, 80) + due, '/', 'shopwork_' + item.id);
+  } catch (e) {}
+}
 function saveShopWork(taskId) {
   const text = document.getElementById('sw-text')?.value?.trim();
   if (!text) { alert('Task description required'); return; }
-  const assigneeVal = document.getElementById('sw-assignee')?.value;
   const priority = document.getElementById('sw-priority')?.value || 'low';
   const projectVal = document.getElementById('sw-project')?.value;
-  const assignee_id = assigneeVal ? parseInt(assigneeVal) : null;
   const project_id = projectVal ? parseInt(projectVal) : null;
+  const due_date = document.getElementById('sw-due')?.value || null;
+  const assignee_ids = Array.from(document.querySelectorAll('#sw-assignees [data-on="1"]'))
+    .map(el => parseInt(el.dataset.mid)).filter(Boolean);
 
+  let savedItem, prevAssignees = [];
   if (taskId) {
     const task = state.shopwork.find(t => t.id === taskId);
     if (task) {
+      prevAssignees = (task.assignee_ids || (task.assignee_id != null ? [task.assignee_id] : [])).slice();
       task.text = text;
-      task.assignee_id = assignee_id;
+      task.assignee_ids = assignee_ids;
+      task.assignee_id = assignee_ids[0] || null;
       task.priority = priority;
       task.project_id = project_id;
+      task.due_date = due_date;
+      savedItem = task;
     }
   } else {
-    state.shopwork.push({
+    savedItem = {
       id: Date.now() + Math.random(),
-      text, assignee_id, priority, project_id,
+      text, assignee_ids, assignee_id: assignee_ids[0] || null, priority, project_id, due_date,
       status: 'open',
       created: new Date().toISOString()
-    });
+    };
+    state.shopwork.push(savedItem);
   }
   save('vi_shopwork', state.shopwork);
 
-  // Auto-check milestone if applicable
+  const newlyAssigned = assignee_ids.filter(id => !prevAssignees.includes(id));
+  if (savedItem && newlyAssigned.length) _pushNotifyShopWork(savedItem, newlyAssigned);
+
   if (project_id) checkShopWorkMilestone(project_id);
 
   document.getElementById('shopwork-dialog')?.remove();
