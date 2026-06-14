@@ -6849,7 +6849,7 @@ function _gatherOnSite(memberId) {
     if (subs.length) {
       subs.forEach(sub => {
         const ids = (sub.assigneeIds && sub.assigneeIds.length) ? sub.assigneeIds : (t.assigneeIds || []);
-        if (ids.includes(memberId)) add(t.projectId, { type: 'task', taskId: t.id, subId: sub.id, phase: 'install', title: sub.title, parent: t.title, done: !!sub.done, date: sub.date || null });
+        if (ids.includes(memberId)) add(t.projectId, { type: 'task', taskId: t.id, subId: sub.id, phase: 'install', title: sub.title, parent: t.title, done: !!sub.done, date: sub.date || null, photoRequired: !!sub.photoRequired, photo: sub.photo || null });
       });
     } else if ((t.assigneeIds || []).includes(memberId)) {
       const dr = getTaskDateRange(t);
@@ -6878,7 +6878,7 @@ function _gatherBackOfHouse(memberId) {
     if (subs.length) {
       subs.forEach(sub => {
         const ids = (sub.assigneeIds && sub.assigneeIds.length) ? sub.assigneeIds : (t.assigneeIds || []);
-        if (ids.includes(memberId)) { const g = ensure(t.projectId); if (g) g.lines.push({ type: 'task', taskId: t.id, subId: sub.id, phase: 'design', title: sub.title, parent: t.title, done: !!sub.done, date: sub.date || null }); }
+        if (ids.includes(memberId)) { const g = ensure(t.projectId); if (g) g.lines.push({ type: 'task', taskId: t.id, subId: sub.id, phase: 'design', title: sub.title, parent: t.title, done: !!sub.done, date: sub.date || null, photoRequired: !!sub.photoRequired, photo: sub.photo || null }); }
       });
     } else if ((t.assigneeIds || []).includes(memberId)) {
       const dr = getTaskDateRange(t);
@@ -6925,7 +6925,7 @@ function _renderWorkBucket(memberId, bucketId, title, groups) {
     const sorted = g.lines.slice().sort((a, b) =>
       (a.done ? 1 : 0) - (b.done ? 1 : 0) || dkey(a.date).localeCompare(dkey(b.date)));
     const lines = sorted.map(ln => {
-      let tag, tagCls, rowClick, cb;
+      let tag, tagCls, rowClick, cb, photoAff = '';
       if (ln.type === 'meeting') {
         tag = 'Meeting'; tagCls = 'mt-meeting';
         rowClick = `openMeetingDetail(${ln.meetingId})`;
@@ -6936,20 +6936,29 @@ function _renderWorkBucket(memberId, bucketId, title, groups) {
         cb = `<span class="mt-cb${ln.done ? ' done' : ''}" onclick="event.stopPropagation(); completeAction('${ln.key}'); renderCurrentPage()">${ln.done ? check : ''}</span>`;
       } else {
         tag = ln.phase === 'design' ? 'Design' : 'Install'; tagCls = 'mt-' + ln.phase;
-        const handler = ln.subId != null ? `toggleSubtaskDone(${ln.taskId}, ${ln.subId})` : `toggleTaskDone(${ln.taskId})`;
+        const photoGated = ln.photoRequired && !ln.photo;
+        const handler = photoGated
+          ? `showToast('Upload a completion photo first','info')`
+          : `${ln.subId != null ? `toggleSubtaskDone(${ln.taskId}, ${ln.subId})` : `toggleTaskDone(${ln.taskId})`}; renderCurrentPage()`;
         rowClick = p.id != null ? `openProject(${p.id})` : '';
-        cb = `<span class="mt-cb${ln.done ? ' done' : ''}" onclick="event.stopPropagation(); ${handler}; renderCurrentPage()">${ln.done ? check : ''}</span>`;
+        cb = `<span class="mt-cb${ln.done ? ' done' : ''}${photoGated ? ' gated' : ''}" onclick="event.stopPropagation(); ${handler}">${ln.done ? check : ''}</span>`;
+        photoAff = ln.photoRequired
+          ? (ln.photo
+              ? `<a class="mt-photo" href="${esc(ln.photo)}" target="_blank" rel="noopener" onclick="event.stopPropagation()" title="View completion photo">📷</a>`
+              : `<button class="mt-photo-btn" onclick="event.stopPropagation();_uploadSubtaskPhoto(${ln.taskId}, ${ln.subId})" title="Upload completion photo">📷</button>`)
+          : '';
       }
       const meta = `<span class="mt-tag ${tagCls}">${tag}</span>${ln.parent ? ' \u00b7 ' + esc(ln.parent) : ''}${ln.date ? ' \u00b7 ' + esc(shortDate(ln.date)) + (ln.time ? ' ' + esc(ln.time) : '') : ''}`;
       return `
-        <div class="mt-line${ln.done ? ' done' : ''}"${rowClick ? ` onclick="${rowClick}"` : ''}>
+        <div class="mt-line${ln.done ? ' done' : ''}">
           ${cb}
           <div style="flex:1;min-width:0">
             <div class="mt-line-title">${esc(ln.title)}</div>
             <div class="mt-line-meta">${meta}</div>
           </div>
+          ${photoAff}
           ${cdHtml(ln)}
-          <svg class="mt-arrow" width="13" height="13" viewBox="0 0 14 14" fill="none"><path d="M5 3l4 4-4 4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          ${rowClick ? `<span class="mt-goproj" onclick="event.stopPropagation();${rowClick}" title="Open"><svg width="13" height="13" viewBox="0 0 14 14" fill="none"><path d="M5 3l4 4-4 4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg></span>` : `<svg class="mt-arrow" width="13" height="13" viewBox="0 0 14 14" fill="none"><path d="M5 3l4 4-4 4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>`}
         </div>`;
     }).join('');
     return `
@@ -6973,7 +6982,7 @@ function _renderWorkBucket(memberId, bucketId, title, groups) {
         .mt-group-head.collapsed .mt-chev{transform:rotate(0deg)}
         .mt-grp-count{margin-left:auto;font-size:11px;color:#8B949E;font-weight:600;background:#21262D;border-radius:999px;padding:1px 8px}
         .mt-client{color:#6E7681;font-weight:500}
-        .mt-line{display:flex;align-items:flex-start;gap:10px;padding:7px 4px;border-bottom:1px solid #161B22;cursor:pointer}
+        .mt-line{display:flex;align-items:flex-start;gap:10px;padding:7px 4px;border-bottom:1px solid #161B22}
         .mt-line:hover{background:#0F141B}
         .mt-cb{width:17px;height:17px;border-radius:5px;border:1.5px solid #30363D;flex:0 0 auto;display:flex;align-items:center;justify-content:center;margin-top:1px}
         .mt-cb.done{background:#238636;border-color:#238636}
@@ -6988,6 +6997,11 @@ function _renderWorkBucket(memberId, bucketId, title, groups) {
         .mt-tag.mt-meeting{background:rgba(210,153,34,0.16);color:#D29922}
         .mt-cd{font-size:11px;font-weight:700;padding:2px 9px;border-radius:999px;border:1px solid;flex:0 0 auto;margin-top:1px;white-space:nowrap;align-self:center}
         .mt-arrow{color:#30363D;flex:0 0 auto;margin-top:3px}
+        .mt-goproj{display:flex;align-items:center;justify-content:center;padding:7px 6px;margin:-5px -2px;color:#6E7681;cursor:pointer;flex:0 0 auto;border-radius:6px;align-self:center;-webkit-tap-highlight-color:transparent}
+        .mt-goproj:hover{color:#58A6FF;background:#161B22}
+        .mt-photo{display:flex;align-items:center;text-decoration:none;font-size:14px;padding:2px 4px;flex:0 0 auto;align-self:center;-webkit-tap-highlight-color:transparent}
+        .mt-photo-btn{background:#1A150D;border:1px solid #9E6A03;color:#D29922;border-radius:6px;font-size:12px;padding:3px 7px;cursor:pointer;flex:0 0 auto;align-self:center;-webkit-tap-highlight-color:transparent}
+        .mt-cb.gated{border-color:#9E6A03}
       </style>
       <div class="dashboard-card-title" style="display:flex;align-items:center;justify-content:space-between">
         <span>${esc(title)} <span style="font-size:11px;color:#8B949E;font-weight:500;margin-left:4px">${totalN} ${totalN === 1 ? 'item' : 'items'}</span></span>
