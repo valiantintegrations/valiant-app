@@ -2892,13 +2892,14 @@ function _ensureMobileFitStyles() {
   st.id = 'vi-mobile-fit';
   st.textContent = `
     @media (max-width: 768px) {
-      html, body { max-width: 100vw; overflow-x: hidden; }
-      #app, #main { max-width: 100vw; overflow-x: hidden; }
-      #main { min-width: 0; }
-      #content { width: 100vw !important; max-width: 100vw !important; min-width: 0; overflow-x: hidden; box-sizing: border-box; }
+      #main, #content { min-width: 0; max-width: 100vw; }
+      /* Root cause: the body-wrap is a column flex with align-items:flex-start on
+         mobile, which sizes the body to its widest content instead of the screen.
+         Stretch it so cards fit the viewport (no clipping, no zoom needed). */
+      .project-page-body-wrap { align-items: stretch; }
+      .project-page-body { width: 100%; align-self: stretch; min-width: 0; }
       #content .dashboard-card { max-width: 100%; box-sizing: border-box; }
-      #content .dashboard-card * { max-width: 100%; }
-      #content img { height: auto; }
+      #content img { max-width: 100%; height: auto; }
       .attn-grid { grid-template-columns: 1fr !important; }
     }
   `;
