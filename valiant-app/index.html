@@ -184,6 +184,7 @@
     <label>Password<input id="vi-pass" type="password" autocomplete="current-password" placeholder="••••••••"></label>
     <div class="vi-err" id="vi-err"></div>
     <button id="vi-btn">Sign in</button>
+    <button type="button" id="vi-retry" class="vi-link" style="display:none">↻ Try again</button>
     <button type="button" id="vi-forgot" class="vi-link">Forgot password?</button>
     <div class="vi-status" id="vi-status"></div>
   </div>
@@ -406,10 +407,23 @@
     } catch (e) { console.warn('realtime off', e); }
   }
 
+  // Retry a promise-returning fn with exponential backoff before giving up.
+  async function withRetry(fn, attempts, baseDelay) {
+    let lastErr;
+    for (let i = 0; i < attempts; i++) {
+      try { return await fn(); }
+      catch (e) {
+        lastErr = e;
+        if (i < attempts - 1) { setStatus('Connection issue — retrying…'); await new Promise(r => setTimeout(r, baseDelay * Math.pow(2, i))); }
+      }
+    }
+    throw lastErr;
+  }
+
   async function startSession() {
     setStatus('Loading your data…');
     try { const { data: { user } } = await sb.auth.getUser(); window.VI_AUTH_EMAIL = (user && user.email) ? user.email : ''; } catch (e) {}
-    const result = await hydrateFromCloud();
+    const result = await withRetry(() => hydrateFromCloud(), 4, 1200);
     if (result === 'empty') {
       setStatus('Setting up shared data…');
       await seedCloudFromLocal();
@@ -429,10 +443,18 @@
     const email = $('vi-email').value.trim();
     const password = $('vi-pass').value;
     $('vi-err').textContent = '';
+    $('vi-retry').style.display = 'none';
     $('vi-btn').disabled = true;
-    const { data, error } = await sb.auth.signInWithPassword({ email, password });
-    if (error) { $('vi-err').textContent = error.message; $('vi-btn').disabled = false; return; }
-    await startSession();
+    try {
+      const { error } = await sb.auth.signInWithPassword({ email, password });
+      if (error) { $('vi-err').textContent = error.message; $('vi-btn').disabled = false; return; }
+      await startSession();
+    } catch (e) {
+      console.error('login/start failed', e);
+      $('vi-btn').disabled = false;
+      $('vi-err').textContent = 'Could not reach the server. Pull down to refresh, or tap Try again.';
+      $('vi-retry').style.display = 'block';
+    }
   }
 
   function showSetPw(mode) {
@@ -476,33 +498,107 @@
     }
   }
 
+  // One-time setup: load the client + wire up the form handlers.
+  let _setupDone = false;
+  let _hashType = '';
+  async function setup() {
+    if (_setupDone) return;
+    const { createClient } = await import('https://esm.sh/@supabase/supabase-js@2');
+    sb = createClient(SB_URL, SB_KEY);
+    window._sb = sb;
+    $('vi-btn').onclick = doLogin;
+    $('vi-pass').addEventListener('keydown', e => { if (e.key === 'Enter') doLogin(); });
+    $('vi-forgot').onclick = doForgot;
+    window.viOpenChangePassword = () => showSetPw('change');
+    $('vi-setpw-btn').onclick = doSetPassword;
+    $('vi-setpw-cancel').onclick = () => { $('vi-setpw').style.display = 'none'; };
+    $('vi-newpw2').addEventListener('keydown', e => { if (e.key === 'Enter') doSetPassword(); });
+    sb.auth.onAuthStateChange((event, session) => { authToken = (session && session.access_token) || authToken; if (event === 'PASSWORD_RECOVERY') showSetPw('recovery'); });
+    _setupDone = true;
+  }
+
+  // The connection step — retried by init() on failure.
+  async function connect() {
+    const { data: { session } } = await sb.auth.getSession();
+    authToken = (session && session.access_token) || authToken;
+    if (_hashType === 'recovery') { showSetPw('recovery'); return; }
+    if (_hashType === 'invite') { showSetPw('invite'); return; }
+    if (session) { await startSession(); }
+    else { $('vi-email').focus(); }
+  }
+
+  function showInitError() {
+    $('vi-err').textContent = 'Could not reach the server. Pull down to refresh, or tap Try again.';
+    setStatus('');
+    $('vi-retry').style.display = 'block';
+  }
+
   async function init() {
     // Capture the auth link type from the URL hash BEFORE the Supabase client
     // loads — detectSessionInUrl consumes and clears the hash, so read it first.
-    const hashType = (window.location.hash.match(/type=([a-z_]+)/i) || [])[1] || '';
-    try {
-      const { createClient } = await import('https://esm.sh/@supabase/supabase-js@2');
-      sb = createClient(SB_URL, SB_KEY);
-      window._sb = sb;
-      $('vi-btn').onclick = doLogin;
-      $('vi-pass').addEventListener('keydown', e => { if (e.key === 'Enter') doLogin(); });
-      $('vi-forgot').onclick = doForgot;
-      window.viOpenChangePassword = () => showSetPw('change');
-      $('vi-setpw-btn').onclick = doSetPassword;
-      $('vi-setpw-cancel').onclick = () => { $('vi-setpw').style.display = 'none'; };
-      $('vi-newpw2').addEventListener('keydown', e => { if (e.key === 'Enter') doSetPassword(); });
-      sb.auth.onAuthStateChange((event, session) => { authToken = (session && session.access_token) || authToken; if (event === 'PASSWORD_RECOVERY') showSetPw('recovery'); });
-      const { data: { session } } = await sb.auth.getSession();
-      authToken = (session && session.access_token) || authToken;
-      if (hashType === 'recovery') { showSetPw('recovery'); }
-      else if (hashType === 'invite') { showSetPw('invite'); }
-      else if (session) { await startSession(); } else { $('vi-email').focus(); }
-    } catch (e) {
-      console.error('Sync init failed', e);
-      $('vi-err').textContent = 'Could not reach the server. Check your connection and reload.';
+    if (!_hashType) _hashType = (window.location.hash.match(/type=([a-z_]+)/i) || [])[1] || '';
+    $('vi-err').textContent = '';
+    $('vi-retry').style.display = 'none';
+    const delays = [1200, 2500, 5000];
+    for (let attempt = 0; ; attempt++) {
+      try {
+        await setup();
+        await connect();
+        return;  // success
+      } catch (e) {
+        console.error('Sync init failed (attempt ' + (attempt + 1) + ')', e);
+        if (attempt < delays.length) {
+          $('vi-err').textContent = 'Connecting… retrying';
+          await new Promise(r => setTimeout(r, delays[attempt]));
+          continue;
+        }
+        showInitError();  // give up after retries — user can pull-to-refresh or tap Try again
+        return;
+      }
     }
   }
+  $('vi-retry').onclick = () => init();
   init();
+</script>
+
+<!-- Pull-to-refresh on the sign-in / error screen (the installed PWA has no reload button). -->
+<script>
+(function () {
+  function authVisible() {
+    var a = document.getElementById('vi-auth');
+    if (!a) return false;
+    if (a.style.display === 'none') return false;
+    try { return getComputedStyle(a).display !== 'none'; } catch (e) { return true; }
+  }
+  var startY = null, pulling = false, THRESH = 70, ind = null;
+  function indicator() {
+    if (ind) return ind;
+    ind = document.createElement('div');
+    ind.style.cssText = 'position:fixed;top:0;left:0;right:0;height:0;overflow:hidden;display:flex;align-items:flex-end;justify-content:center;padding-bottom:6px;color:#8B949E;font:600 12px "DM Sans",system-ui;z-index:100001;transition:height .12s;pointer-events:none';
+    document.body.appendChild(ind);
+    return ind;
+  }
+  window.addEventListener('touchstart', function (e) {
+    pulling = authVisible() && window.scrollY <= 0 && e.touches.length === 1;
+    startY = pulling ? e.touches[0].clientY : null;
+  }, { passive: true });
+  window.addEventListener('touchmove', function (e) {
+    if (!pulling || startY == null) return;
+    var dy = e.touches[0].clientY - startY;
+    if (dy > 0) {
+      var el = indicator();
+      el.style.height = Math.min(dy, THRESH + 30) + 'px';
+      el.textContent = dy >= THRESH ? '↻ Release to refresh' : '↓ Pull to refresh';
+    }
+  }, { passive: true });
+  window.addEventListener('touchend', function (e) {
+    if (!pulling || startY == null) { return; }
+    var endY = (e.changedTouches && e.changedTouches[0]) ? e.changedTouches[0].clientY : startY;
+    if (ind) ind.style.height = '0px';
+    if (endY - startY >= THRESH) location.reload();
+    startY = null; pulling = false;
+  }, { passive: true });
+})();
 </script>
 
 <!-- ===== Web Push: paste your VAPID PUBLIC key below (from `npx web-push generate-vapid-keys`) ===== -->
