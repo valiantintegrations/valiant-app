@@ -2804,6 +2804,10 @@ function toggleMoreMenu() {
       <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M5 5h14l1.5 12H3.5L5 5z"/><path d="M9 5V4a3 3 0 0 1 6 0v1"/></svg>
       Shop Work
     </div>
+    <div onclick="navigate('feature-requests');document.getElementById('more-menu')?.remove()" style="padding:14px 20px;color:#C9D1D9;font-size:14px;cursor:pointer;display:flex;align-items:center;gap:10px;-webkit-tap-highlight-color:transparent">
+      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2a7 7 0 0 0-4 12.7c.5.4.8 1 .8 1.6V17h6.4v-.7c0-.6.3-1.2.8-1.6A7 7 0 0 0 12 2z"/><path d="M9 21h6M10 17v4M14 17v4"/></svg>
+      Feature Requests
+    </div>
     ${(() => { const _m = getTeamMember(getActiveTeamMemberId()); return (_m && Array.isArray(_m.access) && _m.access.includes('admin')); })() ? `
     <div onclick="navigate('team');document.getElementById('more-menu')?.remove()" style="padding:14px 20px;color:#C9D1D9;font-size:14px;cursor:pointer;display:flex;align-items:center;gap:10px;-webkit-tap-highlight-color:transparent">
       <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><circle cx="9" cy="7" r="3.5"/><circle cx="17" cy="7" r="2.5"/><path d="M2 20c0-3.866 3.134-6 7-6s7 2.134 7 6"/><path d="M17 14c2.761 0 5 1.567 5 4"/></svg>
@@ -2855,7 +2859,8 @@ function navigate(page) {
     dashboard: 'Dashboard', calendar: 'Calendar', projects: 'Projects',
     'schedule-builder': 'Schedule Builder',
     'open-projects': 'Open Projects',
-    shopwork: 'Shop Work', vendors: 'Vendors', intake: 'New Intake', team: 'Team'
+    shopwork: 'Shop Work', vendors: 'Vendors', intake: 'New Intake', team: 'Team',
+    'feature-requests': 'Feature Requests'
   };
   document.getElementById('page-title').textContent = titles[page] || 'Dashboard';
   renderCurrentPage();
@@ -2881,7 +2886,25 @@ function _persistNav() {
   } catch (e) {}
 }
 
+function _ensureMobileFitStyles() {
+  if (document.getElementById('vi-mobile-fit')) return;
+  const st = document.createElement('style');
+  st.id = 'vi-mobile-fit';
+  st.textContent = `
+    @media (max-width: 768px) {
+      html, body { max-width: 100vw; overflow-x: hidden; }
+      #app, #main, #content { max-width: 100vw; min-width: 0; }
+      #content img { max-width: 100%; height: auto; }
+      #content .dashboard-card { max-width: 100%; box-sizing: border-box; }
+      .attn-grid { grid-template-columns: 1fr !important; }
+      .pmap-wrap, .pmap-track, .pmap-labels,
+      .ready-sales-track, .ready-sales-sublabels { max-width: 100%; }
+    }
+  `;
+  document.head.appendChild(st);
+}
 function renderCurrentPage() {
+  _ensureMobileFitStyles();
   const c = document.getElementById('content');
   if (!c) return;
   // Cleanup any lingering floating tooltips before re-rendering. Defensive —
@@ -2901,6 +2924,7 @@ function renderCurrentPage() {
       case 'team': renderTeam(c); break;
       case 'admin': renderAdmin(c); break;
       case 'settings': renderSettings(c); break;
+      case 'feature-requests': renderFeatureRequests(c); break;
       case 'project': renderProjectPage(c); break;
       default: renderDashboard(c);
     }
@@ -19716,6 +19740,123 @@ async function fetchProjectDetail(projectId) {
 
 // ── Init ──
 // Refresh Team + Admin nav items based on current user's permissions
+
+// ── Feature Requests ──────────────────────────────────────────────────────
+// Stored as per-request keys (vi_freq_<id>) so concurrent submissions from
+// different people sync without clobbering one shared blob.
+function getFeatureRequests() {
+  const out = [];
+  for (let i = 0; i < localStorage.length; i++) {
+    const k = localStorage.key(i);
+    if (k && k.indexOf('vi_freq_') === 0) {
+      try { const v = JSON.parse(localStorage.getItem(k)); if (v && v.id) out.push(v); } catch (e) {}
+    }
+  }
+  return out.sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
+}
+async function _pushNotifyFeatureRequest(req) {
+  try {
+    if (!window.VI_VAPID_PUBLIC) return;
+    const me = getActiveTeamMemberId();
+    const adminIds = (state.team || []).map(m => m.id)
+      .filter(id => id !== me && (state.userPermissions && state.userPermissions[id] && state.userPermissions[id].bundle === 'master_admin'));
+    if (!adminIds.length) return;
+    const subs = await _fetchSubsFor(adminIds);
+    const targets = adminIds.map(id => subs[id]).filter(Boolean);
+    if (!targets.length) return;
+    _pushSend(targets, 'New feature request', (req.submittedByName || 'Someone') + ': ' + (req.text || '').slice(0, 80), '/', 'freq_' + req.id);
+  } catch (e) {}
+}
+function submitFeatureRequest() {
+  const ta = document.getElementById('freq-text');
+  const text = (ta && ta.value || '').trim();
+  if (!text) { showToast('Describe the request first', 'info'); return; }
+  const me = getActiveTeamMemberId();
+  const id = String(Date.now()) + '_' + Math.floor(Math.random() * 1000);
+  const req = {
+    id, text,
+    category: (document.getElementById('freq-cat') || {}).value || 'General',
+    submittedById: me,
+    submittedByName: (getTeamMember(me) || {}).name || 'Someone',
+    createdAt: Date.now(),
+    status: 'new'
+  };
+  save('vi_freq_' + id, req);
+  showToast('Feature request sent — thanks!', 'success');
+  _pushNotifyFeatureRequest(req);
+  renderCurrentPage();
+}
+function setFeatureRequestStatus(id, status) {
+  const k = 'vi_freq_' + id;
+  try { const v = JSON.parse(localStorage.getItem(k)); if (v) { v.status = status; save(k, v); renderCurrentPage(); } } catch (e) {}
+}
+function deleteFeatureRequest(id) {
+  if (!confirm('Delete this feature request?')) return;
+  localStorage.removeItem('vi_freq_' + id);
+  renderCurrentPage();
+}
+const FREQ_STATUS = {
+  new: { label: 'New', color: '#D29922' },
+  planned: { label: 'Planned', color: '#58A6FF' },
+  in_progress: { label: 'In progress', color: '#BC8CFF' },
+  done: { label: 'Done', color: '#3FB950' },
+  declined: { label: 'Declined', color: '#8B949E' }
+};
+function renderFeatureRequests(c) {
+  const isAdmin = currentUserHasPermission('admin.system');
+  const me = getActiveTeamMemberId();
+  const all = getFeatureRequests();
+  const visible = isAdmin ? all : all.filter(r => r.submittedById === me);
+  const cats = ['General', 'Bug', 'Mobile', 'Calendar', 'Projects', 'Scheduling', 'Notifications', 'Other'];
+
+  const submitCard = `
+    <div class="dashboard-card" style="margin-bottom:14px">
+      <div class="dashboard-card-title">Request a feature or change</div>
+      <textarea id="freq-text" class="form-textarea" rows="3" placeholder="Describe what you'd like added or changed…" style="width:100%;margin-bottom:8px"></textarea>
+      <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+        <select id="freq-cat" class="form-input" style="width:auto">${cats.map(x => `<option value="${x}">${x}</option>`).join('')}</select>
+        <button class="btn-primary" onclick="submitFeatureRequest()" style="padding:8px 18px;font-size:13px">Send request</button>
+      </div>
+    </div>`;
+
+  const itemHTML = r => {
+    const st = FREQ_STATUS[r.status] || FREQ_STATUS.new;
+    const meta = `${esc(r.category || 'General')} \u00b7 ${esc(r.submittedByName || 'Someone')} \u00b7 ${esc(new Date(r.createdAt || Date.now()).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }))}`;
+    const right = isAdmin
+      ? `<div style="display:flex;flex-direction:column;gap:6px;align-items:flex-end;flex-shrink:0">
+           <select onchange="setFeatureRequestStatus('${r.id}', this.value)" class="form-input" style="width:auto;font-size:11px;padding:4px 8px;border-color:${st.color}66;color:${st.color}">
+             ${Object.keys(FREQ_STATUS).map(k => `<option value="${k}" ${r.status === k ? 'selected' : ''}>${FREQ_STATUS[k].label}</option>`).join('')}
+           </select>
+           <button class="btn btn-sm" onclick="deleteFeatureRequest('${r.id}')" style="font-size:13px;padding:2px 9px;color:#8B949E" title="Delete">\u00d7</button>
+         </div>`
+      : `<span style="flex-shrink:0;font-size:11px;font-weight:600;padding:3px 9px;border-radius:20px;color:${st.color};background:${st.color}1A;border:1px solid ${st.color}44">${st.label}</span>`;
+    return `
+      <div class="dashboard-card" style="margin-bottom:10px;padding:12px 14px">
+        <div style="display:flex;justify-content:space-between;gap:12px;align-items:flex-start">
+          <div style="flex:1;min-width:0">
+            <div style="font-size:13px;color:#E6EDF3;white-space:pre-wrap;word-break:break-word">${esc(r.text)}</div>
+            <div style="font-size:11px;color:#6E7681;margin-top:5px">${meta}</div>
+          </div>
+          ${right}
+        </div>
+      </div>`;
+  };
+
+  const listHTML = visible.length
+    ? visible.map(itemHTML).join('')
+    : `<div class="dashboard-card" style="text-align:center;color:#6E7681;font-size:13px;padding:24px">No requests yet.</div>`;
+
+  const heading = isAdmin
+    ? `All requests <span style="color:#6E7681;font-weight:400">(${all.length})</span>`
+    : `Your requests`;
+
+  c.innerHTML = `
+    <div style="max-width:760px;margin:0 auto">
+      ${submitCard}
+      <div class="dashboard-card-title" style="margin:6px 2px 10px">${heading}</div>
+      ${listHTML}
+    </div>`;
+}
 function refreshAdminNav() {
   const toolsSection = document.querySelectorAll('.nav-section')[1];
   // Gate the top-bar "+ New Intake" button by projects.create permission
@@ -19768,6 +19909,28 @@ function refreshAdminNav() {
         calLink.parentNode.insertBefore(link, calLink);
       }
     } catch (e) { console.warn('Schedule Builder nav injection skipped:', e); }
+  })();
+
+  // Feature Requests nav item — everyone can submit; admin sees all + manages.
+  (function() {
+    try {
+      if (!document.querySelector('.nav-item[data-page="feature-requests"]')) {
+        const link = document.createElement('a');
+        link.className = 'nav-item';
+        link.dataset.page = 'feature-requests';
+        link.onclick = () => navigate('feature-requests');
+        link.innerHTML = '<svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M8 1.6a4.4 4.4 0 0 0-2.6 8c.3.2.6.6.6 1V11h4v-.4c0-.4.3-.8.6-1a4.4 4.4 0 0 0-2.6-8z" stroke="currentColor" stroke-width="1.2" stroke-linejoin="round"/><path d="M6.3 13.4h3.4M7 11v2.4M9 11v2.4" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/></svg><span>Feature Requests</span><span class="nav-badge" id="freq-nav-badge"></span>';
+        const settingsLink = document.querySelector('.nav-item[data-page="settings"]');
+        if (settingsLink && settingsLink.parentNode) settingsLink.parentNode.insertBefore(link, settingsLink);
+        else { const op = document.querySelector('.nav-item[data-page="open-projects"]'); if (op && op.parentNode) op.parentNode.insertBefore(link, op.nextSibling); }
+      }
+      const badge = document.getElementById('freq-nav-badge');
+      if (badge) {
+        const showN = currentUserHasPermission('admin.system') ? getFeatureRequests().filter(r => r.status === 'new').length : 0;
+        badge.textContent = showN > 0 ? showN : '';
+        badge.style.display = showN > 0 ? '' : 'none';
+      }
+    } catch (e) {}
   })();
 
   if (!toolsSection) return;
