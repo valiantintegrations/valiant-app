@@ -2862,8 +2862,11 @@ function toggleSidebar() {
   document.getElementById('sidebar').classList.toggle('open');
 }
 
+let _navRestored = false;
 function _persistNav() {
   // Per-device, NOT synced (no vi_ prefix) — remembers the last page so a reload stays put.
+  // Don't save until the boot-time restore has run, or early renders overwrite the remembered page.
+  if (!_navRestored) return;
   try {
     localStorage.setItem('nav_last', JSON.stringify({
       page: state.currentPage,
@@ -4200,7 +4203,7 @@ async function _pollMessages() {
     else { try { updateBottomNavMsgBadge(); } catch (e) {} }
   }
 }
-setInterval(_pollMessages, 5000);
+setInterval(_pollMessages, 2000);
 
 function getNoteSections(role) {
   return state.noteSections[role] || [];
@@ -19810,6 +19813,7 @@ async function init() {
       }
     }
   } catch (e) {}
+  _navRestored = true;
   try {
     renderCurrentPage();
   } catch (e) {
