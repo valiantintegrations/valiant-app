@@ -4742,7 +4742,7 @@ function getUpcomingMeetings() {
   const myId = getActiveTeamMemberId();
   return state.meetings
     .filter(m => m.date >= today)
-    .filter(m => (m.attendees || []).map(Number).includes(myId) || m.createdBy === myId)
+    .filter(m => (m.attendees || []).map(Number).includes(myId))
     .sort((a, b) => (a.date + a.time).localeCompare(b.date + b.time))
     .slice(0, 5);
 }
