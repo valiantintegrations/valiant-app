@@ -3928,7 +3928,7 @@ function sendMessage() {
   const member = getTeamMember(getActiveTeamMemberId());
   if (!member) return;
   state.messages.push({
-    id: Date.now(),
+    id: Date.now() * 1000 + Math.floor(Math.random() * 1000),
     senderId: member.id,
     senderName: member.name,
     senderInitials: member.initials || getInitials(member.name),
@@ -3944,6 +3944,7 @@ function sendMessage() {
   state._attachUploading = false;
   if (input) input.value = '';
   updateRightPanel();
+  setTimeout(() => { try { _pollMessages(); } catch (e) {} }, 200);
   setTimeout(() => { const list = document.getElementById('msg-list'); if (list) list.scrollTop = list.scrollHeight; }, 50);
 }
 
@@ -4214,7 +4215,14 @@ async function viTestPush() {
 
 // Apply an incoming message change pushed live by the realtime layer (no reload).
 function applyLiveMessages() {
-  try { state.messages = JSON.parse(localStorage.getItem('vi_messages') || '[]'); } catch (e) { return; }
+  let incoming;
+  try { incoming = JSON.parse(localStorage.getItem('vi_messages') || '[]'); } catch (e) { return; }
+  // Union with what we already hold so a clobbered cloud copy can't drop our own
+  // not-yet-uploaded messages (the next poll re-pushes anything the cloud lacks).
+  const _byId = new Map();
+  (Array.isArray(incoming) ? incoming : []).forEach(m => { if (m && m.id != null) _byId.set(m.id, m); });
+  (Array.isArray(state.messages) ? state.messages : []).forEach(m => { if (m && m.id != null && !_byId.has(m.id)) _byId.set(m.id, m); });
+  state.messages = Array.from(_byId.values());
   const list = document.getElementById('msg-list');
   if (list) {
     // Messages panel is open — refresh just the list, keeping scroll position.
@@ -4248,17 +4256,20 @@ async function _pollMessages() {
   if (!sb || !state.team || !state.team.length) return;
   let cloud;
   try {
-    const { data } = await sb.from('app_data').select('value').eq('key', 'vi_messages').single();
+    const { data } = await sb.from('app_data').select('value').eq('key', 'vi_messages').maybeSingle();
     cloud = (data && Array.isArray(data.value)) ? data.value : [];
   } catch (e) { return; }            // row not created yet, or a transient error
   _lastCloudMsgCount = cloud.length;
   const local = Array.isArray(state.messages) ? state.messages : [];
+  const localIds = new Set(local.map(m => m && m.id).filter(v => v != null));
+  const cloudIds = new Set(cloud.map(m => m && m.id).filter(v => v != null));
   const byId = new Map();
   cloud.forEach(m => { if (m && m.id != null) byId.set(m.id, m); });
   local.forEach(m => { if (m && m.id != null) byId.set(m.id, m); });
   const union = Array.from(byId.values());
-  const gotNew = union.length !== local.length;        // cloud had messages we lacked
-  const cloudMissing = union.length !== cloud.length;  // we hold messages the cloud lacks
+  // Membership diff — length comparison missed simultaneous cross-adds and clobbers.
+  let gotNew = false;       cloudIds.forEach(id => { if (!localIds.has(id)) gotNew = true; });
+  let cloudMissing = false; localIds.forEach(id => { if (!cloudIds.has(id)) cloudMissing = true; });
   if (!gotNew && !cloudMissing) return;
   state.messages = union;
   try { localStorage.setItem('vi_messages', JSON.stringify(union)); } catch (e) {}  // mirrors up
