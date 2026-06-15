@@ -4270,6 +4270,13 @@ async function _pollMessages() {
   // Membership diff — length comparison missed simultaneous cross-adds and clobbers.
   let gotNew = false;       cloudIds.forEach(id => { if (!localIds.has(id)) gotNew = true; });
   let cloudMissing = false; localIds.forEach(id => { if (!cloudIds.has(id)) cloudMissing = true; });
+  // Track which ids the cloud has confirmed (drives the per-message sent indicator),
+  // and refresh the open thread when that set changes so 'sending' flips to 'sent'.
+  state._cloudMsgIds = cloudIds;
+  if (document.getElementById('msg-list') && cloud.length !== state._prevCloudCount) {
+    state._prevCloudCount = cloud.length;
+    try { const _l = document.getElementById('msg-list'); if (_l) _l.innerHTML = renderMessagesList(state.activeConversation || 'team'); } catch (e) {}
+  }
   if (!gotNew && !cloudMissing) return;
   state.messages = union;
   try { localStorage.setItem('vi_messages', JSON.stringify(union)); } catch (e) {}  // mirrors up
@@ -4457,7 +4464,7 @@ function renderMessagesList(channelId) {
         <div style="max-width:80%">
           ${!isMe ? `<div style="font-size:10px;color:#6E7681;margin-bottom:2px;padding-left:2px">${esc(m.senderName)}</div>` : ''}
           ${m.text ? `<div style="background:${isMe ? '#1565C0' : '#161B22'};border:1px solid ${isMe ? '#1565C066' : '#30363D'};border-radius:${isMe ? '10px 10px 2px 10px' : '10px 10px 10px 2px'};padding:7px 10px;font-size:12px;color:#E6EDF3;line-height:1.4;word-break:break-word">${esc(m.text)}</div>` : ''}${_attachmentsHTML(m, isMe)}
-          <div style="font-size:9px;color:#6E7681;margin-top:2px;text-align:${isMe ? 'right' : 'left'};padding:0 2px">${timeStr}</div>
+          <div style="font-size:9px;color:#6E7681;margin-top:2px;text-align:${isMe ? 'right' : 'left'};padding:0 2px">${timeStr}${isMe ? ((state._cloudMsgIds && state._cloudMsgIds.has(m.id)) ? ' <span style="color:#3FB950">· ✓ sent</span>' : ' <span style="color:#D29922">· ↑ sending</span>') : ''}</div>
         </div>
       </div>`;
   }).join('');
