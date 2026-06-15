@@ -658,11 +658,40 @@ function canSwitchUsers() {
 }
 function getActiveTeamMemberId() {
   const authId = getAuthMemberId();
-  // Pin non-switchers to their own member, ignoring any stored/shared selection.
-  if (authId != null && !canSwitchUsers()) return authId;
+  if (authId != null) {
+    if (!canSwitchUsers()) return authId;             // non-admin: pinned to their own member
+    const stored = parseInt(sessionStorage.getItem('vi_active_member'));
+    return stored || authId;                           // master admin may sandbox another member
+  }
+  // No team member matches this login.
+  if ((window.VI_AUTH_EMAIL || '').trim()) return null; // SECURITY: unlinked login gets NO identity (locked out) — never fall back to the owner
+  // No login email at all (local/offline dev) → legacy fallback so the owner isn't bricked.
   const stored = parseInt(sessionStorage.getItem('vi_active_member'));
-  if (stored) return stored;
-  return authId || state.team[0]?.id || 1;
+  return stored || state.team[0]?.id || 1;
+}
+
+// True when someone is logged in but their email matches no team member.
+function _isUnlinkedLogin() {
+  if (!Array.isArray(state.team) || state.team.length === 0) return false; // team not loaded yet — don't lock
+  return getAuthMemberId() == null && !!(window.VI_AUTH_EMAIL || '').trim();
+}
+
+// Full-screen lock for an unlinked login — shows instead of any account data.
+function _renderUnlinkedLock() {
+  const email = (window.VI_AUTH_EMAIL || '').trim();
+  let el = document.getElementById('vi-unlinked-lock');
+  if (!el) { el = document.createElement('div'); el.id = 'vi-unlinked-lock'; document.body.appendChild(el); }
+  el.setAttribute('style', 'position:fixed;inset:0;z-index:99999;background:#0D1117;display:flex;align-items:center;justify-content:center;padding:24px;text-align:center');
+  el.innerHTML = `
+    <div style="max-width:420px">
+      <div style="width:54px;height:54px;border-radius:50%;background:#21262D;border:1px solid #30363D;display:flex;align-items:center;justify-content:center;margin:0 auto 16px">
+        <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#8B949E" stroke-width="1.8"><rect x="4" y="10" width="16" height="11" rx="2"/><path d="M8 10V7a4 4 0 0 1 8 0v3"/></svg>
+      </div>
+      <div style="font-size:18px;font-weight:600;color:#E6EDF3;margin-bottom:8px">Account not set up</div>
+      <div style="font-size:14px;color:#8B949E;line-height:1.5;margin-bottom:6px">This login isn't linked to a team member yet, so there's nothing to show here.</div>
+      <div style="font-size:13px;color:#6E7681;margin-bottom:20px">Ask your administrator to add <span style="color:#C9D1D9">${esc(email)}</span> as a team member with this exact email.</div>
+      <button onclick="(window.viSignOut ? window.viSignOut() : location.reload())" style="background:#21262D;border:1px solid #30363D;color:#E6EDF3;font-size:14px;font-family:'DM Sans',sans-serif;padding:10px 22px;border-radius:8px;cursor:pointer;-webkit-tap-highlight-color:transparent">Log out</button>
+    </div>`;
 }
 
 // Diagnostic: explains how the current device resolved "who am I". Temporary aid
@@ -1659,6 +1688,7 @@ function updateInstallTask(taskId, patch) {
 }
 
 function deleteInstallTask(taskId) {
+  if (!_canDeleteTasks()) { showToast('Only managers can delete tasks', 'error'); return; }
   state.installTasks = (state.installTasks || []).filter(t => t.id !== taskId);
   save('vi_install_tasks', state.installTasks);
 }
@@ -1699,6 +1729,7 @@ function updateInstallSubtask(taskId, subtaskId, patch) {
 }
 
 function deleteInstallSubtask(taskId, subtaskId) {
+  if (!_canDeleteTasks()) { showToast('Only managers can delete tasks', 'error'); return; }
   const t = getInstallTaskById(taskId);
   if (!t) return;
   t.subtasks = (t.subtasks || []).filter(x => x.id !== subtaskId);
@@ -1757,6 +1788,7 @@ function updateDesignTask(taskId, patch) {
 }
 
 function deleteDesignTask(taskId) {
+  if (!_canDeleteTasks()) { showToast('Only managers can delete tasks', 'error'); return; }
   state.designTasks = (state.designTasks || []).filter(t => t.id !== taskId);
   save('vi_design_tasks', state.designTasks);
 }
@@ -1795,6 +1827,7 @@ function updateDesignSubtask(taskId, subtaskId, patch) {
 }
 
 function deleteDesignSubtask(taskId, subtaskId) {
+  if (!_canDeleteTasks()) { showToast('Only managers can delete tasks', 'error'); return; }
   const t = getDesignTaskById(taskId);
   if (!t) return;
   t.subtasks = (t.subtasks || []).filter(x => x.id !== subtaskId);
@@ -2934,12 +2967,22 @@ function _ensurePhaseFocusStyles() {
     .ready-sublabels-focus .rsl-done,
     .ready-sublabels-focus .rsl-future { flex: 1 1 0; }
     .ready-sublabels-focus .rsl-active { flex: 5 1 0; }
+    body:not(.can-del-tasks) .itask-del { display: none !important; }
   `;
   document.head.appendChild(st);
+}
+function _canDeleteTasks() {
+  if (currentUserHasPermission('admin.system')) return true; // Master Admin (Jacob)
+  const bk = getActiveUserBundleKey();
+  // Install Manager (Clint) + anyone with project-management responsibilities.
+  return ['master_admin', 'install_admin', 'project_coordinator', 'project_manager'].includes(bk);
 }
 function renderCurrentPage() {
   _ensureMobileFitStyles();
   _ensurePhaseFocusStyles();
+  if (_isUnlinkedLogin()) { _renderUnlinkedLock(); return; }
+  { const _lk = document.getElementById('vi-unlinked-lock'); if (_lk) _lk.remove(); }
+  try { document.body.classList.toggle('can-del-tasks', _canDeleteTasks()); } catch (e) {}
   const c = document.getElementById('content');
   if (!c) return;
   // Cleanup any lingering floating tooltips before re-rendering. Defensive —
@@ -4776,7 +4819,7 @@ function injectRightPanel() {
         #right-panel.rp-mobile-open .rpanel-strip{display:none!important}
         #right-panel.rp-mobile-open .rpanel-content{width:100vw!important;max-width:100vw!important;height:100%!important;height:100dvh!important;display:flex!important;flex-direction:column!important}
         #right-panel.rp-mobile-open .rp-mobile-close{display:flex!important;position:absolute;top:10px;right:12px;z-index:10;background:#21262D;border:1px solid #30363D;color:#C9D1D9;width:30px;height:30px;border-radius:8px;align-items:center;justify-content:center;font-size:15px;line-height:1;cursor:pointer;-webkit-tap-highlight-color:transparent}
-        #right-panel.rp-mobile-open .rpanel-header{padding-top:max(12px,env(safe-area-inset-top))!important;padding-left:max(22px,env(safe-area-inset-left))!important;padding-right:max(22px,env(safe-area-inset-right))!important}
+        #right-panel.rp-mobile-open .rpanel-header{padding-top:max(12px,env(safe-area-inset-top))!important;padding-left:max(22px,env(safe-area-inset-left))!important;padding-right:max(56px,calc(env(safe-area-inset-right) + 46px))!important}
         #right-panel.rp-mobile-open #msg-list{padding-left:max(22px,env(safe-area-inset-left))!important;padding-right:max(22px,env(safe-area-inset-right))!important;padding-top:6px!important}
         #right-panel.rp-mobile-open .msg-composer{padding-left:max(14px,env(safe-area-inset-left))!important;padding-right:max(14px,env(safe-area-inset-right))!important;padding-bottom:max(20px,env(safe-area-inset-bottom))!important}
         #right-panel.rp-mobile-open .rp-mobile-close{top:max(10px,env(safe-area-inset-top))!important;right:max(12px,env(safe-area-inset-right))!important}
@@ -9610,7 +9653,7 @@ function _photoCardHTML(taskId, subId, photo, review) {
     return `<div class="photo-card has" onclick="event.stopPropagation()">
       <a href="${esc(photo)}" target="_blank" rel="noopener" class="photo-card-thumb" title="View photo"><img src="${esc(photo)}" alt="completion photo"></a>
       <div class="photo-card-main">
-        <div class="photo-card-label">\U0001F4F7 Photo attached</div>
+        <div class="photo-card-label">📷 Photo attached</div>
         <div class="photo-card-actions">
           <a href="${esc(photo)}" target="_blank" rel="noopener" class="photo-card-btn">View</a>
           <button class="photo-card-btn" onclick="_uploadSubtaskPhoto(${taskId}, ${subId})">Replace</button>
@@ -9621,7 +9664,7 @@ function _photoCardHTML(taskId, subId, photo, review) {
   }
   return `<div class="photo-card req" onclick="event.stopPropagation()">
     <div class="photo-card-main">
-      <div class="photo-card-label">\U0001F4F7 Photo required</div>
+      <div class="photo-card-label">📷 Photo required</div>
       <div class="photo-card-actions">
         <button class="photo-card-btn amber" onclick="_uploadSubtaskPhoto(${taskId}, ${subId})">Upload photo</button>
       </div>
@@ -10712,7 +10755,7 @@ function renderSubtaskRow(projectId, phase, task, activeId, canManage) {
       ${canManage ? `
         <div style="display:flex;gap:2px;flex-shrink:0">
           <button class="btn btn-sm" onclick="showSubtaskDialog(${projectId}, '${phase}', ${task.id})" style="font-size:10px;padding:3px 7px">Edit</button>
-          <button class="btn btn-sm" onclick="confirmDeleteSubtask(${projectId}, '${phase}', ${task.id})" style="font-size:11px;padding:3px 7px;color:#8B949E" title="Delete">×</button>
+          ${_canDeleteTasks() ? `<button class="btn btn-sm" onclick="confirmDeleteSubtask(${projectId}, '${phase}', ${task.id})" style="font-size:11px;padding:3px 7px;color:#8B949E" title="Delete">×</button>` : ''}
         </div>
       ` : ''}
     </div>
@@ -10901,6 +10944,7 @@ function showToast(msg, kind = 'info') {
 }
 
 function confirmDeleteSubtask(projectId, phase, taskId) {
+  if (!_canDeleteTasks()) { showToast('Only managers can delete tasks', 'error'); return; }
   if (!confirm('Delete this task?')) return;
   deleteSubtask(projectId, phase, taskId);
   rerenderCurrentTab();
@@ -19387,7 +19431,7 @@ function saveUserPermissions(memberId) {
         </div>
         <div class="form-row">
           <div class="form-group">
-            <label class="form-label">Email</label>
+            <label class="form-label">Email <span style="color:#F85149">*</span></label>
             <input class="form-input" id="tm-email" type="email" value="${existing ? esc(existing.email || '') : ''}" placeholder="email@company.com">
           </div>
           <div class="form-group">
@@ -19459,6 +19503,10 @@ function saveMemberDialog(memberId) {
     if (el.classList.contains('checked')) access.push(el.dataset.access);
   });
   if (!name) { alert('Please enter a name.'); return; }
+  if (!email) { alert('An email is required \u2014 it links this person to their login. Without it they cannot sign in to their own account.'); return; }
+  if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) { alert('Please enter a valid email address.'); return; }
+  const _dupe = (state.team || []).find(m => m.id !== memberId && (m.email || '').trim().toLowerCase() === email.toLowerCase());
+  if (_dupe) { alert('That email is already linked to ' + _dupe.name + '. Each person needs a unique email.'); return; }
   if (access.length === 0) { alert('Please select at least one dashboard access.'); return; }
   if (memberId) {
     const member = getTeamMember(memberId);
