@@ -3944,7 +3944,7 @@ function sendMessage() {
   state._attachUploading = false;
   if (input) input.value = '';
   updateRightPanel();
-  setTimeout(() => { try { _pollMessages(); } catch (e) {} }, 200);
+  setTimeout(() => { try { _syncMessagesNow({ toastError: true }); } catch (e) {} }, 150);
   setTimeout(() => { const list = document.getElementById('msg-list'); if (list) list.scrollTop = list.scrollHeight; }, 50);
 }
 
@@ -4286,6 +4286,52 @@ async function _pollMessages() {
   }
 }
 setInterval(_pollMessages, 2000);
+
+// Direct, awaited push of the message log to the cloud that SURFACES write errors
+// (the localStorage mirror swallows them, which is why a failed upload just sits on
+// the 'sending' indicator forever). Merges with the cloud copy first so we never
+// clobber messages other people sent.
+async function _syncMessagesNow(opts) {
+  opts = opts || {};
+  const sb = window._sb;
+  if (!sb) { if (opts.toastError) showToast('Not connected to the cloud', 'error'); return false; }
+  try {
+    let cloud = [];
+    try {
+      const { data } = await sb.from('app_data').select('value').eq('key', 'vi_messages').maybeSingle();
+      cloud = (data && Array.isArray(data.value)) ? data.value : [];
+    } catch (e) {}
+    const byId = new Map();
+    cloud.forEach(m => { if (m && m.id != null) byId.set(m.id, m); });
+    (Array.isArray(state.messages) ? state.messages : []).forEach(m => { if (m && m.id != null) byId.set(m.id, m); }); // local wins
+    const union = Array.from(byId.values());
+    const { error } = await sb.from('app_data').upsert({ key: 'vi_messages', value: union }, { onConflict: 'key' });
+    if (error) {
+      console.warn('message sync write FAILED', error);
+      if (opts.toastError) showToast('Send failed: ' + (error.message || error.code || 'cloud write rejected'), 'error');
+      return false;
+    }
+    state.messages = union;
+    state._cloudMsgIds = new Set(union.map(m => m && m.id).filter(v => v != null));
+    const _l = document.getElementById('msg-list');
+    if (_l) _l.innerHTML = renderMessagesList(state.activeConversation || 'team');
+    if (opts.toastOk) showToast('Synced', 'success');
+    return true;
+  } catch (e) {
+    console.warn('message sync error', e);
+    if (opts.toastError) showToast('Send error: ' + (e && e.message ? e.message : e), 'error');
+    return false;
+  }
+}
+// Manual trigger for debugging from anywhere: viSyncNow()
+window.viSyncNow = function () { return _syncMessagesNow({ toastError: true, toastOk: true }); };
+// When the app returns to the foreground (iOS suspends PWAs), re-push anything stuck and pull anything new.
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'visible') {
+    try { _syncMessagesNow({}); } catch (e) {}
+    try { _pollMessages(); } catch (e) {}
+  }
+});
 
 function getNoteSections(role) {
   return state.noteSections[role] || [];
