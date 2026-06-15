@@ -598,6 +598,7 @@ function removeTeamMember(id) {
   }
   state.team = state.team.filter(m => m.id !== id);
   save('vi_team', state.team);
+  _syncTeamNow({ toast: true });
 }
 
 function switchUser(memberId) {
@@ -4368,6 +4369,29 @@ async function _syncMessagesNow(opts) {
 }
 // Manual trigger for debugging from anywhere: viSyncNow()
 window.viSyncNow = function () { return _syncMessagesNow({ toastError: true, toastOk: true }); };
+
+// Team is a single-blob, low-frequency, high-importance write. The background
+// mirror can silently fail on a backgrounding mobile PWA, so on every team change
+// we push directly and AWAIT it, surfacing any error instead of losing the change.
+async function _syncTeamNow(opts) {
+  opts = opts || {};
+  const sb = window._sb;
+  if (!sb) { if (opts.toast) showToast('Not connected to the cloud \u2014 change not saved', 'error'); return false; }
+  try {
+    const { error } = await sb.from('app_data').upsert({ key: 'vi_team', value: state.team }, { onConflict: 'key' });
+    if (error) {
+      console.warn('team cloud save FAILED', error);
+      if (opts.toast) showToast('Cloud save failed: ' + (error.message || error.code || 'write rejected'), 'error');
+      return false;
+    }
+    if (opts.toast) showToast('Saved', 'success');
+    return true;
+  } catch (e) {
+    console.warn('team cloud save error', e);
+    if (opts.toast) showToast('Save error: ' + (e && e.message ? e.message : e), 'error');
+    return false;
+  }
+}
 // When the app returns to the foreground (iOS suspends PWAs), re-push anything stuck and pull anything new.
 document.addEventListener('visibilitychange', () => {
   if (document.visibilityState === 'visible') {
@@ -19528,6 +19552,7 @@ function saveMemberDialog(memberId) {
     addTeamMember(name, access, primaryRole, email, phone);
   }
   save('vi_team', state.team);
+  _syncTeamNow({ toast: true });
   document.getElementById('team-dialog')?.remove();
   renderTeam(document.getElementById('content'));
 }
