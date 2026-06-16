@@ -2856,6 +2856,10 @@ function toggleMoreMenu() {
       <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M22 2 11 13"/><path d="m22 2-7 20-4-9-9-4 20-7z"/></svg>
       Send Test Notification
     </div>
+    <div onclick="document.getElementById('more-menu')?.remove();viPushDiag()" style="padding:14px 20px;color:#C9D1D9;font-size:14px;cursor:pointer;display:flex;align-items:center;gap:10px;-webkit-tap-highlight-color:transparent">
+      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M12 16v-4"/><path d="M12 8h.01"/></svg>
+      Notification Diagnostics
+    </div>
     <div style="border-top:1px solid #30363D;margin:4px 0"></div>
     <div onclick="syncJetbuilt();document.getElementById('more-menu')?.remove()" style="padding:14px 20px;color:#58A6FF;font-size:14px;cursor:pointer;display:flex;align-items:center;gap:10px;-webkit-tap-highlight-color:transparent">
       <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M20 12A8 8 0 1 1 12 4"/><path d="M12 4l3-3M12 4l3 3"/></svg>
@@ -4256,6 +4260,73 @@ async function viTestPush() {
     alert('Could not reach /api/push-send (route missing or network):\n' + (e && e.message ? e.message : e));
   }
 }
+
+// One-screen notification diagnostic — shows install/permission/subscription/identity
+// state so a teammate can see (and screenshot) exactly why push isn't reaching them.
+async function viPushDiag() {
+  const ua = navigator.userAgent || '';
+  const isIOS = /iPhone|iPad|iPod/.test(ua);
+  const standalone = (window.matchMedia && window.matchMedia('(display-mode: standalone)').matches) || window.navigator.standalone === true;
+  const supported = _pushSupported();
+  const perm = (typeof Notification !== 'undefined') ? Notification.permission : 'unavailable';
+  const vapid = !!window.VI_VAPID_PUBLIC;
+  const mid = getActiveTeamMemberId();
+  const me = (mid != null && typeof getTeamMember === 'function') ? getTeamMember(mid) : null;
+  const authMatched = (typeof getAuthMemberId === 'function') ? (getAuthMemberId() != null) : null;
+  let localSub = false, cloudSub = false;
+  try { localSub = !!_getMyPushSub(); } catch (e) {}
+  try {
+    if (window._sb && mid != null) {
+      const { data } = await window._sb.from('app_data').select('key').eq('key', _pushSubKey(mid)).maybeSingle();
+      cloudSub = !!data;
+    }
+  } catch (e) {}
+  const ok = (b) => b ? '<span style="color:#3FB950">✓</span>' : '<span style="color:#F85149">✗</span>';
+  const rows = [
+    ['Logged in as', me ? (esc(me.name) + ' (#' + mid + ')') : '<span style="color:#F85149">none</span>'],
+    ['Identity linked by email', authMatched == null ? '?' : (ok(authMatched) + (authMatched ? '' : ' <span style="color:#F85149">— push saves under wrong person</span>'))],
+    ['Installed to Home Screen', ok(standalone) + ((!standalone && isIOS) ? ' <span style="color:#D29922">— required on iPhone</span>' : '')],
+    ['Push supported here', ok(supported)],
+    ['Notification permission', perm === 'granted' ? (ok(true) + ' granted') : ('<span style="color:#F85149">' + esc(perm) + '</span>')],
+    ['Subscribed on this device', ok(localSub)],
+    ['Subscription saved in cloud', ok(cloudSub)],
+    ['Push configured (VAPID)', ok(vapid)]
+  ];
+  let advice;
+  if (isIOS && !standalone) advice = 'On iPhone, push only works when the app is installed. In Safari tap the Share button → “Add to Home Screen,” then open the app from that icon and tap “Enable” below.';
+  else if (perm !== 'granted') advice = 'Notifications aren’t granted on this device. Tap “Enable” below; if it’s blocked, check your phone’s Settings → Notifications for this app.';
+  else if (!localSub || !cloudSub) advice = 'Permission is on but this device isn’t fully subscribed/synced. Tap “Enable” to (re)register, then “Send test.”';
+  else if (authMatched === false) advice = 'Your subscription may be saved under the wrong identity. Make sure your team record has your login email, then tap “Enable” again.';
+  else advice = 'Everything looks set on this device. Tap “Send test” to confirm a banner appears.';
+  let modal = document.getElementById('push-diag');
+  if (modal) modal.remove();
+  modal = document.createElement('div');
+  modal.id = 'push-diag';
+  modal.className = 'modal-overlay';
+  modal.style.display = 'flex';
+  modal.innerHTML = `
+    <div class="modal-container" style="max-width:440px">
+      <div class="modal-header">
+        <div class="modal-title">Notification Diagnostics</div>
+        <button class="modal-close" onclick="document.getElementById('push-diag')?.remove()">
+          <svg width="18" height="18" viewBox="0 0 18 18" fill="none"><path d="M4 4l10 10M14 4L4 14" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
+        </button>
+      </div>
+      <div class="modal-body">
+        <div style="font-size:13px">
+          ${rows.map(r => `<div style="display:flex;justify-content:space-between;gap:12px;border-bottom:1px solid #1C2333;padding:6px 0"><span style="color:#8B949E">${r[0]}</span><span style="color:#C9D1D9;text-align:right">${r[1]}</span></div>`).join('')}
+        </div>
+        <div style="margin-top:14px;font-size:13px;color:#C9D1D9;background:#161B22;border:1px solid #30363D;border-radius:8px;padding:12px;line-height:1.5">${advice}</div>
+        <div style="display:flex;gap:8px;margin-top:14px">
+          <button class="btn-primary" onclick="document.getElementById('push-diag')?.remove();viEnablePush()" style="flex:1;padding:11px">Enable</button>
+          <button class="btn" onclick="viTestPush()" style="flex:1;padding:11px">Send test</button>
+        </div>
+      </div>
+    </div>`;
+  document.body.appendChild(modal);
+  modal.addEventListener('click', e => { if (e.target === modal) modal.remove(); });
+}
+window.viPushDiag = viPushDiag;
 
 // Apply an incoming message change pushed live by the realtime layer (no reload).
 function applyLiveMessages() {
