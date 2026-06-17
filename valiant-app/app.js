@@ -2857,7 +2857,10 @@ function viLaunchReset(){
   const projRows=rows.map(r=>`
     <label style="display:flex;align-items:center;gap:10px;padding:9px 4px;border-bottom:1px solid #21262D;cursor:pointer">
       <input type="checkbox" class="lr-proj" value="${r.p.id}" ${r.match?'checked':''} style="width:18px;height:18px;flex:none">
-      <span style="flex:1;color:#C9D1D9;font-size:13px">${esc(r.p.name||('Project '+r.p.id))}</span>
+      <span style="flex:1;min-width:0">
+        <span style="display:block;color:#C9D1D9;font-size:13px">${esc(r.p.name||('Project '+r.p.id))}</span>
+        ${r.p.client_name?`<span style="display:block;color:#8B949E;font-size:11px;margin-top:1px">${esc(r.p.client_name)}</span>`:''}
+      </span>
       ${pill(r.p.stage)}
     </label>`).join('');
   const ov=document.createElement('div');
@@ -19027,6 +19030,13 @@ function renderSettings(c) {
           <button type="button" class="btn btn-sm" onclick="window.viSignOut && window.viSignOut()">Sign out</button>
         </div>
       </div>
+      ${isMasterAdminLogin() ? `
+      <div class="dashboard-card" style="margin-top:14px;border-color:#F8514944">
+        <div style="font-size:11px;font-weight:600;color:#F85149;text-transform:uppercase;letter-spacing:0.08em;margin-bottom:4px">Admin — one-time</div>
+        <div style="font-size:14px;font-weight:600;color:#E6EDF3;margin-bottom:2px">Launch Reset</div>
+        <div style="font-size:12px;color:#8B949E;margin-bottom:12px">Prepare the app for crew launch: wipe calendar, estimated install windows and install tasks; set which projects are in Install; park the rest in Estimation. Destructive and live — keeps permissions, team and projects.</div>
+        <button type="button" class="btn btn-sm" style="background:#DA3633;border:none;color:#fff;font-weight:600" onclick="viLaunchReset()">Open Launch Reset</button>
+      </div>` : ''}
       ${renderCalendarSubscribeCard()}
     </div>
   `;
