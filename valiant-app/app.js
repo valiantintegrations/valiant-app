@@ -2818,6 +2818,141 @@ function injectBottomNav() {
   setTimeout(ensurePushSubscribed, 2500);
 }
 
+// ── Launch Reset (one-time, master-admin only) ─────────────────────────────
+// Prepares the app for crew launch. Wipes calendar + install tasks, keeps
+// permissions / team logins / templates / vendors / project records. Lets the
+// admin pick which projects are in the Install stage from the REAL project list
+// (sidesteps the unreliable P-number matcher). Destructive + live: cloud writes
+// are awaited directly so it can't half-save on mobile.
+const _LAUNCH_INSTALL_TARGETS = [
+  'Shure Batteries','Caldwell Fair','SoundGrid Server','Turbosound Monitor',
+  'Overflow Infrastructure_Better','Decklink Card & Chassis','Room 100 Screen Rigging Points',
+  'Post Falls Campus Lighting (Low Volt)_Extended Warranty','Payette Audio Video Upgrades Option 1',
+  'Single Projector Replacement','Harvest AV Package (House Lights, Camera, Key Lights)',
+  'Star Events Center Additional -1','Star Events Center Best V3','Front Fills','LS Hazer'
+];
+function _lrNorm(s){return String(s||'').toLowerCase().replace(/[^a-z0-9]+/g,'');}
+function _lrMatchTarget(name){
+  const n=_lrNorm(name); if(!n) return false;
+  return _LAUNCH_INSTALL_TARGETS.some(t=>{const tn=_lrNorm(t);return n===tn||n.includes(tn)||tn.includes(n);});
+}
+async function _lrUpsert(key,value){
+  save(key,value);
+  const sb=window._sb;
+  if(!sb) return {ok:false,err:'no cloud connection'};
+  try{
+    const {error}=await sb.from('app_data').upsert({key,value},{onConflict:'key'});
+    if(error) return {ok:false,err:error.message||error.code||'write rejected'};
+    return {ok:true};
+  }catch(e){return {ok:false,err:(e&&e.message)?e.message:String(e)};}
+}
+function viLaunchReset(){
+  if(!isMasterAdminLogin()){ showToast('Master admin only','error'); return; }
+  document.getElementById('vi-launch-reset')?.remove();
+  const projects=(state.projects||[]).filter(p=>!p.archived);
+  const rows=projects.map(p=>({p,match:_lrMatchTarget(p.name)}));
+  rows.sort((a,b)=>(b.match-a.match)||String(a.p.name||'').localeCompare(String(b.p.name||'')));
+  const unmatched=_LAUNCH_INSTALL_TARGETS.filter(t=>!rows.some(r=>{const tn=_lrNorm(t),n=_lrNorm(r.p.name);return n===tn||n.includes(tn)||tn.includes(n);}));
+  const pill=(st)=>{const s=STAGES.find(x=>x.key===st)||{label:st||'—',color:'gray'};return `<span class="status-pill status-${s.color}" style="font-size:10px;padding:1px 7px">${esc(s.label)}</span>`;};
+  const projRows=rows.map(r=>`
+    <label style="display:flex;align-items:center;gap:10px;padding:9px 4px;border-bottom:1px solid #21262D;cursor:pointer">
+      <input type="checkbox" class="lr-proj" value="${r.p.id}" ${r.match?'checked':''} style="width:18px;height:18px;flex:none">
+      <span style="flex:1;color:#C9D1D9;font-size:13px">${esc(r.p.name||('Project '+r.p.id))}</span>
+      ${pill(r.p.stage)}
+    </label>`).join('');
+  const ov=document.createElement('div');
+  ov.id='vi-launch-reset';
+  ov.style.cssText='position:fixed;inset:0;background:rgba(0,0,0,0.6);z-index:200;display:flex;align-items:center;justify-content:center;padding:16px';
+  ov.innerHTML=`
+    <div style="background:#0D1117;border:1px solid #30363D;border-radius:14px;max-width:560px;width:100%;max-height:90vh;display:flex;flex-direction:column">
+      <div style="padding:18px 20px 12px">
+        <div style="font-size:17px;font-weight:700;color:#F0F6FC">Launch Reset</div>
+        <div style="font-size:12px;color:#F85149;margin-top:6px;line-height:1.5">Destructive and live. This changes data for <b>everyone</b> immediately and can't be undone. Permissions, team logins, templates, vendors and project records are kept.</div>
+      </div>
+      <div style="overflow-y:auto;padding:0 20px;flex:1">
+        <div style="font-size:11px;font-weight:700;color:#6E7681;text-transform:uppercase;letter-spacing:.07em;margin:6px 0">Wipe</div>
+        <label style="display:flex;gap:10px;align-items:flex-start;padding:8px 0;cursor:pointer">
+          <input type="checkbox" id="lr-cal" checked style="width:18px;height:18px;margin-top:1px;flex:none">
+          <span style="font-size:13px;color:#C9D1D9">Calendar — clears all meetings + personal events</span>
+        </label>
+        <label style="display:flex;gap:10px;align-items:flex-start;padding:8px 0;cursor:pointer">
+          <input type="checkbox" id="lr-est" checked style="width:18px;height:18px;margin-top:1px;flex:none">
+          <span style="font-size:13px;color:#C9D1D9">Estimated install windows — clears every estimated date (test data)</span>
+        </label>
+        <label style="display:flex;gap:10px;align-items:flex-start;padding:8px 0;cursor:pointer">
+          <input type="checkbox" id="lr-booked" style="width:18px;height:18px;margin-top:1px;flex:none">
+          <span style="font-size:13px;color:#C9D1D9">Booked install windows — clears confirmed dates (leave off to keep any real ones)</span>
+        </label>
+        <label style="display:flex;gap:10px;align-items:flex-start;padding:8px 0;cursor:pointer">
+          <input type="checkbox" id="lr-tasks" checked style="width:18px;height:18px;margin-top:1px;flex:none">
+          <span style="font-size:13px;color:#C9D1D9">All install tasks — clears every project's install task list</span>
+        </label>
+        <div style="font-size:11px;font-weight:700;color:#6E7681;text-transform:uppercase;letter-spacing:.07em;margin:16px 0 4px">Install phase — checked projects only</div>
+        <div style="font-size:12px;color:#8B949E;margin-bottom:8px;line-height:1.5">Checked = Install stage. Every other project moves to Estimation, so it stays off employee dashboards (Projects tab only) until it's in Install or someone is assigned. Pre-checked by name match — verify these.</div>
+        ${unmatched.length?`<div style="font-size:12px;color:#D29922;background:rgba(210,153,34,.1);border:1px solid rgba(210,153,34,.3);border-radius:8px;padding:8px 10px;margin-bottom:8px;line-height:1.5">No name match for: ${unmatched.map(esc).join(', ')}. Find these in the list manually.</div>`:''}
+        <div style="border:1px solid #21262D;border-radius:8px;padding:0 10px;max-height:34vh;overflow-y:auto">${projRows||'<div style="padding:14px;color:#6E7681;font-size:13px">No projects.</div>'}</div>
+      </div>
+      <div style="padding:14px 20px 18px;border-top:1px solid #21262D">
+        <div style="font-size:12px;color:#8B949E;margin-bottom:6px">Type <b style="color:#F0F6FC">RESET</b> to enable.</div>
+        <input id="lr-confirm" type="text" autocomplete="off" oninput="var b=document.getElementById('lr-go');b.disabled=(this.value.trim()!=='RESET');b.style.opacity=b.disabled?'.5':'1'" placeholder="RESET" style="width:100%;box-sizing:border-box;background:#161B22;border:1px solid #30363D;border-radius:8px;padding:10px 12px;color:#F0F6FC;font-size:14px;margin-bottom:12px">
+        <div style="display:flex;gap:10px;justify-content:flex-end">
+          <button onclick="document.getElementById('vi-launch-reset')?.remove()" style="background:#21262D;border:1px solid #30363D;color:#C9D1D9;border-radius:8px;padding:10px 18px;font-size:14px;cursor:pointer">Cancel</button>
+          <button id="lr-go" disabled onclick="_runLaunchReset()" style="background:#DA3633;border:none;color:#fff;border-radius:8px;padding:10px 18px;font-size:14px;font-weight:600;cursor:pointer;opacity:.5">Run reset</button>
+        </div>
+      </div>
+    </div>`;
+  document.body.appendChild(ov);
+}
+async function _runLaunchReset(){
+  if(!isMasterAdminLogin()){ showToast('Master admin only','error'); return; }
+  const ce=document.getElementById('lr-confirm');
+  if(!ce || ce.value.trim()!=='RESET'){ showToast('Type RESET to confirm','error'); return; }
+  const goBtn=document.getElementById('lr-go');
+  if(goBtn){ goBtn.disabled=true; goBtn.textContent='Running…'; goBtn.style.opacity='.6'; }
+  const doCal=document.getElementById('lr-cal')?.checked;
+  const doEst=document.getElementById('lr-est')?.checked;
+  const doBooked=document.getElementById('lr-booked')?.checked;
+  const doTasks=document.getElementById('lr-tasks')?.checked;
+  const checkedIds=new Set(Array.from(document.querySelectorAll('.lr-proj:checked')).map(el=>parseInt(el.value)));
+  const fails=[];
+  if(doCal){
+    state.meetings=[]; state.personalEvents=[]; state.meetingLogs={};
+    let r=await _lrUpsert('vi_meetings',[]); if(!r.ok) fails.push('meetings ('+r.err+')');
+    r=await _lrUpsert('vi_personal_events',[]); if(!r.ok) fails.push('personal events ('+r.err+')');
+    r=await _lrUpsert('vi_meeting_logs',{}); if(!r.ok) fails.push('meeting logs ('+r.err+')');
+  }
+  if(doEst){
+    state.estimatedInstallOverride={};
+    let r=await _lrUpsert('vi_estimated_install',{}); if(!r.ok) fails.push('estimated windows ('+r.err+')');
+  }
+  if(doBooked){
+    state.bookedDates={};
+    let r=await _lrUpsert('vi_booked_dates',{}); if(!r.ok) fails.push('booked windows ('+r.err+')');
+  }
+  if(doTasks){
+    state.installTasks=[]; state.installChangeRequests={};
+    let r=await _lrUpsert('vi_install_tasks',[]); if(!r.ok) fails.push('install tasks ('+r.err+')');
+    r=await _lrUpsert('vi_install_change_requests',{}); if(!r.ok) fails.push('change requests ('+r.err+')');
+  }
+  let movedIn=0, parked=0, estStripped=0;
+  (state.projects||[]).forEach(p=>{
+    if(p.archived) return;
+    if(doEst && p.jb_estimated_install){ delete p.jb_estimated_install; estStripped++; }
+    if(checkedIds.has(p.id)){ if(p.stage!=='install'){ p.stage='install'; movedIn++; } }
+    else { if(p.stage!=='proposal'){ p.stage='proposal'; parked++; } }
+  });
+  try{ localStorage.setItem('vi_projects_cache', JSON.stringify(state.projects)); }catch(e){}
+  const rp=await _lrUpsert('vi_projects', state.projects); if(!rp.ok) fails.push('projects ('+rp.err+')');
+  document.getElementById('vi-launch-reset')?.remove();
+  if(fails.length){
+    showToast('Reset finished WITH ERRORS: '+fails.join('; '),'error');
+  }else{
+    showToast(`Reset complete — ${checkedIds.size} in Install (${movedIn} new), ${parked} parked in Estimation`,'success');
+  }
+  try{ renderCurrentPage(); }catch(e){}
+}
+window.viLaunchReset=viLaunchReset;
+
 function toggleMoreMenu() {
   let menu = document.getElementById('more-menu');
   if (menu) { menu.remove(); return; }
@@ -2860,6 +2995,12 @@ function toggleMoreMenu() {
       <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M12 16v-4"/><path d="M12 8h.01"/></svg>
       Notification Diagnostics
     </div>
+    ${isMasterAdminLogin() ? `
+    <div style="border-top:1px solid #30363D;margin:4px 0"></div>
+    <div onclick="document.getElementById('more-menu')?.remove();viLaunchReset()" style="padding:14px 20px;color:#F85149;font-size:14px;cursor:pointer;display:flex;align-items:center;gap:10px;-webkit-tap-highlight-color:transparent">
+      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 1 0 9-9 9 9 0 0 0-6.36 2.64L3 8"/><path d="M3 3v5h5"/></svg>
+      Launch Reset
+    </div>` : ''}
     <div style="border-top:1px solid #30363D;margin:4px 0"></div>
     <div onclick="syncJetbuilt();document.getElementById('more-menu')?.remove()" style="padding:14px 20px;color:#58A6FF;font-size:14px;cursor:pointer;display:flex;align-items:center;gap:10px;-webkit-tap-highlight-color:transparent">
       <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M20 12A8 8 0 1 1 12 4"/><path d="M12 4l3-3M12 4l3 3"/></svg>
