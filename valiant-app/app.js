@@ -2891,7 +2891,7 @@ function viLaunchReset(){
           <span style="font-size:13px;color:#C9D1D9">All install tasks — clears every project's install task list</span>
         </label>
         <div style="font-size:11px;font-weight:700;color:#6E7681;text-transform:uppercase;letter-spacing:.07em;margin:16px 0 4px">Install phase — checked projects only</div>
-        <div style="font-size:12px;color:#8B949E;margin-bottom:8px;line-height:1.5">Checked = Install stage. Every other project moves to Estimation, so it stays off employee dashboards (Projects tab only) until it's in Install or someone is assigned. Pre-checked by name match — verify these.</div>
+        <div style="font-size:12px;color:#8B949E;margin-bottom:8px;line-height:1.5">Checked = Install stage; every other project is moved out of Install. Projects show on dashboards only when in Install or someone's assigned — otherwise Projects tab only. Pre-checked by name match — verify these.</div>
         ${unmatched.length?`<div style="font-size:12px;color:#D29922;background:rgba(210,153,34,.1);border:1px solid rgba(210,153,34,.3);border-radius:8px;padding:8px 10px;margin-bottom:8px;line-height:1.5">No name match for: ${unmatched.map(esc).join(', ')}. Find these in the list manually.</div>`:''}
         <div style="border:1px solid #21262D;border-radius:8px;padding:0 10px;max-height:34vh;overflow-y:auto">${projRows||'<div style="padding:14px;color:#6E7681;font-size:13px">No projects.</div>'}</div>
       </div>
@@ -2937,12 +2937,12 @@ async function _runLaunchReset(){
     let r=await _lrUpsert('vi_install_tasks',[]); if(!r.ok) fails.push('install tasks ('+r.err+')');
     r=await _lrUpsert('vi_install_change_requests',{}); if(!r.ok) fails.push('change requests ('+r.err+')');
   }
-  let movedIn=0, parked=0, estStripped=0;
+  let movedIn=0, movedOut=0, estStripped=0;
   (state.projects||[]).forEach(p=>{
     if(p.archived) return;
     if(doEst && p.jb_estimated_install){ delete p.jb_estimated_install; estStripped++; }
     if(checkedIds.has(p.id)){ if(p.stage!=='install'){ p.stage='install'; movedIn++; } }
-    else { if(p.stage!=='proposal'){ p.stage='proposal'; parked++; } }
+    else if(p.stage==='install'){ p.stage='contract'; movedOut++; }
   });
   try{ localStorage.setItem('vi_projects_cache', JSON.stringify(state.projects)); }catch(e){}
   const rp=await _lrUpsert('vi_projects', state.projects); if(!rp.ok) fails.push('projects ('+rp.err+')');
@@ -2950,7 +2950,7 @@ async function _runLaunchReset(){
   if(fails.length){
     showToast('Reset finished WITH ERRORS: '+fails.join('; '),'error');
   }else{
-    showToast(`Reset complete — ${checkedIds.size} in Install (${movedIn} new), ${parked} parked in Estimation`,'success');
+    showToast(`Reset complete — ${checkedIds.size} in Install (${movedIn} new, ${movedOut} moved out)`,'success');
   }
   try{ renderCurrentPage(); }catch(e){}
 }
@@ -14481,7 +14481,7 @@ function renderAllOpenProjectsDashboard(activeProjects) {
   // (not yet signed). Excludes archived. Sales hasn't-mobilized-yet projects also
   // show here (the contract stage covers them) so they stay visible for chasing.
   const openStages = new Set(['contract','design','purchasing','install','commissioning','signoff','closeout','warranty']);
-  const open = activeProjects.filter(p => openStages.has(p.stage));
+  const open = activeProjects.filter(p => openStages.has(p.stage) && _projectVisibleOnDashboards(p));
 
   // Sort by install window start ascending (soonest first), unscheduled last
   open.sort((a, b) => {
@@ -21022,6 +21022,20 @@ function quickActionCreateNote() {
 
 const OPEN_PROJECT_STAGES = ['contract', 'design', 'install'];
 
+// Does this project have anyone assigned in any of the 5 role slots?
+function _hasAnyProjectAssignment(projectId){
+  const a = getProjectAssignment(projectId) || {};
+  return ['sales','design','pm','install','warehouse'].some(role => (a[role] || []).length > 0);
+}
+// Dashboard visibility rule (Jacob): a project surfaces on dashboards / open-project
+// views ONLY when it's in the Install stage OR someone is assigned to it. Everything
+// else lives only in the Projects tab lookup. We enforce it here at render time rather
+// than via stage-parking, because milestone auto-advance re-promotes parked stages.
+function _projectVisibleOnDashboards(p){
+  if (!p || p.archived) return false;
+  if (p.stage === 'install') return true;
+  return _hasAnyProjectAssignment(p.id);
+}
 function getOpenProjectsForUser(scope) {
   const memberId = getActiveTeamMemberId();
   // scope: 'all' = every open project company-wide; 'mine' = only ones this user
@@ -21035,6 +21049,8 @@ function getOpenProjectsForUser(scope) {
         (a[role] || []).some(x => x.id === memberId)
       );
     });
+  } else {
+    projects = projects.filter(p => _projectVisibleOnDashboards(p));
   }
   return projects;
 }
