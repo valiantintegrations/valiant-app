@@ -3126,11 +3126,25 @@ function _canDeleteTasks() {
   // Install Manager (Clint) + anyone with project-management responsibilities.
   return ['master_admin', 'install_admin', 'project_coordinator', 'project_manager'].includes(bk);
 }
+// Pin currentUserName/currentUserRole to the resolved login for non-admins so
+// no stale device default (e.g. the owner) shows through. Master admins keep
+// switcher-driven identity.
+function _bindLoginIdentity() {
+  if (canSwitchUsers()) return;
+  const _lid = getAuthMemberId();
+  const _lm = _lid != null ? getTeamMember(_lid) : null;
+  if (!_lm) return;
+  currentUserName = _lm.name;
+  currentUserRole = _lm.primaryRole || (Array.isArray(_lm.access) && _lm.access[0]) || 'installer';
+  state.dashboardView = currentUserRole;
+  try { localStorage.setItem('vi_user', currentUserName); localStorage.setItem('vi_role', currentUserRole); } catch (e) {}
+}
 function renderCurrentPage() {
   _ensureMobileFitStyles();
   _ensurePhaseFocusStyles();
   if (_isUnlinkedLogin()) { _renderUnlinkedLock(); return; }
   { const _lk = document.getElementById('vi-unlinked-lock'); if (_lk) _lk.remove(); }
+  _bindLoginIdentity();
   try { document.body.classList.toggle('can-del-tasks', _canDeleteTasks()); } catch (e) {}
   const c = document.getElementById('content');
   if (!c) return;
@@ -20567,6 +20581,7 @@ async function init() {
       };
     }
   }
+  _bindLoginIdentity();
   const userAvatar = document.querySelector('.user-avatar');
   const userName = document.querySelector('.user-name');
   const userRole = document.querySelector('.user-role');
