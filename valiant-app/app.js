@@ -2431,12 +2431,23 @@ const ARCHIVE_BINS = [
 // Awaited cloud write for vi_archived so completing/reopening a job actually
 // sticks on mobile (the passive mirror can drop a single-blob write).
 async function _syncArchivedNow() {
+  // Legacy single-blob mirror (kept for back-compat / older clients).
   save('vi_archived', state.archived);
   const sb = window._sb;
   if (!sb) return;
+  try { await sb.from('app_data').upsert({ key: 'vi_archived', value: state.archived }, { onConflict: 'key' }); } catch (e) {}
+}
+// Per-project archive record — clobber-proof (one key per project), awaited so
+// a failed write surfaces instead of silently reverting on reload.
+async function _persistArchiveRecord(projectId, bin) {
+  const sb = window._sb;
+  if (!sb) return;
+  const key = 'vi_arch_' + projectId;
   try {
-    const { error } = await sb.from('app_data').upsert({ key: 'vi_archived', value: state.archived }, { onConflict: 'key' });
-    if (error) showToast('Status may not have synced — try again', 'error');
+    let res;
+    if (bin) res = await sb.from('app_data').upsert({ key, value: bin }, { onConflict: 'key' });
+    else res = await sb.from('app_data').delete().eq('key', key);
+    if (res && res.error) showToast('Status may not have synced — try again', 'error');
   } catch (e) { showToast('Status may not have synced — try again', 'error'); }
 }
 
@@ -2444,7 +2455,9 @@ function archiveProject(projectId, bin) {
   state.archived[projectId] = bin;
   const p = state.projects.find(x => x.id === projectId);
   if (p) p.archived = bin;
-  _syncArchivedNow();
+  try { localStorage.setItem('vi_arch_' + projectId, JSON.stringify(bin)); } catch (e) {}
+  save('vi_archived', state.archived);
+  _persistArchiveRecord(projectId, bin);
   if (bin === 'completed') showToast('Marked completed', 'success');
   renderCurrentPage();
 }
@@ -2453,7 +2466,9 @@ function unarchiveProject(projectId) {
   delete state.archived[projectId];
   const p = state.projects.find(x => x.id === projectId);
   if (p) p.archived = null;
-  _syncArchivedNow();
+  try { localStorage.removeItem('vi_arch_' + projectId); } catch (e) {}
+  save('vi_archived', state.archived);
+  _persistArchiveRecord(projectId, null);
   renderCurrentPage();
 }
 
@@ -2461,8 +2476,20 @@ function unarchiveProject(projectId) {
 // (vi_archived). The cached project blob doesn't carry archived state, so
 // without this a completed job reappears after a reload.
 function _reconcileArchived() {
-  const a = state.archived || {};
-  (state.projects || []).forEach(p => { p.archived = a[p.id] || null; });
+  // Per-project keys (vi_arch_<id>) win over the legacy vi_archived blob.
+  const merged = Object.assign({}, state.archived || {});
+  try {
+    for (let i = 0; i < localStorage.length; i++) {
+      const k = localStorage.key(i);
+      if (!k || k.indexOf('vi_arch_') !== 0) continue;
+      const id = k.slice(8);
+      let v = null;
+      try { v = JSON.parse(localStorage.getItem(k)); } catch (e) { v = localStorage.getItem(k); }
+      if (v) merged[id] = v; else delete merged[id];
+    }
+  } catch (e) {}
+  state.archived = merged;
+  (state.projects || []).forEach(p => { p.archived = merged[p.id] || merged[String(p.id)] || null; });
 }
 
 // Mark a single project completed from its page (reversible).
@@ -3108,8 +3135,9 @@ function _runBulkComplete(){
   if(!(isMasterAdminLogin() || currentUserHasPermission('projects.delete'))){ showToast('Not permitted','error'); return; }
   const ids=Array.from(document.querySelectorAll('#vi-bulk-complete .bc-proj:checked')).map(el=>parseInt(el.value));
   if(!ids.length){ showToast('Nothing selected','error'); return; }
-  ids.forEach(id=>{ state.archived[id]='completed'; const p=state.projects.find(x=>x.id===id); if(p) p.archived='completed'; });
+  ids.forEach(id=>{ state.archived[id]='completed'; const p=state.projects.find(x=>x.id===id); if(p) p.archived='completed'; try{ localStorage.setItem('vi_arch_'+id, '"completed"'); }catch(e){} });
   _syncArchivedNow();
+  ids.forEach(id => _persistArchiveRecord(id, 'completed'));
   document.getElementById('vi-bulk-complete')?.remove();
   showToast(`Marked ${ids.length} job${ids.length>1?'s':''} completed`,'success');
   renderCurrentPage();
