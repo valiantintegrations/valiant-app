@@ -2409,24 +2409,38 @@ function enrichProject(p) {
 
 // ── Archive System ──
 const ARCHIVE_BINS = [
+  { key: 'completed', label: 'Completed', icon: '✓', color: '#3FB950' },
   { key: 'icebox', label: 'Icebox', icon: '❄️', color: '#58A6FF' },
   { key: 'lost', label: 'Lost', icon: '✕', color: '#F85149' },
   { key: 'trash', label: 'Trash', icon: '🗑', color: '#6E7681' }
 ];
 
+// Awaited cloud write for vi_archived so completing/reopening a job actually
+// sticks on mobile (the passive mirror can drop a single-blob write).
+async function _syncArchivedNow() {
+  save('vi_archived', state.archived);
+  const sb = window._sb;
+  if (!sb) return;
+  try {
+    const { error } = await sb.from('app_data').upsert({ key: 'vi_archived', value: state.archived }, { onConflict: 'key' });
+    if (error) showToast('Status may not have synced — try again', 'error');
+  } catch (e) { showToast('Status may not have synced — try again', 'error'); }
+}
+
 function archiveProject(projectId, bin) {
   state.archived[projectId] = bin;
-  save('vi_archived', state.archived);
   const p = state.projects.find(x => x.id === projectId);
   if (p) p.archived = bin;
+  _syncArchivedNow();
+  if (bin === 'completed') showToast('Marked completed', 'success');
   renderCurrentPage();
 }
 
 function unarchiveProject(projectId) {
   delete state.archived[projectId];
-  save('vi_archived', state.archived);
   const p = state.projects.find(x => x.id === projectId);
   if (p) p.archived = null;
+  _syncArchivedNow();
   renderCurrentPage();
 }
 
