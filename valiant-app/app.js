@@ -1123,8 +1123,15 @@ function fmtDate(d) {
 
 function shortDate(d) {
   if (!d) return '';
-  const dt = new Date(d);
-  if (isNaN(dt)) return '';
+  // Date-only YYYY-MM-DD strings must be parsed as LOCAL, not UTC — otherwise a
+  // booked window shows a day early in timezones west of UTC (e.g. Mountain).
+  let dt;
+  if (typeof d === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(d.trim())) {
+    dt = _parseLocalYmd(d);
+  } else {
+    dt = new Date(d);
+  }
+  if (!dt || isNaN(dt)) return '';
   return dt.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
 }
 
