@@ -20416,6 +20416,14 @@ async function syncJetbuilt() {
         // "new project enters Valiant" flow. Once it's in, Valiant owns the stage forever.
         return enriched;
       });
+      // Partial-fetch guard: if some Jetbuilt pages errored, DON'T let a short
+      // result drop projects we already had. Re-add any previously-known project
+      // (with its Valiant stage/archived intact) that wasn't in this fetch.
+      if (errorMsg) {
+        const fetchedIds = new Set(state.projects.map(p => p.id));
+        Object.values(existingMap).forEach(old => { if (!fetchedIds.has(old.id)) state.projects.push(old); });
+        console.warn('Jetbuilt sync was partial (' + errorMsg + ') — preserved existing projects.');
+      }
       try {
         localStorage.setItem('vi_projects_cache', JSON.stringify(state.projects));
         localStorage.setItem('vi_projects_cache_time', new Date().toISOString());
