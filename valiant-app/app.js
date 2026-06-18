@@ -1701,10 +1701,23 @@ function updateInstallTask(taskId, patch) {
   }
 }
 
+// Awaited cloud write for task stores so a delete/edit actually persists on
+// mobile instead of reverting on the next reload/focus-sync.
+async function _syncTasksNow(phase) {
+  const key = phase === 'design' ? 'vi_design_tasks' : 'vi_install_tasks';
+  const val = phase === 'design' ? state.designTasks : state.installTasks;
+  save(key, val);
+  const sb = window._sb;
+  if (!sb) return;
+  try {
+    const { error } = await sb.from('app_data').upsert({ key, value: val }, { onConflict: 'key' });
+    if (error) showToast('Change may not have synced — try again', 'error');
+  } catch (e) { showToast('Change may not have synced — try again', 'error'); }
+}
 function deleteInstallTask(taskId) {
   if (!_canDeleteTasks()) { showToast('Only managers can delete tasks', 'error'); return; }
   state.installTasks = (state.installTasks || []).filter(t => t.id !== taskId);
-  save('vi_install_tasks', state.installTasks);
+  _syncTasksNow('install');
 }
 
 function toggleInstallTaskDone(taskId) {
@@ -1747,7 +1760,7 @@ function deleteInstallSubtask(taskId, subtaskId) {
   const t = getInstallTaskById(taskId);
   if (!t) return;
   t.subtasks = (t.subtasks || []).filter(x => x.id !== subtaskId);
-  save('vi_install_tasks', state.installTasks);
+  _syncTasksNow('install');
 }
 
 function toggleInstallSubtaskDone(taskId, subtaskId) {
@@ -1804,7 +1817,7 @@ function updateDesignTask(taskId, patch) {
 function deleteDesignTask(taskId) {
   if (!_canDeleteTasks()) { showToast('Only managers can delete tasks', 'error'); return; }
   state.designTasks = (state.designTasks || []).filter(t => t.id !== taskId);
-  save('vi_design_tasks', state.designTasks);
+  _syncTasksNow('design');
 }
 
 function toggleDesignTaskDone(taskId) {
@@ -1845,7 +1858,7 @@ function deleteDesignSubtask(taskId, subtaskId) {
   const t = getDesignTaskById(taskId);
   if (!t) return;
   t.subtasks = (t.subtasks || []).filter(x => x.id !== subtaskId);
-  save('vi_design_tasks', state.designTasks);
+  _syncTasksNow('design');
 }
 
 function toggleDesignSubtaskDone(taskId, subtaskId) {
@@ -11398,7 +11411,7 @@ function showToast(msg, kind = 'info') {
 function confirmDeleteSubtask(projectId, phase, taskId) {
   if (!_canDeleteTasks()) { showToast('Only managers can delete tasks', 'error'); return; }
   if (!confirm('Delete this task?')) return;
-  deleteSubtask(projectId, phase, taskId);
+  deleteTask(taskId);
   rerenderCurrentTab();
 }
 
