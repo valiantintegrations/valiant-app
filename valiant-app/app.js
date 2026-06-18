@@ -1116,8 +1116,14 @@ function fmt(n) {
 
 function fmtDate(d) {
   if (!d) return '—';
-  const dt = new Date(d);
-  if (isNaN(dt)) return '—';
+  // Parse date-only / date-prefixed strings as LOCAL (avoids the UTC day-shift).
+  let dt;
+  if (typeof d === 'string' && /^\d{4}-\d{2}-\d{2}/.test(d.trim())) {
+    dt = _parseLocalYmd(d);
+  } else {
+    dt = new Date(d);
+  }
+  if (!dt || isNaN(dt)) return '—';
   return dt.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
 }
 
@@ -1126,7 +1132,7 @@ function shortDate(d) {
   // Date-only YYYY-MM-DD strings must be parsed as LOCAL, not UTC — otherwise a
   // booked window shows a day early in timezones west of UTC (e.g. Mountain).
   let dt;
-  if (typeof d === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(d.trim())) {
+  if (typeof d === 'string' && /^\d{4}-\d{2}-\d{2}/.test(d.trim())) {
     dt = _parseLocalYmd(d);
   } else {
     dt = new Date(d);
@@ -2451,6 +2457,14 @@ function unarchiveProject(projectId) {
   renderCurrentPage();
 }
 
+// Restore each project's archived flag from the stored source of truth
+// (vi_archived). The cached project blob doesn't carry archived state, so
+// without this a completed job reappears after a reload.
+function _reconcileArchived() {
+  const a = state.archived || {};
+  (state.projects || []).forEach(p => { p.archived = a[p.id] || null; });
+}
+
 // Mark a single project completed from its page (reversible).
 function markProjectCompleted(projectId) {
   const p = state.projects.find(x => x.id === projectId);
@@ -3291,6 +3305,7 @@ function renderCurrentPage() {
   if (_isUnlinkedLogin()) { _renderUnlinkedLock(); return; }
   { const _lk = document.getElementById('vi-unlinked-lock'); if (_lk) _lk.remove(); }
   _bindLoginIdentity();
+  _reconcileArchived();
   try { document.body.classList.toggle('can-del-tasks', _canDeleteTasks()); } catch (e) {}
   const c = document.getElementById('content');
   if (!c) return;
@@ -11613,7 +11628,11 @@ function isWorkingDayInWindow(win, dateStr) {
 
 function daysUntil(dateStr) {
   if (!dateStr) return null;
-  const d = new Date(dateStr + 'T00:00:00');
+  const d = (typeof dateStr === 'string' && /^\d{4}-\d{2}-\d{2}/.test(dateStr.trim()))
+    ? _parseLocalYmd(dateStr)
+    : new Date(dateStr);
+  if (!d || isNaN(d)) return null;
+  d.setHours(0, 0, 0, 0);
   const today = new Date();
   today.setHours(0, 0, 0, 0);
   return Math.round((d - today) / 86400000);
