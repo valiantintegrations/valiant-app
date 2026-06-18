@@ -2444,6 +2444,14 @@ function unarchiveProject(projectId) {
   renderCurrentPage();
 }
 
+// Mark a single project completed from its page (reversible).
+function markProjectCompleted(projectId) {
+  const p = state.projects.find(x => x.id === projectId);
+  const name = (p && p.name) || 'this job';
+  if (!confirm('Mark "' + name + '" as completed? It drops off dashboards and files under Completed. You can reopen it anytime.')) return;
+  archiveProject(projectId, 'completed');
+}
+
 function getArchivedProjects(bin) {
   return state.projects.filter(p => p.archived === bin);
 }
@@ -8471,6 +8479,9 @@ function renderProjectPage(c) {
               ? `<span class="status-pill" style="background:${disp.color}22;color:${disp.color};border:1px solid ${disp.color}66" title="Active parallel phase \u2014 lifecycle stage is still Contract">${esc(disp.label)}</span>`
               : `<span class="status-pill status-${stg.color}">${esc(stg.label)}</span>`}
             ${gbbTier ? `<span style="font-size:10px;font-weight:600;padding:3px 8px;border-radius:3px;${gbbBadgeStyle}">${gbbTier.toUpperCase()}</span>` : ''}
+            ${(isMasterAdminLogin() || currentUserHasPermission('projects.delete')) ? (p.archived === 'completed'
+              ? `<button class="btn btn-sm" onclick="unarchiveProject(${p.id})" style="background:#21262D;border:1px solid #30363D;color:#C9D1D9;white-space:nowrap">Reopen</button>`
+              : `<button class="btn btn-sm" onclick="markProjectCompleted(${p.id})" style="background:#238636;border:none;color:#fff;font-weight:600;white-space:nowrap">✓ Completed</button>`) : ''}
           </div>
         </div>
         ${p.systems.length ? `<div class="project-page-tags">${p.systems.map(systemTagHTML).join('')}</div>` : ''}
