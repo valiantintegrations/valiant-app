@@ -1626,7 +1626,7 @@ function getShopWorkTasks() {
   return (state.installTasks || []).filter(t => t.shopWork);
 }
 function getInstallTaskById(taskId) {
-  return (state.installTasks || []).find(t => t.id === taskId) || null;
+  return (state.installTasks || []).find(t => String(t.id) === String(taskId)) || null;
 }
 
 // A master task's effective date range — derived from its subtasks' dates.
@@ -1716,7 +1716,7 @@ async function _syncTasksNow(phase) {
 }
 function deleteInstallTask(taskId) {
   if (!_canDeleteTasks()) { showToast('Only managers can delete tasks', 'error'); return; }
-  state.installTasks = (state.installTasks || []).filter(t => t.id !== taskId);
+  state.installTasks = (state.installTasks || []).filter(t => String(t.id) !== String(taskId));
   _syncTasksNow('install');
 }
 
@@ -1759,7 +1759,7 @@ function deleteInstallSubtask(taskId, subtaskId) {
   if (!_canDeleteTasks()) { showToast('Only managers can delete tasks', 'error'); return; }
   const t = getInstallTaskById(taskId);
   if (!t) return;
-  t.subtasks = (t.subtasks || []).filter(x => x.id !== subtaskId);
+  t.subtasks = (t.subtasks || []).filter(x => String(x.id) !== String(subtaskId));
   _syncTasksNow('install');
 }
 
@@ -1782,7 +1782,7 @@ function toggleInstallSubtaskDone(taskId, subtaskId) {
 // ────────────────────────────────────────────────────────────────────────────
 
 function getDesignTaskById(taskId) {
-  return (state.designTasks || []).find(t => t.id === taskId) || null;
+  return (state.designTasks || []).find(t => String(t.id) === String(taskId)) || null;
 }
 
 function addDesignTask({ projectId, system, title, assigneeIds, isMilestone, dueDate, templateKey }) {
@@ -1816,7 +1816,7 @@ function updateDesignTask(taskId, patch) {
 
 function deleteDesignTask(taskId) {
   if (!_canDeleteTasks()) { showToast('Only managers can delete tasks', 'error'); return; }
-  state.designTasks = (state.designTasks || []).filter(t => t.id !== taskId);
+  state.designTasks = (state.designTasks || []).filter(t => String(t.id) !== String(taskId));
   _syncTasksNow('design');
 }
 
@@ -1857,7 +1857,7 @@ function deleteDesignSubtask(taskId, subtaskId) {
   if (!_canDeleteTasks()) { showToast('Only managers can delete tasks', 'error'); return; }
   const t = getDesignTaskById(taskId);
   if (!t) return;
-  t.subtasks = (t.subtasks || []).filter(x => x.id !== subtaskId);
+  t.subtasks = (t.subtasks || []).filter(x => String(x.id) !== String(subtaskId));
   _syncTasksNow('design');
 }
 
@@ -1874,8 +1874,9 @@ function toggleDesignSubtaskDone(taskId, subtaskId) {
 // Used by the shared task UI / edit-mode functions so they can route writes
 // to the correct store (install vs design). Returns 'install' | 'design' | null.
 function _getTaskPhase(taskId) {
-  if ((state.installTasks || []).some(t => t.id === taskId)) return 'install';
-  if ((state.designTasks || []).some(t => t.id === taskId)) return 'design';
+  const sid = String(taskId);
+  if ((state.installTasks || []).some(t => String(t.id) === sid)) return 'install';
+  if ((state.designTasks || []).some(t => String(t.id) === sid)) return 'design';
   return null;
 }
 function _getTaskByIdAnyPhase(taskId) {
