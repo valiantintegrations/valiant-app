@@ -2488,6 +2488,10 @@ function _reconcileArchived() {
       if (v) merged[id] = v; else delete merged[id];
     }
   } catch (e) {}
+  // Safeguard: any archive value that isn't a known bin is treated as NOT
+  // archived, so a stray/legacy value can never hide a project from every view.
+  const _validBins = new Set(ARCHIVE_BINS.map(b => b.key));
+  Object.keys(merged).forEach(id => { if (!_validBins.has(merged[id])) delete merged[id]; });
   state.archived = merged;
   (state.projects || []).forEach(p => { p.archived = merged[p.id] || merged[String(p.id)] || null; });
 }
