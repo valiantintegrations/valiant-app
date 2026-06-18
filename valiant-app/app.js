@@ -2970,6 +2970,53 @@ async function _runLaunchReset(){
 }
 window.viLaunchReset=viLaunchReset;
 
+// ── Bulk mark-completed picker (migration helper) ──────────────────────────
+function viBulkComplete(){
+  if(!(isMasterAdminLogin() || currentUserHasPermission('projects.delete'))){ showToast('Not permitted','error'); return; }
+  document.getElementById('vi-bulk-complete')?.remove();
+  const projects=(state.projects||[]).filter(p=>!p.archived).sort((a,b)=>String(a.name||'').localeCompare(String(b.name||'')));
+  const pill=(st)=>{const s=STAGES.find(x=>x.key===st)||{label:st||'\u2014',color:'gray'};return `<span class="status-pill status-${s.color}" style="font-size:10px;padding:1px 7px">${esc(s.label)}</span>`;};
+  const rows=projects.map(p=>`
+    <label class="bc-row" data-name="${esc(((p.name||'')+' '+(p.client_name||'')).toLowerCase())}" style="display:flex;align-items:center;gap:10px;padding:9px 4px;border-bottom:1px solid #21262D;cursor:pointer">
+      <input type="checkbox" class="bc-proj" value="${p.id}" style="width:18px;height:18px;flex:none">
+      <span style="flex:1;min-width:0">
+        <span style="display:block;color:#C9D1D9;font-size:13px">${esc(p.name||('Project '+p.id))}</span>
+        ${p.client_name?`<span style="display:block;color:#8B949E;font-size:11px;margin-top:1px">${esc(p.client_name)}</span>`:''}
+      </span>
+      ${pill(p.stage)}
+    </label>`).join('');
+  const ov=document.createElement('div');
+  ov.id='vi-bulk-complete';
+  ov.style.cssText='position:fixed;inset:0;background:rgba(0,0,0,0.6);z-index:200;display:flex;align-items:center;justify-content:center;padding:16px';
+  ov.innerHTML=`
+    <div style="background:#0D1117;border:1px solid #30363D;border-radius:14px;max-width:560px;width:100%;max-height:90vh;display:flex;flex-direction:column">
+      <div style="padding:18px 20px 10px">
+        <div style="font-size:17px;font-weight:700;color:#F0F6FC">Mark jobs completed</div>
+        <div style="font-size:12px;color:#8B949E;margin-top:5px;line-height:1.5">Check the finished jobs and mark them all at once. They drop off dashboards and file under Completed in the Projects tab. Reversible \u2014 reopen any from there.</div>
+        <input id="bc-filter" type="text" autocomplete="off" placeholder="Filter by name or client\u2026" oninput="(function(q){q=q.toLowerCase();document.querySelectorAll('#vi-bulk-complete .bc-row').forEach(function(r){r.style.display=r.getAttribute('data-name').indexOf(q)>=0?'flex':'none';});})(this.value)" style="width:100%;box-sizing:border-box;background:#161B22;border:1px solid #30363D;border-radius:8px;padding:9px 12px;color:#F0F6FC;font-size:13px;margin-top:12px">
+      </div>
+      <div style="overflow-y:auto;padding:0 20px;flex:1;border-top:1px solid #21262D;border-bottom:1px solid #21262D">${rows||'<div style="padding:14px;color:#6E7681;font-size:13px">No active projects.</div>'}</div>
+      <div style="padding:14px 20px 18px;display:flex;gap:10px;justify-content:flex-end;align-items:center">
+        <span id="bc-count" style="margin-right:auto;font-size:12px;color:#8B949E">0 selected</span>
+        <button onclick="document.getElementById('vi-bulk-complete')?.remove()" style="background:#21262D;border:1px solid #30363D;color:#C9D1D9;border-radius:8px;padding:10px 18px;font-size:14px;cursor:pointer">Cancel</button>
+        <button onclick="_runBulkComplete()" style="background:#238636;border:none;color:#fff;border-radius:8px;padding:10px 18px;font-size:14px;font-weight:600;cursor:pointer">Mark Completed</button>
+      </div>
+    </div>`;
+  ov.addEventListener('change',(e)=>{ if(e.target&&e.target.classList&&e.target.classList.contains('bc-proj')){ const n=ov.querySelectorAll('.bc-proj:checked').length; const c=document.getElementById('bc-count'); if(c) c.textContent=n+' selected'; }});
+  document.body.appendChild(ov);
+}
+function _runBulkComplete(){
+  if(!(isMasterAdminLogin() || currentUserHasPermission('projects.delete'))){ showToast('Not permitted','error'); return; }
+  const ids=Array.from(document.querySelectorAll('#vi-bulk-complete .bc-proj:checked')).map(el=>parseInt(el.value));
+  if(!ids.length){ showToast('Nothing selected','error'); return; }
+  ids.forEach(id=>{ state.archived[id]='completed'; const p=state.projects.find(x=>x.id===id); if(p) p.archived='completed'; });
+  _syncArchivedNow();
+  document.getElementById('vi-bulk-complete')?.remove();
+  showToast(`Marked ${ids.length} job${ids.length>1?'s':''} completed`,'success');
+  renderCurrentPage();
+}
+window.viBulkComplete=viBulkComplete;
+
 function toggleMoreMenu() {
   let menu = document.getElementById('more-menu');
   if (menu) { menu.remove(); return; }
@@ -19065,6 +19112,12 @@ function renderSettings(c) {
         <div style="font-size:12px;color:#8B949E;margin-bottom:12px">Prepare the app for crew launch: wipe calendar, estimated install windows and install tasks; set which projects are in Install; park the rest in Estimation. Destructive and live — keeps permissions, team and projects.</div>
         <button type="button" class="btn btn-sm" style="background:#DA3633;border:none;color:#fff;font-weight:600" onclick="viLaunchReset()">Open Launch Reset</button>
       </div>` : ''}
+      ${(isMasterAdminLogin() || currentUserHasPermission('projects.delete')) ? `
+      <div class="dashboard-card" style="margin-top:14px">
+        <div style="font-size:14px;font-weight:600;color:#E6EDF3;margin-bottom:2px">Mark jobs completed</div>
+        <div style="font-size:12px;color:#8B949E;margin-bottom:12px">Bulk-mark finished jobs as completed (handy for the data migration). They drop off dashboards and file under Completed in the Projects tab. Reversible.</div>
+        <button type="button" class="btn btn-sm" style="background:#238636;border:none;color:#fff;font-weight:600" onclick="viBulkComplete()">Open bulk picker</button>
+      </div>` : ''}
       ${renderCalendarSubscribeCard()}
     </div>
   `;
@@ -24626,11 +24679,22 @@ function _sbOpenProject(projectId) {
   window._sbState.activeProject = projectId;
   renderCurrentPage();
 }
+// Tapping an event chip on the calendar: open that project's task panel and
+// highlight the day. While placing/arming dates, defer to the cell tap so
+// date scheduling still works.
+function _sbChipClick(dateStr, projectId) {
+  _sbInit();
+  if (window._sbState.placing) { _sbCellTap(dateStr); return; }
+  window._sbState.focusDay = dateStr;
+  window._sbState.activeProject = projectId;
+  renderCurrentPage();
+}
 function _sbCloseProject() {
   _sbInit();
   window._sbState.activeProject = null;
   window._sbState.panelEdit = false;
   window._sbState.panelSel = new Set();
+  window._sbState.focusDay = null;
   renderCurrentPage();
 }
 
@@ -25245,7 +25309,7 @@ function _sbDayItems(dateStr) {
     if (p.archived) return;
     const win = getInstallWindow(p);
     if (win && isWorkingDayInWindow(win, dateStr)) {
-      items.push({ color: getProjectColor(p.id), solid: win.source === 'booked', label: p.name });
+      items.push({ color: getProjectColor(p.id), solid: win.source === 'booked', label: p.name, projectId: p.id });
     }
   });
   // Tasks (install + design) — explicit scheduled span covering the day, or a
@@ -25257,7 +25321,7 @@ function _sbDayItems(dateStr) {
     const pre = '';
     const r = getTaskDateRange(t);
     if (r && dateStr >= r.start && dateStr <= r.end) {
-      items.push({ color, solid: false, label: pre + t.title });
+      items.push({ color, solid: false, label: pre + t.title, projectId: t.projectId });
     }
   });
   scanTasks(state.installTasks, false);
@@ -25266,7 +25330,7 @@ function _sbDayItems(dateStr) {
   (state.meetings || []).forEach(m => {
     if (m.date === dateStr && (m.status === 'confirmed' || m.status === 'pending_approval' || !m.status)) {
       const p = m.projectId != null ? state.projects.find(x => x.id === m.projectId) : null;
-      items.push({ color: p ? getProjectColor(p.id) : '#58A6FF', solid: true, label: m.title || 'Meeting' });
+      items.push({ color: p ? getProjectColor(p.id) : '#58A6FF', solid: true, label: m.title || 'Meeting', projectId: p ? p.id : (m.projectId != null ? m.projectId : null) });
     }
   });
   return items;
@@ -25389,11 +25453,11 @@ function _sbRenderCalendar() {
     const shown = dayItems.slice(0, 2);
     const extra = dayItems.length - shown.length;
     cells += `
-      <div class="sb-cell ${inMonth ? '' : 'sb-cell-out'} ${isToday ? 'sb-cell-today' : ''} ${weekend ? 'sb-cell-weekend' : ''} ${isStart ? 'sb-cell-rangestart' : ''}"
+      <div class="sb-cell ${inMonth ? '' : 'sb-cell-out'} ${isToday ? 'sb-cell-today' : ''} ${weekend ? 'sb-cell-weekend' : ''} ${isStart ? 'sb-cell-rangestart' : ''}"${ds === window._sbState.focusDay ? ' style="box-shadow:inset 0 0 0 2px #58A6FF;border-radius:6px"' : ''}
            ondragover="_sbCellDragOver(event)" ondrop="_sbCellDrop(event,'${ds}')" onclick="_sbCellTap('${ds}')">
         <div class="sb-cell-num">${dt.getDate()}</div>
         <div class="sb-cell-chips">
-          ${shown.map(it => `<div class="sb-chip ${it.solid ? 'sb-chip-solid' : 'sb-chip-outline'}" style="--sb-color:${it.color}" title="${esc(it.label)}">${esc(it.label)}</div>`).join('')}
+          ${shown.map(it => `<div class="sb-chip ${it.solid ? 'sb-chip-solid' : 'sb-chip-outline'}" style="--sb-color:${it.color}" title="${esc(it.label)}"${it.projectId != null ? ` onclick="event.stopPropagation();_sbChipClick('${ds}',${it.projectId})"` : ''}>${esc(it.label)}</div>`).join('')}
           ${extra > 0 ? `<div class="sb-chip-more">+${extra}</div>` : ''}
         </div>
       </div>`;
