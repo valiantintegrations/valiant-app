@@ -24647,6 +24647,7 @@ function _sbBacklogMeetings() {
   const out = [];
   (state.projects || []).forEach(p => {
     if (p.archived) return;
+    if (p.stage !== 'install') return;
     const frontier = _sbFrontierIndex(p.id);
     Object.keys(SB_MEETING_MILESTONES).forEach(key => {
       const idx = meetingIdx[key];
@@ -24682,13 +24683,17 @@ function _sbSchedulableTask(t) {
 }
 function _sbCollectTasks(phase, wantDated) {
   const store = phase === 'design' ? (state.designTasks || []) : (state.installTasks || []);
-  return store.filter(t => _sbSchedulableTask(t) && _sbTaskHasDate(t) === wantDated);
+  return store.filter(t => {
+    if (!(_sbSchedulableTask(t) && _sbTaskHasDate(t) === wantDated)) return false;
+    const p = state.projects.find(x => x.id === t.projectId);
+    return p && !p.archived && p.stage === 'install';
+  });
 }
 
 // Open projects (Contract→Install) that have no BOOKED install window yet.
 function _sbProjectsNeedingWindow() {
   return (state.projects || []).filter(p =>
-    !p.archived && OPEN_PROJECT_STAGES.includes(p.stage) && !getBookedTimeline(p.id)
+    !p.archived && p.stage === 'install' && !getBookedTimeline(p.id)
   );
 }
 
@@ -25539,7 +25544,7 @@ function _sbTaskRow(t, phase, dated) {
       ${!dated ? `<input type="checkbox" class="sb-check" ${selected ? 'checked' : ''} ${armed ? 'disabled' : ''} onclick="event.stopPropagation();_sbToggleSelect(${t.id})">` : '<span class="sb-check-spacer"></span>'}
       <div class="sb-item-body" onclick="_sbOpenProject(${t.projectId})">
         <div class="sb-item-title">${esc(t.title)}${sysChip}${phaseChip}</div>
-        <div class="sb-item-meta">${p ? esc(p.name) : 'Unassigned'}${sub ? ` · ${sub} step${sub === 1 ? '' : 's'}` : (t.isMilestone ? ' · milestone' : '')}${dateLabel ? ` · ${dateLabel}` : ''}</div>
+        <div class="sb-item-meta">${p ? esc(p.name) + (p.client_name ? ' \u00B7 ' + esc(p.client_name) : '') : 'Unassigned'}${sub ? ` · ${sub} step${sub === 1 ? '' : 's'}` : (t.isMilestone ? ' · milestone' : '')}${dateLabel ? ` · ${dateLabel}` : ''}</div>
       </div>
       ${_sbAssigneeChips(t)}
       ${!dated ? `<button class="sb-iconbtn" title="Schedule" onclick="event.stopPropagation();_sbArmSingle(${t.id})">${SB_SVG_CAL}</button>` : ''}
@@ -25556,7 +25561,7 @@ function _sbProjectRow(p) {
       <span class="sb-check-spacer"></span>
       <div class="sb-item-body" onclick="_sbOpenProject(${p.id})">
         <div class="sb-item-title">${esc(p.name)} <span class="sb-tag">Needs window</span></div>
-        <div class="sb-item-meta">${sub}</div>
+        <div class="sb-item-meta">${p.client_name ? esc(p.client_name) + ' \u00B7 ' : ''}${sub}</div>
       </div>
       <button class="sb-iconbtn" title="Book window" onclick="event.stopPropagation();_sbScheduleProject(${p.id})">${SB_SVG_CAL}</button>
     </div>`;
@@ -25571,7 +25576,7 @@ function _sbMeetingRow(mtg) {
       <span class="sb-check-spacer"></span>
       <div class="sb-item-body" onclick="_sbOpenProject(${mtg.projectId})">
         <div class="sb-item-title">${esc(mtg.title)} <span class="sb-tag">Meeting</span>${mtg.overdue ? ' <span class="sb-tag-overdue">overdue</span>' : ''}</div>
-        <div class="sb-item-meta">${p ? esc(p.name) : ''}</div>
+        <div class="sb-item-meta">${p ? esc(p.name) + (p.client_name ? ' \u00B7 ' + esc(p.client_name) : '') : ''}</div>
       </div>
       <button class="sb-iconbtn" title="Schedule meeting" onclick="event.stopPropagation();_sbScheduleMeeting(${mtg.projectId},'${mtg.type}')">${SB_SVG_CAL}</button>
     </div>`;
@@ -25651,13 +25656,17 @@ function _sbRenderBacklog() {
   const unbookedTasks = []
     .concat(wantInstall ? _sbCollectTasks('install', false).map(t => ({ t, phase: 'install' })) : [])
     .concat(wantDesign ? _sbCollectTasks('design', false).map(t => ({ t, phase: 'design' })) : []);
-  const projects = wantInstall ? _sbProjectsNeedingWindow() : [];
   const meetings = wantMeeting ? _sbBacklogMeetings() : [];
 
   // Booked
   const bookedTasks = []
     .concat(wantInstall ? _sbCollectTasks('install', true).map(t => ({ t, phase: 'install' })) : [])
     .concat(wantDesign ? _sbCollectTasks('design', true).map(t => ({ t, phase: 'design' })) : []);
+
+  // Don't also show a standalone "Needs window" row for a project that already
+  // appears via its task rows — that's the duplicate.
+  const _taskPids = new Set(unbookedTasks.concat(bookedTasks).map(x => x.t.projectId));
+  const projects = (wantInstall ? _sbProjectsNeedingWindow() : []).filter(p => !_taskPids.has(p.id));
 
   const unbookedCount = unbookedTasks.length + projects.length + meetings.length;
   const bookedCount = bookedTasks.length;
