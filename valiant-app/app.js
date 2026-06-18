@@ -1887,7 +1887,13 @@ function toggleTaskDone(taskId) {
   return _getTaskPhase(taskId) === 'design' ? toggleDesignTaskDone(taskId) : toggleInstallTaskDone(taskId);
 }
 function deleteTask(taskId) {
-  return _getTaskPhase(taskId) === 'design' ? deleteDesignTask(taskId) : deleteInstallTask(taskId);
+  if (!_canDeleteTasks()) { showToast('Only managers can delete tasks', 'error'); return; }
+  const sid = String(taskId);
+  const inD = (state.designTasks || []).some(t => String(t.id) === sid);
+  const inI = (state.installTasks || []).some(t => String(t.id) === sid);
+  if (inD) { state.designTasks = state.designTasks.filter(t => String(t.id) !== sid); _syncTasksNow('design'); }
+  if (inI) { state.installTasks = state.installTasks.filter(t => String(t.id) !== sid); _syncTasksNow('install'); }
+  if (!inD && !inI) showToast("Couldn't find that task to delete", 'error');
 }
 function toggleSubtaskDone(taskId, subtaskId) {
   return _getTaskPhase(taskId) === 'design' ? toggleDesignSubtaskDone(taskId, subtaskId) : toggleInstallSubtaskDone(taskId, subtaskId);
@@ -2557,6 +2563,9 @@ function showProjectStagePicker(projectId, event) {
     ${isCompleted
       ? `<div onclick="document.getElementById('move-menu')?.remove();unarchiveProject(${projectId})" style="padding:13px 20px;color:#C9D1D9;font-size:14px;cursor:pointer">\u21A9 Reopen (remove completed)</div>`
       : `<div onclick="document.getElementById('move-menu')?.remove();_jumpProjectCompleted(${projectId})" style="padding:13px 20px;color:#3FB950;font-weight:600;font-size:14px;cursor:pointer">\u2713 Mark Completed</div>`}
+    <div style="border-top:1px solid #30363D;margin:6px 0"></div>
+    <div style="padding:6px 20px 2px;font-size:11px;font-weight:700;color:#6E7681;text-transform:uppercase;letter-spacing:.07em">Archive / remove</div>
+    ${ARCHIVE_BINS.filter(b => b.key !== 'completed').map(b => `<div onclick="document.getElementById('move-menu')?.remove();archiveProject(${projectId},'${b.key}')" style="padding:13px 20px;color:${b.color};font-size:14px;cursor:pointer;display:flex;align-items:center;gap:10px">${b.icon} ${esc(b.label)}</div>`).join('')}
     <div onclick="document.getElementById('move-menu')?.remove()" style="padding:12px 20px;color:#6E7681;font-size:13px;cursor:pointer;text-align:center;border-top:1px solid #30363D;margin-top:4px">Cancel</div>
   `;
   document.body.appendChild(menu);
