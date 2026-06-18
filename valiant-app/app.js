@@ -2459,6 +2459,76 @@ function markProjectCompleted(projectId) {
   archiveProject(projectId, 'completed');
 }
 
+// ── Stage picker from the project header pill ──────────────────────────────
+// Map a target stage to the highest PHASES index whose milestones "should" be
+// done before entering it. Used to warn which milestones a forward jump skips.
+const STAGE_TO_PHASE_CHECK = { lead:-1, proposal:0, sent:0, contract:1, install:5, commissioning:6, signoff:7, closeout:8, warranty:8 };
+function _incompleteMilestonesUpTo(projectId, maxIdx) {
+  const out = [];
+  PHASES.forEach((ph, idx) => {
+    if (idx > maxIdx) return;
+    (ph.milestones || []).forEach(ms => {
+      if (!getMilestone(projectId, ph.key, ms.key)) out.push(ph.label + ' \u2014 ' + ms.label);
+    });
+  });
+  return out;
+}
+function _stageLabel(key) { const s = STAGES.find(x => x.key === key); return s ? s.label : key; }
+function showProjectStagePicker(projectId, event) {
+  if (event) event.stopPropagation();
+  document.getElementById('move-menu')?.remove();
+  const p = state.projects.find(x => x.id === projectId);
+  if (!p) return;
+  if (!(currentUserHasPermission('projects.change_stage') || currentUserHasPermission('admin.system'))) return;
+  const isCompleted = p.archived === 'completed';
+  const menu = document.createElement('div');
+  menu.id = 'move-menu';
+  menu.style.cssText = 'position:fixed;bottom:70px;left:12px;right:12px;background:#161B22;border:1px solid #30363D;border-radius:12px;z-index:70;padding:8px 0;box-shadow:0 8px 32px rgba(0,0,0,0.5);max-height:72vh;overflow-y:auto';
+  const stageRows = STAGES.map(s => {
+    const cur = !isCompleted && p.stage === s.key;
+    return `<div onclick="document.getElementById('move-menu')?.remove();_jumpProjectStage(${projectId},'${s.key}')" style="padding:13px 20px;font-size:14px;cursor:pointer;display:flex;align-items:center;gap:10px;-webkit-tap-highlight-color:transparent;${cur ? 'background:#0D1117' : ''}">
+      <span class="status-pill status-${s.color}" style="font-size:11px">${esc(s.label)}</span>
+      ${cur ? '<span style="margin-left:auto;color:#3FB950;font-size:11px">current</span>' : ''}
+    </div>`;
+  }).join('');
+  menu.innerHTML = `
+    <div style="padding:8px 20px 4px;font-size:11px;font-weight:700;color:#6E7681;text-transform:uppercase;letter-spacing:.07em">Move to phase</div>
+    ${stageRows}
+    <div style="border-top:1px solid #30363D;margin:6px 0"></div>
+    ${isCompleted
+      ? `<div onclick="document.getElementById('move-menu')?.remove();unarchiveProject(${projectId})" style="padding:13px 20px;color:#C9D1D9;font-size:14px;cursor:pointer">\u21A9 Reopen (remove completed)</div>`
+      : `<div onclick="document.getElementById('move-menu')?.remove();_jumpProjectCompleted(${projectId})" style="padding:13px 20px;color:#3FB950;font-weight:600;font-size:14px;cursor:pointer">\u2713 Mark Completed</div>`}
+    <div onclick="document.getElementById('move-menu')?.remove()" style="padding:12px 20px;color:#6E7681;font-size:13px;cursor:pointer;text-align:center;border-top:1px solid #30363D;margin-top:4px">Cancel</div>
+  `;
+  document.body.appendChild(menu);
+  setTimeout(() => { const h = (e) => { if (!menu.contains(e.target)) { menu.remove(); document.removeEventListener('click', h); } }; document.addEventListener('click', h); }, 60);
+}
+function _jumpProjectStage(projectId, targetStage) {
+  const p = state.projects.find(x => x.id === projectId);
+  if (!p) return;
+  const order = STAGES.map(s => s.key);
+  const movingForward = p.archived === 'completed' || order.indexOf(targetStage) > order.indexOf(p.stage);
+  if (movingForward) {
+    const maxIdx = (STAGE_TO_PHASE_CHECK[targetStage] != null) ? STAGE_TO_PHASE_CHECK[targetStage] : -1;
+    const skipped = _incompleteMilestonesUpTo(projectId, maxIdx);
+    if (skipped.length) {
+      const msg = 'Moving to "' + _stageLabel(targetStage) + '" skips these unfinished milestones:\n\n\u2022 ' + skipped.join('\n\u2022 ') + '\n\nMove anyway?';
+      if (!confirm(msg)) return;
+    }
+  }
+  moveProjectToStage(projectId, targetStage);
+  showToast('Moved to ' + _stageLabel(targetStage), 'success');
+}
+function _jumpProjectCompleted(projectId) {
+  const skipped = _incompleteMilestonesUpTo(projectId, PHASES.length - 1);
+  if (skipped.length) {
+    const msg = 'Marking completed skips these unfinished milestones:\n\n\u2022 ' + skipped.join('\n\u2022 ') + '\n\nMark completed anyway?';
+    if (!confirm(msg)) return;
+  }
+  archiveProject(projectId, 'completed');
+}
+window.showProjectStagePicker = showProjectStagePicker;
+
 function getArchivedProjects(bin) {
   return state.projects.filter(p => p.archived === bin);
 }
@@ -8482,13 +8552,16 @@ function renderProjectPage(c) {
           </div>
           <div class="project-page-actions">
             ${projectTypeBadgeHTML(p)}
-            ${disp.custom
-              ? `<span class="status-pill" style="background:${disp.color}22;color:${disp.color};border:1px solid ${disp.color}66" title="Active parallel phase \u2014 lifecycle stage is still Contract">${esc(disp.label)}</span>`
-              : `<span class="status-pill status-${stg.color}">${esc(stg.label)}</span>`}
+            ${(() => {
+              const _cc = currentUserHasPermission('projects.change_stage') || currentUserHasPermission('admin.system');
+              const _clk = _cc ? ` onclick="showProjectStagePicker(${p.id}, event)"` : '';
+              const _cur = _cc ? ';cursor:pointer' : '';
+              const _car = _cc ? ' <span style="font-size:9px;opacity:.7">\u25BE</span>' : '';
+              if (p.archived === 'completed') return `<span class="status-pill" style="background:#3FB95022;color:#3FB950;border:1px solid #3FB95066${_cur}"${_clk}>\u2713 Completed${_car}</span>`;
+              if (disp.custom) return `<span class="status-pill" style="background:${disp.color}22;color:${disp.color};border:1px solid ${disp.color}66${_cur}" title="Active parallel phase \u2014 lifecycle stage is still Contract"${_clk}>${esc(disp.label)}${_car}</span>`;
+              return `<span class="status-pill status-${stg.color}"${_cc ? ` style="cursor:pointer"` : ''}${_clk}>${esc(stg.label)}${_car}</span>`;
+            })()}
             ${gbbTier ? `<span style="font-size:10px;font-weight:600;padding:3px 8px;border-radius:3px;${gbbBadgeStyle}">${gbbTier.toUpperCase()}</span>` : ''}
-            ${(isMasterAdminLogin() || currentUserHasPermission('projects.delete')) ? (p.archived === 'completed'
-              ? `<button class="btn btn-sm" onclick="unarchiveProject(${p.id})" style="background:#21262D;border:1px solid #30363D;color:#C9D1D9;white-space:nowrap">Reopen</button>`
-              : `<button class="btn btn-sm" onclick="markProjectCompleted(${p.id})" style="background:#238636;border:none;color:#fff;font-weight:600;white-space:nowrap">✓ Completed</button>`) : ''}
           </div>
         </div>
         ${p.systems.length ? `<div class="project-page-tags">${p.systems.map(systemTagHTML).join('')}</div>` : ''}
