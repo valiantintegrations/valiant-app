@@ -3572,7 +3572,10 @@ function toggleTask(id) {
   renderCurrentPage();
 }
 
-function deleteTask(id) {
+function deletePersonalTask(id) {
+  // Personal "My Tasks"/Notepad manual items (state.tasks, memberId-based).
+  // Renamed from deleteTask so it no longer shadows the store-agnostic
+  // deleteTask() that handles design/install tasks.
   state.tasks = state.tasks.filter(t => t.id !== id);
   save('vi_tasks', state.tasks);
   renderCurrentPage();
@@ -4074,7 +4077,7 @@ function renderTasksWidget(role) {
               </div>
               <div style="display:flex;flex-direction:column;align-items:flex-end;gap:3px;flex-shrink:0">
                 ${urgency.label ? `<span style="font-size:10px;font-weight:600;color:${urgency.color};white-space:nowrap">${urgency.label}</span>` : ''}
-                ${!isDerived ? `<button onclick="event.stopPropagation();deleteTask(${t.id})" style="background:none;border:none;color:#6E7681;cursor:pointer;padding:0;font-size:14px;line-height:1">×</button>` : ''}
+                ${!isDerived ? `<button onclick="event.stopPropagation();deletePersonalTask(${t.id})" style="background:none;border:none;color:#6E7681;cursor:pointer;padding:0;font-size:14px;line-height:1">×</button>` : ''}
               </div>
             </div>
           `;
@@ -4105,7 +4108,7 @@ function renderTasksWidget(role) {
                     <div style="font-size:12px;color:#6E7681;text-decoration:line-through">${esc(t.text)}</div>
                     ${proj ? `<div style="font-size:10px;color:#6E7681">${esc(proj.name)}</div>` : ''}
                   </div>
-                  <button onclick="deleteTask(${t.id})" style="background:none;border:none;color:#6E7681;cursor:pointer;padding:2px 4px;font-size:14px">×</button>
+                  <button onclick="deletePersonalTask(${t.id})" style="background:none;border:none;color:#6E7681;cursor:pointer;padding:2px 4px;font-size:14px">×</button>
                 </div>
               `;
             }).join('')}
@@ -11113,19 +11116,34 @@ function renderChecklistTab(container, project, phase) {
   // logistical detail like "out of building by 4pm Wed" set during install window pick.
   const schedNotesHTML = (phase === 'install') ? renderSchedulingNotesCard(project) : '';
 
-  // Install tab — unified Install Tasks system
-  if (phase === 'install') {
-    container.innerHTML = schedNotesHTML + renderProjectTasksSection(project);
-    return;
-  }
+  // Guard the render: if the tasks section throws (e.g. a malformed/legacy task
+  // record), show the error instead of leaving the tab totally blank — a blank
+  // tab gives nothing to debug from. The error is also logged to the console.
+  try {
+    // Install tab — unified Install Tasks system
+    if (phase === 'install') {
+      container.innerHTML = schedNotesHTML + renderProjectTasksSection(project);
+      return;
+    }
 
-  // Design tab — unified Design Tasks system (replaces old per-system checklist + sub-tasks)
-  if (phase === 'design') {
-    container.innerHTML = renderProjectDesignTasksSection(project);
-    return;
-  }
+    // Design tab — unified Design Tasks system (replaces old per-system checklist + sub-tasks)
+    if (phase === 'design') {
+      container.innerHTML = renderProjectDesignTasksSection(project);
+      return;
+    }
 
-  container.innerHTML = '';
+    container.innerHTML = '';
+  } catch (err) {
+    console.error('[renderChecklistTab] ' + phase + ' tab failed to render:', err);
+    container.innerHTML = `
+      <div class="dashboard-card" style="margin-bottom:14px;border-color:#5A2424">
+        <div style="font-size:12px;font-weight:600;color:#F85149;margin-bottom:6px">
+          This ${phase} tab hit an error while rendering.
+        </div>
+        <div style="font-size:11px;color:#8B949E;word-break:break-word">${esc(String(err && err.message || err))}</div>
+        <div style="font-size:10px;color:#6E7681;margin-top:8px">If this persists after a full PWA reinstall, screenshot this for Claude.</div>
+      </div>`;
+  }
 }
 
 // Returns the effective items for a template: base items plus any accepted customizations
@@ -12504,7 +12522,7 @@ function updateSubtask(projectId, phase, taskId, changes) {
   save('vi_subtasks', state.subtasks);
 }
 
-function deleteSubtask(projectId, phase, taskId) {
+function deleteLegacySubtask(projectId, phase, taskId) {
   if (!state.subtasks[projectId]?.[phase]) return;
   state.subtasks[projectId][phase] = state.subtasks[projectId][phase].filter(t => t.id !== taskId);
   save('vi_subtasks', state.subtasks);
