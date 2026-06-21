@@ -1798,7 +1798,7 @@ function toggleInstallTaskDone(taskId) {
   _syncTasksNow('install');
 }
 
-function addInstallSubtask(taskId, { title, date, assigneeIds, notes, photoRequired, time }) {
+function addInstallSubtask(taskId, { title, date, assigneeIds, notes, photoRequired, time, deadline }) {
   const t = getInstallTaskById(taskId);
   if (!t) return;
   if (!t.subtasks) t.subtasks = [];
@@ -1808,6 +1808,7 @@ function addInstallSubtask(taskId, { title, date, assigneeIds, notes, photoRequi
     title: title || 'Subtask',
     date: date || null,
     time: time || null,
+    deadline: deadline || null,
     assigneeIds: ids,
     notes: notes || '',
     photoRequired: !!photoRequired,
@@ -1908,7 +1909,7 @@ function toggleDesignTaskDone(taskId) {
   _syncTasksNow('design');
 }
 
-function addDesignSubtask(taskId, { title, date, assigneeIds, notes, photoRequired, time }) {
+function addDesignSubtask(taskId, { title, date, assigneeIds, notes, photoRequired, time, deadline }) {
   const t = getDesignTaskById(taskId);
   if (!t) return;
   if (!t.subtasks) t.subtasks = [];
@@ -1918,6 +1919,7 @@ function addDesignSubtask(taskId, { title, date, assigneeIds, notes, photoRequir
     title: title || 'Subtask',
     date: date || null,
     time: time || null,
+    deadline: deadline || null,
     assigneeIds: ids,
     notes: notes || '',
     photoRequired: !!photoRequired,
@@ -6092,6 +6094,7 @@ function renderContractorDashboard(memberId, activeMember) {
   return `${style}<div class="con-wrap">
     <div class="con-banner">⚠ <div><b>Restricted access.</b> You can see only your assigned work — job location, your tasks, and job drawings. No project lookup, calendar, or other company data.</div></div>
     <div class="con-head"><span class="nm">My Work${firstName ? ' — ' + esc(firstName) : ''}</span><span class="con-pill">Contractor</span></div>
+    ${_logiTodayAlertHTML(memberId)}
     <div class="con-sec">Today</div>
     <div class="con-card">${todayHtml}</div>
     <div class="con-sec">This week</div>
@@ -7756,6 +7759,54 @@ function renderMyWorkNotepad(memberId) {
   `;
 }
 
+// Morning alert: logistics tasks (esp. truck drives) assigned to this person
+// for today or tomorrow. Reads the existing per-rig drive tasks + load/prep/etc.
+// from getLogisticsCalItems so the assignment finally surfaces on the dashboard.
+// Returns '' when there's nothing.
+function _logiTodayAlertHTML(memberId) {
+  if (memberId == null) return '';
+  const today = _ymd(new Date());
+  const td = new Date(); td.setDate(td.getDate() + 1);
+  const tmrw = _ymd(td);
+  const isDrive = it => /drive/i.test(it.key || '') || /drive/i.test(it.title || '');
+  const t12 = hm => { if (!hm) return ''; let [h, m] = hm.split(':').map(Number); const ap = h >= 12 ? 'PM' : 'AM'; h = h % 12 || 12; return `${h}:${String(m).padStart(2, '0')} ${ap}`; };
+  const mine = [];
+  (state.projects || []).filter(p => !p.archived).forEach(p => {
+    let items = [];
+    try { items = getLogisticsCalItems(p) || []; } catch (e) { items = []; }
+    items.forEach(it => {
+      if (!it.date || (it.date !== today && it.date !== tmrw)) return;
+      if (!(it.assigneeIds || []).map(String).includes(String(memberId))) return;
+      mine.push({ project: p, item: it, when: it.date === today ? 'today' : 'tomorrow' });
+    });
+  });
+  if (!mine.length) return '';
+  mine.sort((a, b) => (a.when !== b.when) ? (a.when === 'today' ? -1 : 1) : (isDrive(b.item) - isDrive(a.item)));
+  const anyDrive = mine.some(x => isDrive(x.item));
+  const rows = mine.map(x => {
+    const drive = isDrive(x.item);
+    const time = x.item.time ? ' \u00B7 ' + t12(x.item.time) : '';
+    const whenTag = x.when === 'today'
+      ? '<span style="font-size:10px;font-weight:700;color:#F0883E">TODAY</span>'
+      : '<span style="font-size:10px;font-weight:700;color:#D29922">TOMORROW</span>';
+    return `<div onclick="openProject(${x.project.id},'install')" style="display:flex;align-items:center;gap:11px;padding:11px 12px;background:#0D1117;border:1px solid ${drive ? '#5A3A1A' : '#1C2333'};border-radius:9px;cursor:pointer;margin-top:8px">
+      <span style="font-size:22px;flex:0 0 auto">${drive ? '\u{1F69A}' : '\u{1F4E6}'}</span>
+      <div style="flex:1;min-width:0">
+        <div style="font-size:14px;font-weight:700;color:#E6EDF3">${esc(x.item.title)}${time}</div>
+        <div style="font-size:12px;color:#8B949E;margin-top:1px">${esc(x.project.name)}</div>
+      </div>${whenTag}
+    </div>`;
+  }).join('');
+  const headColor = anyDrive ? '#F0883E' : '#D29922';
+  const headIcon = anyDrive ? '\u{1F69A}' : '\u{1F4CB}';
+  const headText = anyDrive ? "You're driving" : 'On-site logistics';
+  return `<div class="dashboard-card" style="margin-bottom:16px;border-left:3px solid ${headColor};background:${anyDrive ? '#1F1408' : '#161B22'}">
+    <div class="dashboard-card-title"><span style="color:${headColor};display:flex;align-items:center;gap:6px">${headIcon} ${headText} \u2014 today &amp; tomorrow</span></div>
+    <div style="font-size:12px;color:#8B949E">${anyDrive ? "You're assigned to drive a rig. Tap for the job and details." : 'Transport / logistics assigned to you.'}</div>
+    ${rows}
+  </div>`;
+}
+
 function renderMyWorkDashboard(memberId, activeProjects, myAssignments, activeMember) {
   const totalAssigned = Object.values(myAssignments).reduce((n, arr) => n + arr.length, 0);
   const myCloseoutProjects = getMyCloseoutProjects(memberId);
@@ -7844,6 +7895,7 @@ function renderMyWorkDashboard(memberId, activeProjects, myAssignments, activeMe
 
   return `
     ${closeoutBanner}
+    ${_logiTodayAlertHTML(memberId)}
     <div class="mywork-toolbar" style="display:flex;align-items:center;justify-content:space-between;gap:8px">
       <div>${renderMyWorkLayoutToggle()}</div>
       <div style="display:flex;align-items:center;gap:8px">${renderMyWorkCustomizeButton()}</div>
@@ -8994,7 +9046,7 @@ function _psArrival(sched, pid, mid, ymd) {
   if (!_psPresence(sched, pid, mid, ymd)) return null;
   const starts = [];
   (state.installTasks || []).filter(t => t.projectId === pid).forEach(t => (t.subtasks || []).forEach(s => {
-    if (s.date === ymd && (s.assigneeIds || []).map(String).includes(String(mid)) && s.start) starts.push(s.start);
+    if (s.date === ymd && (s.assigneeIds || []).map(String).includes(String(mid)) && s.time) starts.push(s.time);
   }));
   starts.sort();
   const day = sched.days[ymd] || {};
@@ -10576,6 +10628,7 @@ function openSubtaskDialog(taskId, subtaskId) {
           title: existing.title || '',
           date: existing.date || '',
           time: existing.time || '',
+          deadline: existing.deadline || '',
           assigneeIds: Array.isArray(existing.assigneeIds) ? [...existing.assigneeIds] : [],
           notes: existing.notes || '',
           photoRequired: !!existing.photoRequired
@@ -10587,7 +10640,7 @@ function openSubtaskDialog(taskId, subtaskId) {
         mode: 'add',
         taskId,
         subtaskId: null,
-        rows: [{ title: '', date: '', time: '', assigneeIds: [], notes: '', photoRequired: false }],
+        rows: [{ title: '', date: '', time: '', deadline: '', assigneeIds: [], notes: '', photoRequired: false }],
         pool: sortedPool,
         crewIds: [...crewIds]
       };
@@ -10634,6 +10687,11 @@ function _renderSubDialogContent() {
             <label class="form-label form-label-sm">Time (optional)</label>
             <input type="time" class="form-input sub-row-time" value="${esc(row.time || '')}"
               onchange="window._subDialogState.rows[${i}].time=this.value||null">
+          </div>
+          <div>
+            <label class="form-label form-label-sm">Deadline (optional)</label>
+            <input type="time" class="form-input sub-row-deadline" value="${esc(row.deadline || '')}"
+              onchange="window._subDialogState.rows[${i}].deadline=this.value||null">
           </div>
           <div>
             <label class="form-label form-label-sm">Assignees</label>
@@ -10688,7 +10746,7 @@ function _renderSubDialogContent() {
 
 function _subAddRow() {
   if (!window._subDialogState) return;
-  window._subDialogState.rows.push({ title: '', date: '', assigneeIds: [], notes: '', photoRequired: false });
+  window._subDialogState.rows.push({ title: '', date: '', time: '', deadline: '', assigneeIds: [], notes: '', photoRequired: false });
   _rerenderSubDialog();
 }
 
@@ -11039,6 +11097,7 @@ function _saveSubtaskDialog() {
     const titleEl = rowEl.querySelector('.sub-row-title');
     const dateEl = rowEl.querySelector('.sub-row-date');
     const timeEl = rowEl.querySelector('.sub-row-time');
+    const deadlineEl = rowEl.querySelector('.sub-row-deadline');
     const notesEl = rowEl.querySelector('.sub-row-notes');
     const photoReqEl = rowEl.querySelector('.sub-row-photoreq');
     // Assignees: only the assignee chips (not the photo-required checkbox)
@@ -11049,6 +11108,7 @@ function _saveSubtaskDialog() {
       title: titleEl ? (titleEl.value || '').trim() : '',
       date: dateEl ? (dateEl.value || null) : null,
       time: timeEl ? (timeEl.value || null) : null,
+      deadline: deadlineEl ? (deadlineEl.value || null) : null,
       assigneeIds,
       notes: notesEl ? (notesEl.value || '').trim() : '',
       photoRequired: photoReqEl ? !!photoReqEl.checked : false
