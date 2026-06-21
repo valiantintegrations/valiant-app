@@ -446,6 +446,7 @@ const state = {
   tools: JSON.parse(localStorage.getItem('vi_tools') || '[]'),
   assets: JSON.parse(localStorage.getItem('vi_assets') || '[]'),
   assetAllocations: JSON.parse(localStorage.getItem('vi_asset_allocations') || '[]'),
+  logistics: JSON.parse(localStorage.getItem('vi_logistics') || '{}'),
   bundles: JSON.parse(localStorage.getItem('vi_bundles') || 'null') || JSON.parse(JSON.stringify(DEFAULT_BUNDLES)),
   userPermissions: JSON.parse(localStorage.getItem('vi_user_perms') || '{}'),
   dashboardMode: localStorage.getItem('vi_dashboard_mode') || 'mine',
@@ -11418,7 +11419,7 @@ function renderChecklistTab(container, project, phase) {
   try {
     // Install tab — unified Install Tasks system
     if (phase === 'install') {
-      container.innerHTML = schedNotesHTML + renderProjectTasksSection(project);
+      container.innerHTML = schedNotesHTML + renderLogisticsCard(project) + renderProjectTasksSection(project);
       return;
     }
 
@@ -19834,6 +19835,177 @@ function _pickAsset(projectId, assetId, busy) {
   const overlay = document.getElementById('asset-picker');
   if (overlay) overlay.querySelector('.modal-container').outerHTML = _renderAssetPickerContent(projectId);
   renderCurrentPage();
+}
+
+// ── Job logistics (Drop 3): per-job dates + derived assignable tasks + pack list ──
+function _isInstallJob(p) {
+  if (!p) return false;
+  if (['install', 'commissioning', 'signoff', 'sign_off'].includes(p.stage)) return true;
+  if (getInstallWindow(p)) return true;
+  return getAllocationsForProject(p.id).length > 0;
+}
+function _logiDefaults(p) {
+  const win = getInstallWindow(p);
+  const s = win && win.start ? win.start : null;
+  const e = win && win.end ? win.end : s;
+  return { prep: s, load: s, unload: e, deprep: e };
+}
+function getLogisticsRecord(pid) { return (state.logistics || {})[pid] || null; }
+function getLogisticsDates(p) {
+  const rec = getLogisticsRecord(p.id);
+  const def = _logiDefaults(p);
+  const d = (rec && rec.dates) ? rec.dates : {};
+  return { prep: d.prep || def.prep, load: d.load || def.load, unload: d.unload || def.unload, deprep: d.deprep || def.deprep };
+}
+function _ensureLogiRec(pid) {
+  if (!state.logistics) state.logistics = {};
+  if (!state.logistics[pid]) state.logistics[pid] = { dates: {}, items: {}, picklist: {} };
+  const r = state.logistics[pid];
+  if (!r.dates) r.dates = {};
+  if (!r.items) r.items = {};
+  if (!r.picklist) r.picklist = {};
+  return r;
+}
+function _persistLogistics() {
+  return _syncKeyNow('vi_logistics', state.logistics).then(r => {
+    if (!r.ok) showToast('Logistics didn\u2019t save: ' + r.err + ' \u2014 try again', 'error');
+    return r;
+  });
+}
+function setLogisticsDate(pid, field, val) { const r = _ensureLogiRec(pid); r.dates[field] = val || null; _persistLogistics(); renderCurrentPage(); }
+function getLogisticsItem(pid, key) { const r = getLogisticsRecord(pid); return (r && r.items && r.items[key]) ? r.items[key] : { assigneeIds: [] }; }
+function setLogisticsItemAssignees(pid, key, ids) {
+  const r = _ensureLogiRec(pid);
+  if (!r.items[key]) r.items[key] = { assigneeIds: [] };
+  r.items[key].assigneeIds = (ids || []).filter(x => x != null);
+  if (typeof ensureOnProjectCrew === 'function' && r.items[key].assigneeIds.length) ensureOnProjectCrew(pid, r.items[key].assigneeIds);
+  _persistLogistics(); renderCurrentPage();
+}
+function toggleLogisticsStarted(pid, key) { const r = _ensureLogiRec(pid); if (!r.items[key]) r.items[key] = { assigneeIds: [] }; _applyStarted(r.items[key]); _persistLogistics(); renderCurrentPage(); }
+function toggleLogisticsDone(pid, key) { const r = _ensureLogiRec(pid); if (!r.items[key]) r.items[key] = { assigneeIds: [] }; _applyDone(r.items[key]); _persistLogistics(); renderCurrentPage(); }
+function toggleLogisticsPacked(pid, allocId) {
+  const r = _ensureLogiRec(pid);
+  const cur = r.picklist[allocId] || {};
+  r.picklist[allocId] = cur.packed ? { packed: false } : { packed: true, packedAt: new Date().toISOString(), packedBy: _whoNow() };
+  _persistLogistics(); renderCurrentPage();
+}
+// Rigs that need a driver: each allocated vehicle (with any trailers it tows noted),
+// plus each allocated trailer NOT linked to a truck (personal-truck tow).
+function getLogisticsRigs(pid) {
+  const allocs = getAllocationsForProject(pid);
+  const rigs = [];
+  allocs.forEach(a => {
+    const asset = getAssetById(a.assetId);
+    if (!asset) return;
+    if (asset.type === 'vehicle') {
+      const towed = allocs.filter(t => { const x = getAssetById(t.assetId); return x && x.type === 'trailer' && String(t.towedBy) === String(a.id); })
+        .map(t => (getAssetById(t.assetId) || {}).name).filter(Boolean);
+      rigs.push({ id: a.id, label: asset.name + (towed.length ? ' + ' + towed.join(' + ') : '') });
+    } else if (asset.type === 'trailer' && !a.towedBy) {
+      rigs.push({ id: a.id, label: asset.name + ' (personal truck)' });
+    }
+  });
+  return rigs;
+}
+function _logiAssigneeChips(ids) {
+  if (!ids || !ids.length) return '';
+  return ids.map(id => { const m = getTeamMember(id); if (!m) return ''; return `<span style="display:inline-block;font-size:10px;background:#1C2333;border:1px solid #30363D;color:#C9D1D9;border-radius:10px;padding:1px 7px;margin-right:4px">${esc((m.name || '').split(' ')[0])}</span>`; }).join('');
+}
+function openLogisticsAssignPicker(pid, key) {
+  const it = getLogisticsItem(pid, key);
+  const current = new Set((it.assigneeIds || []).map(String));
+  document.getElementById('logi-assign')?.remove();
+  const team = state.team || [];
+  const overlay = document.createElement('div');
+  overlay.id = 'logi-assign';
+  overlay.className = 'modal-overlay';
+  overlay.style.zIndex = '10001';
+  overlay.onclick = (e) => { if (e.target === overlay) overlay.remove(); };
+  overlay.innerHTML = `
+    <div class="modal-container" style="max-width:380px;max-height:80vh;display:flex;flex-direction:column">
+      <div class="modal-header"><div class="modal-title">Assign</div><button class="modal-close" onclick="document.getElementById('logi-assign')?.remove()">&times;</button></div>
+      <div class="modal-body" style="overflow-y:auto">
+        ${team.map(m => `
+          <label style="display:flex;align-items:center;gap:8px;padding:7px;border-radius:5px;cursor:pointer;font-size:13px;color:#E6EDF3">
+            <input type="checkbox" class="logi-assign-cb" value="${m.id}" ${current.has(String(m.id)) ? 'checked' : ''}>
+            <span>${esc(m.name)}</span>
+          </label>`).join('')}
+      </div>
+      <div style="padding:12px;border-top:1px solid #1C2333;display:flex;justify-content:flex-end;gap:8px">
+        <button class="btn" onclick="document.getElementById('logi-assign')?.remove()">Cancel</button>
+        <button class="btn-primary" onclick="_saveLogiAssign(${pid},'${key}')">Save</button>
+      </div>
+    </div>`;
+  document.body.appendChild(overlay);
+}
+function _saveLogiAssign(pid, key) {
+  const ids = Array.from(document.querySelectorAll('.logi-assign-cb:checked')).map(cb => parseInt(cb.value, 10)).filter(n => !isNaN(n));
+  document.getElementById('logi-assign')?.remove();
+  setLogisticsItemAssignees(pid, key, ids);
+}
+function renderLogisticsCard(p) {
+  if (!_isInstallJob(p)) return '';
+  const dates = getLogisticsDates(p);
+  const rigs = getLogisticsRigs(p.id);
+  const cases = getAllocationsForProject(p.id).filter(a => { const x = getAssetById(a.assetId); return x && (x.type === 'case' || x.type === 'kit'); });
+  const rec = getLogisticsRecord(p.id);
+
+  const dateInput = (label, field) => `
+    <label style="display:flex;flex-direction:column;gap:2px;font-size:10px;color:#8B949E">${label}
+      <input type="date" value="${dates[field] || ''}" class="form-input" style="font-size:12px;padding:4px 6px" onchange="setLogisticsDate(${p.id},'${field}',this.value||null)">
+    </label>`;
+
+  const taskRow = (key, title, dateStr, extra) => {
+    const it = getLogisticsItem(p.id, key);
+    const started = !!it.started, done = !!it.done;
+    const hasPeople = it.assigneeIds && it.assigneeIds.length;
+    return `
+      <div style="display:flex;align-items:flex-start;gap:8px;padding:8px;border:1px solid #1C2333;border-radius:6px;margin-bottom:6px;${done ? 'opacity:.7' : ''}">
+        <span onclick="toggleLogisticsDone(${p.id},'${key}')" title="${done ? 'Mark not done' : 'Mark done'}" style="flex-shrink:0;width:18px;height:18px;border-radius:4px;border:1.5px solid ${done ? '#2EA043' : '#30363D'};background:${done ? '#238636' : 'transparent'};color:#fff;display:flex;align-items:center;justify-content:center;font-size:12px;cursor:pointer;margin-top:1px">${done ? '✓' : ''}</span>
+        <div style="flex:1;min-width:0">
+          <div style="font-size:13px;font-weight:600;color:#E6EDF3">${esc(title)}</div>
+          <div style="font-size:11px;color:#8B949E;margin-top:1px">${dateStr ? esc(fmtDateLocal(dateStr)) : 'No date'} · <span style="cursor:pointer;color:#58A6FF" onclick="openLogisticsAssignPicker(${p.id},'${key}')">${hasPeople ? 'Reassign' : 'Assign'}</span></div>
+          ${hasPeople ? `<div style="margin-top:4px">${_logiAssigneeChips(it.assigneeIds)}</div>` : ''}
+          ${_subStatusMetaHTML(it)}
+          ${extra || ''}
+        </div>
+        <button onclick="toggleLogisticsStarted(${p.id},'${key}')" title="${started ? 'Mark not started' : 'Mark started'}" style="flex-shrink:0;align-self:flex-start;font-size:10px;padding:3px 8px;border-radius:999px;border:1px solid ${started ? '#2EA043' : '#30363D'};background:${started ? '#0E2A16' : 'transparent'};color:${started ? '#3FB950' : '#8B949E'};cursor:pointer;white-space:nowrap">${started ? '● Started' : '▶ Start'}</button>
+      </div>`;
+  };
+
+  const picklistHTML = cases.length ? `
+    <div style="margin-top:8px;padding-left:2px">
+      <div style="font-size:10px;font-weight:600;color:#8B949E;text-transform:uppercase;letter-spacing:.05em;margin-bottom:4px">Pack list</div>
+      ${cases.map(c => {
+        const asset = getAssetById(c.assetId);
+        const pk = (rec && rec.picklist && rec.picklist[c.id]) ? rec.picklist[c.id] : {};
+        return `<label style="display:flex;align-items:center;gap:8px;font-size:12px;color:${pk.packed ? '#6E7681' : '#C9D1D9'};padding:3px 0;cursor:pointer">
+          <input type="checkbox" ${pk.packed ? 'checked' : ''} onchange="toggleLogisticsPacked(${p.id},'${c.id}')">
+          <span style="${pk.packed ? 'text-decoration:line-through' : ''}">${esc(asset ? asset.name : 'Item')}</span>
+        </label>`;
+      }).join('')}
+    </div>`
+    : '<div style="margin-top:8px;font-size:11px;color:#6E7681">No Cases &amp; Gear allocated yet — add them on the Assets tab to build the pack list.</div>';
+
+  const driveOut = rigs.map(r => taskRow('drive_out_' + r.id, 'Drive to job — ' + r.label, dates.load)).join('');
+  const driveBack = rigs.map(r => taskRow('drive_back_' + r.id, 'Drive back — ' + r.label, dates.deprep)).join('');
+  const noRigs = rigs.length ? '' : '<div style="font-size:11px;color:#6E7681;margin-bottom:6px">No vehicles/trailers allocated — add them on the Assets tab to get drive tasks.</div>';
+
+  return `
+    <div class="dashboard-card" style="margin-bottom:14px">
+      <div class="dashboard-card-title" style="margin-bottom:8px">Logistics</div>
+      <div style="display:grid;grid-template-columns:repeat(2,1fr);gap:8px;margin-bottom:12px">
+        ${dateInput('Prep day', 'prep')}
+        ${dateInput('Load day', 'load')}
+        ${dateInput('Unload day', 'unload')}
+        ${dateInput('De-prep day', 'deprep')}
+      </div>
+      ${taskRow('prep', 'Prep', dates.prep, picklistHTML)}
+      ${taskRow('load', 'Load', dates.load)}
+      ${noRigs}${driveOut}${driveBack}
+      ${taskRow('unload', 'Unload', dates.unload)}
+      ${taskRow('deprep', 'De-prep', dates.deprep)}
+    </div>`;
 }
 
 function renderSettings(c) {
