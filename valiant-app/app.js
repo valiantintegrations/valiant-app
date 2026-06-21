@@ -20984,8 +20984,8 @@ function renderLogisticsCard(p) {
   };
 
   return `
-    <div class="dashboard-card" style="margin-bottom:14px">
-      <div class="dashboard-card-title" style="margin-bottom:8px">Logistics</div>
+    <div class="dashboard-card" style="margin-bottom:14px;background:#1A1509;border:1px solid #4A3A14;border-left:3px solid #C9962B">
+      <div class="dashboard-card-title" style="margin-bottom:8px;color:#E6C77A;display:flex;align-items:center;gap:7px">\u{1F69A} Logistics</div>
       <div style="display:grid;grid-template-columns:repeat(2,1fr);gap:8px;margin-bottom:10px">
         ${dateInput('Prep day', 'prep')}
         ${dateInput('Load day', 'load')}
