@@ -9031,26 +9031,48 @@ function _psCrew(p) {
   (a.install || []).forEach(x => ids.add(x.id));
   (state.installTasks || []).filter(t => t.projectId === p.id)
     .forEach(t => (t.subtasks || []).forEach(s => (s.assigneeIds || []).forEach(id => ids.add(id))));
+  // Install-page logistics (drive / load / load-out / etc.)
+  try { (getLogisticsCalItems(p) || []).forEach(it => (it.assigneeIds || []).forEach(id => ids.add(id))); } catch (e) {}
+  // Schedule logistics (commissioning / sign-off)
+  const sched = _psLoad(p.id);
+  ['signoff', 'commissioning'].forEach(k => { const o = sched.logistics && sched.logistics[k]; if (o) (o.assigneeIds || []).forEach(id => ids.add(id)); });
   return [...ids].map(id => getTeamMember(id)).filter(Boolean);
 }
-function _psHasTask(pid, mid, ymd) {
-  return (state.installTasks || []).some(t => t.projectId === pid &&
-    (t.subtasks || []).some(s => s.date === ymd && (s.assigneeIds || []).map(String).includes(String(mid))));
+function _psHasTask(pid, mid, ymd, sched) { return _psAssignmentsOnDay(pid, mid, ymd, sched).present; }
+// Every REAL assignment that puts someone on a day: install subtasks,
+// install-page logistics (drive / load / load-out / prep / unload / de-prep),
+// and schedule logistics (commissioning / sign-off). Manual grid overrides are
+// handled separately. Returns presence + the times found (for arrival).
+function _psAssignmentsOnDay(pid, mid, ymd, sched) {
+  const mids = String(mid);
+  const times = [];
+  let present = false;
+  (state.installTasks || []).filter(t => t.projectId === pid).forEach(t => (t.subtasks || []).forEach(s => {
+    if (s.date === ymd && (s.assigneeIds || []).map(String).includes(mids)) { present = true; if (s.time) times.push(s.time); }
+  }));
+  const proj = (state.projects || []).find(p => String(p.id) === String(pid));
+  if (proj) {
+    let litems = [];
+    try { litems = getLogisticsCalItems(proj) || []; } catch (e) {}
+    litems.forEach(it => { if (it.date === ymd && (it.assigneeIds || []).map(String).includes(mids)) { present = true; if (it.time) times.push(it.time); } });
+  }
+  const sc = sched || _psLoad(pid);
+  ['signoff', 'commissioning'].forEach(k => {
+    const o = sc.logistics && sc.logistics[k];
+    if (o && o.date === ymd && (o.assigneeIds || []).map(String).includes(mids)) { present = true; if (o.time) times.push(o.time); }
+  });
+  return { present, times };
 }
 function _psPresence(sched, pid, mid, ymd) {
   const ov = sched.presence[mid + '|' + ymd];
   if (ov !== undefined) return ov;
-  return _psHasTask(pid, mid, ymd);
+  return _psHasTask(pid, mid, ymd, sched);
 }
 function _psArrival(sched, pid, mid, ymd) {
   if (!_psPresence(sched, pid, mid, ymd)) return null;
-  const starts = [];
-  (state.installTasks || []).filter(t => t.projectId === pid).forEach(t => (t.subtasks || []).forEach(s => {
-    if (s.date === ymd && (s.assigneeIds || []).map(String).includes(String(mid)) && s.time) starts.push(s.time);
-  }));
-  starts.sort();
+  const times = _psAssignmentsOnDay(pid, mid, ymd, sched).times.slice().sort();
   const day = sched.days[ymd] || {};
-  return starts.length ? starts[0] : (day.loadIn || '09:00');
+  return times.length ? times[0] : (day.loadIn || '09:00');
 }
 // Edit handlers (re-render the tab body in place).
 function _psSetDay(pid, ymd, field, value) {
@@ -9197,7 +9219,6 @@ function _psLogisticsHTML(p, sched) {
   const escA = s => String(s || '').replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;');
   const item = (key, label, desc) => {
     const o = L[key] || { date: '', time: '', notes: '', assigneeIds: [] };
-    const names = (o.assigneeIds || []).map(id => esc(((getTeamMember(id) || {}).name || '').split(' ')[0])).filter(Boolean).join(', ');
     return `<div class="ps-log">
       <div class="ps-log-h">${label}</div>
       <div class="ps-log-d">${desc}</div>
@@ -9206,7 +9227,7 @@ function _psLogisticsHTML(p, sched) {
         <div class="ps-fld"><label>Time</label><input type="time" value="${o.time || ''}" onchange="_psSetLogistics(${p.id},'${key}','time',this.value)"></div>
       </div>
       <div class="ps-log-people">
-        <span class="ps-log-ppl">${names || '<span class="ps-log-noppl">No one assigned</span>'}</span>
+        <span class="ps-log-ppl">${_logiAssigneeChips(o.assigneeIds)}</span>
         <button class="ps-log-assign" onclick="_psOpenLogiAssign(${p.id},'${key}')">Assign people</button>
       </div>
       <input class="ps-log-note" type="text" placeholder="Notes (optional)" value="${escA(o.notes)}" oninput="_psSetLogisticsNote(${p.id},'${key}',this.value)">
@@ -9313,11 +9334,13 @@ function renderProjectScheduleTab(p) {
     crew.forEach(m => {
       let cells = '';
       days.forEach(ymd => {
-        const on = _psPresence(sched, p.id, m.id, ymd);
-        const viaTask = _psHasTask(p.id, m.id, ymd);
-        const overridden = sched.presence[m.id + '|' + ymd] !== undefined;
-        const cls = on ? (viaTask && !overridden ? 'task' : 'on') : 'off';
-        const a = _psArrival(sched, p.id, m.id, ymd);
+        const assign = _psAssignmentsOnDay(p.id, m.id, ymd, sched);
+        const ov = sched.presence[m.id + '|' + ymd];
+        const overridden = ov !== undefined;
+        const on = overridden ? ov : assign.present;
+        const cls = on ? (assign.present && !overridden ? 'task' : 'on') : 'off';
+        let a = '';
+        if (on) { const ts = assign.times.slice().sort(); a = ts.length ? ts[0] : ((sched.days[ymd] || {}).loadIn || '09:00'); }
         cells += `<td><span class="ps-cell ${cls}${editMode ? ' edit' : ' locked'}"${editMode ? ` onclick="_psTogglePresence(${p.id},${m.id},'${ymd}')"` : ''}>${on ? '\u2713' : '\u00B7'}</span><div class="ps-arr">${a ? _psT12(a) : ''}</div></td>`;
       });
       rows += `<tr><td class="nm">${esc((m.name || '').split(' ')[0])}</td>${cells}</tr>`;
