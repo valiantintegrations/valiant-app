@@ -1738,7 +1738,7 @@ function addInstallTask({ projectId, shopWork, system, title, assigneeIds, isMil
     createdAt: new Date().toISOString()
   };
   state.installTasks.push(task);
-  save('vi_install_tasks', state.installTasks);
+  _syncTasksNow('install');
   if (!isMilestone && projectId != null && ids.length) ensureOnProjectCrew(projectId, ids);
   return task;
 }
@@ -1748,7 +1748,7 @@ function updateInstallTask(taskId, patch) {
   if (!t) return;
   Object.assign(t, patch);
   if (t.isMilestone) t.assigneeIds = [];
-  save('vi_install_tasks', state.installTasks);
+  _syncTasksNow('install');
   if (!t.isMilestone && t.projectId != null && Array.isArray(t.assigneeIds) && t.assigneeIds.length) {
     ensureOnProjectCrew(t.projectId, t.assigneeIds);
   }
@@ -1777,7 +1777,7 @@ function toggleInstallTaskDone(taskId) {
   const t = getInstallTaskById(taskId);
   if (!t) return;
   t.done = !t.done;
-  save('vi_install_tasks', state.installTasks);
+  _syncTasksNow('install');
 }
 
 function addInstallSubtask(taskId, { title, date, assigneeIds, notes, photoRequired, time }) {
@@ -1795,7 +1795,7 @@ function addInstallSubtask(taskId, { title, date, assigneeIds, notes, photoRequi
     photoRequired: !!photoRequired,
     done: false
   });
-  save('vi_install_tasks', state.installTasks);
+  _syncTasksNow('install');
   if (t.projectId != null && ids.length) ensureOnProjectCrew(t.projectId, ids);
 }
 
@@ -1806,7 +1806,7 @@ function updateInstallSubtask(taskId, subtaskId, patch) {
   if (!s) return;
   Object.assign(s, patch);
   if (!Array.isArray(s.assigneeIds)) s.assigneeIds = [];
-  save('vi_install_tasks', state.installTasks);
+  _syncTasksNow('install');
   if (t.projectId != null && s.assigneeIds.length) ensureOnProjectCrew(t.projectId, s.assigneeIds);
 }
 
@@ -1865,7 +1865,7 @@ function addDesignTask({ projectId, system, title, assigneeIds, isMilestone, due
     createdAt: new Date().toISOString()
   };
   state.designTasks.push(task);
-  save('vi_design_tasks', state.designTasks);
+  _syncTasksNow('design');
   return task;
 }
 
@@ -1874,7 +1874,7 @@ function updateDesignTask(taskId, patch) {
   if (!t) return;
   Object.assign(t, patch);
   if (t.isMilestone) t.assigneeIds = [];
-  save('vi_design_tasks', state.designTasks);
+  _syncTasksNow('design');
 }
 
 function deleteDesignTask(taskId) {
@@ -1887,7 +1887,7 @@ function toggleDesignTaskDone(taskId) {
   const t = getDesignTaskById(taskId);
   if (!t) return;
   t.done = !t.done;
-  save('vi_design_tasks', state.designTasks);
+  _syncTasksNow('design');
 }
 
 function addDesignSubtask(taskId, { title, date, assigneeIds, notes, photoRequired, time }) {
@@ -1905,7 +1905,7 @@ function addDesignSubtask(taskId, { title, date, assigneeIds, notes, photoRequir
     photoRequired: !!photoRequired,
     done: false
   });
-  save('vi_design_tasks', state.designTasks);
+  _syncTasksNow('design');
 }
 
 function updateDesignSubtask(taskId, subtaskId, patch) {
@@ -1915,7 +1915,7 @@ function updateDesignSubtask(taskId, subtaskId, patch) {
   if (!s) return;
   Object.assign(s, patch);
   if (!Array.isArray(s.assigneeIds)) s.assigneeIds = [];
-  save('vi_design_tasks', state.designTasks);
+  _syncTasksNow('design');
 }
 
 function deleteDesignSubtask(taskId, subtaskId) {
@@ -2072,7 +2072,7 @@ function _bulkSetDateOnSelected(taskId, dateStr) {
   const targets = (t.subtasks || []).filter(s => window._selectedSubtaskIds.has(s.id));
   targets.forEach(s => { s.date = dateStr || null; });
   const phase = _getTaskPhase(taskId);
-  save(phase === 'design' ? 'vi_design_tasks' : 'vi_install_tasks', phase === 'design' ? state.designTasks : state.installTasks);
+  _syncTasksNow(phase);
   renderCurrentPage();
 }
 
@@ -2084,7 +2084,7 @@ function _bulkSetAssigneesOnSelected(taskId, ids) {
   targets.forEach(s => { s.assigneeIds = [...cleanIds]; });
   if (t.projectId != null && cleanIds.length > 0) ensureOnProjectCrew(t.projectId, cleanIds);
   const phase = _getTaskPhase(taskId);
-  save(phase === 'design' ? 'vi_design_tasks' : 'vi_install_tasks', phase === 'design' ? state.designTasks : state.installTasks);
+  _syncTasksNow(phase);
   renderCurrentPage();
 }
 
@@ -2096,7 +2096,7 @@ function _reorderSubtask(taskId, fromIdx, toIdx) {
   const [moved] = t.subtasks.splice(fromIdx, 1);
   t.subtasks.splice(toIdx, 0, moved);
   const phase = _getTaskPhase(taskId);
-  save(phase === 'design' ? 'vi_design_tasks' : 'vi_install_tasks', phase === 'design' ? state.designTasks : state.installTasks);
+  _syncTasksNow(phase);
   renderCurrentPage();
 }
 
@@ -10408,8 +10408,7 @@ function _findSubForReview(taskId, subId){
   const sub = (t.subtasks || []).find(x => x.id === subId);
   if (!sub) return null;
   return { t, sub, persist: () => {
-    if (_getTaskPhase(taskId) === 'design') save('vi_design_tasks', state.designTasks);
-    else save('vi_install_tasks', state.installTasks);
+    _syncTasksNow(_getTaskPhase(taskId));
   }};
 }
 function _approvePhoto(taskId, subId){
@@ -10494,8 +10493,7 @@ function _deleteSubtaskPhoto(taskId, subtaskId) {
   const sub = (t.subtasks || []).find(x => x.id === subtaskId);
   if (!sub) return;
   sub.photo = null;
-  if (_getTaskPhase(taskId) === 'design') save('vi_design_tasks', state.designTasks);
-  else save('vi_install_tasks', state.installTasks);
+  _syncTasksNow(_getTaskPhase(taskId));
   showToast('Photo removed', 'info');
   renderCurrentPage();
 }
@@ -10519,8 +10517,7 @@ function _uploadSubtaskPhoto(taskId, subtaskId) {
       sub.photo = url;
       sub.photoReview = { status: 'pending', by: null, at: new Date().toISOString(), reason: null };
       if (sub.done) sub.done = false; // re-enters review; not complete until approved
-      if (_getTaskPhase(taskId) === 'design') save('vi_design_tasks', state.designTasks);
-      else save('vi_install_tasks', state.installTasks);
+      _syncTasksNow(_getTaskPhase(taskId));
       showToast('Photo submitted for approval', 'success');
       try { _notifyPhotoSubmitted(t, sub); } catch (e) {}
       renderCurrentPage();
@@ -13446,34 +13443,41 @@ function renderCalendar(c) {
     designTaskIdsWithBar.add(t.id);
   });
 
-  // Logistics items (prep / load / drive / unload / de-prep) as single-day bars.
-  // Respects the People filter via assignees ∪ the project's install/PM crew, so
-  // prep & de-prep days surface for the crew even before someone's assigned.
+  // Logistics — one aggregated bar per job per day (tap opens a detail sheet
+  // listing every logistics task that day + who it's assigned to). Respects the
+  // People filter via assignees ∪ the project's install/PM crew.
   (state.projects || []).forEach(proj => {
     if (!proj || proj.id == null) return;
     const items = getLogisticsCalItems(proj);
     if (!items.length) return;
     const a = getProjectAssignment(proj.id) || {};
     const crewIds = [...((a.install || []).map(x => x.id)), ...((a.pm || []).map(x => x.id))];
+    const byDate = {};
     items.forEach(it => {
       if (it.date < gridStartStr || it.date > gridEndStr) return;
-      const attendees = new Set(it.assigneeIds);
-      crewIds.forEach(id => attendees.add(id));
+      (byDate[it.date] = byDate[it.date] || []).push(it);
+    });
+    Object.keys(byDate).forEach(date => {
+      const dayItems = byDate[date];
+      const attendees = new Set(crewIds);
+      dayItems.forEach(it => (it.assigneeIds || []).forEach(id => attendees.add(id)));
       if (!_calEffective.some(mid => attendees.has(mid))) return;
+      const barAttendees = new Set();
+      dayItems.forEach(it => (it.assigneeIds || []).forEach(id => barAttendees.add(id)));
       installBars.push({
         type: 'logistics',
         projectId: proj.id,
-        name: it.title,
+        name: 'Logistics',
         clientName: proj.client_name || '',
         booked: true,
-        start: it.date,
-        end: it.date,
+        start: date,
+        end: date,
         excludeWeekends: false,
         weekendIncludes: [],
-        attendeeIds: it.assigneeIds.slice(),
+        attendeeIds: [...barAttendees],
         hasNotes: false,
         isMilestone: false,
-        titleOverride: `🚚 ${proj.client_name || proj.name} · ${it.title}${it.time ? ' ' + _fmtTime12(it.time) : ''}`
+        titleOverride: `🚚 ${proj.client_name || proj.name} · Logistics (${dayItems.length})`
       });
     });
   });
@@ -13652,10 +13656,13 @@ function renderCalendar(c) {
       const targetTab = bar.type === 'design_task' ? 'design' : 'install';
       const barKind = bar.type === 'design_task' ? 'design' : 'install';
       const hoverAttrs = `onmouseenter="_calHoverEnter(event,'${barKind}-${bar.projectId}','${runStartDate}')" onmouseleave="_calHoverLeave()"`;
+      const clickAttr = bar.type === 'logistics'
+        ? `onclick="event.stopPropagation();openLogisticsDaySheet(${bar.projectId},'${bar.start}')"`
+        : `onclick="_calTapEvent(event,{eventId:'${barKind}-${bar.projectId}',dateStr:'${runStartDate}',projectId:${bar.projectId},tab:'${targetTab}'})"`;
       return `
         <div class="mcal-month-bar" style="${st.css};${radiusStyle};left:${leftPct}%;width:${widthPct}%;top:${top}px;height:${BAR_HEIGHT}px"
              ${hoverAttrs}
-             onclick="_calTapEvent(event,{eventId:'${barKind}-${bar.projectId}',dateStr:'${runStartDate}',projectId:${bar.projectId},tab:'${targetTab}'})">
+             ${clickAttr}>
           <span class="mcal-month-bar-label">${bar.hasNotes ? '📝 ' : ''}${esc(label)}</span>${initials}
         </div>
       `;
@@ -19981,6 +19988,42 @@ function getLogisticsCalItems(p) {
   push('unload', 'Unload', dates.unload);
   push('deprep', 'De-prep', dates.deprep);
   return items;
+}
+function openLogisticsDaySheet(projectId, dateStr) {
+  const p = (state.projects || []).find(x => String(x.id) === String(projectId));
+  if (!p) return;
+  const items = getLogisticsCalItems(p).filter(it => it.date === dateStr);
+  document.getElementById('logi-day-sheet')?.remove();
+  const rows = items.length ? items.map(it => {
+    const names = (it.assigneeIds || []).map(id => (getTeamMember(id) || {}).name).filter(Boolean).map(n => n.split(' ')[0]).join(', ') || 'Unassigned';
+    return `<div style="display:flex;align-items:flex-start;gap:8px;padding:8px 0;border-bottom:1px solid #1C2333">
+      <span style="flex-shrink:0;width:16px;height:16px;border-radius:4px;border:1.5px solid ${it.done ? '#2EA043' : '#30363D'};background:${it.done ? '#238636' : 'transparent'};color:#fff;display:flex;align-items:center;justify-content:center;font-size:11px;margin-top:1px">${it.done ? '✓' : ''}</span>
+      <div style="flex:1;min-width:0">
+        <div style="font-size:13px;font-weight:600;color:#E6EDF3">${esc(it.title)}${it.time ? ' · ' + esc(_fmtTime12(it.time)) : ''}</div>
+        <div style="font-size:11px;color:#8B949E;margin-top:1px">${esc(names)}</div>
+      </div>
+    </div>`;
+  }).join('') : '<div style="color:#8B949E;font-size:13px;padding:8px 0">No logistics for this day.</div>';
+  const overlay = document.createElement('div');
+  overlay.id = 'logi-day-sheet';
+  overlay.className = 'modal-overlay';
+  overlay.style.zIndex = '10002';
+  overlay.onclick = (e) => { if (e.target === overlay) overlay.remove(); };
+  overlay.innerHTML = `
+    <div class="modal-container" style="max-width:440px;max-height:80vh;display:flex;flex-direction:column">
+      <div class="modal-header">
+        <div class="modal-title">Logistics · ${esc(fmtDateLocal(dateStr))}</div>
+        <button class="modal-close" onclick="document.getElementById('logi-day-sheet')?.remove()">&times;</button>
+      </div>
+      <div class="modal-body" style="overflow-y:auto">
+        <div style="font-size:12px;color:#8B949E;margin-bottom:6px">${esc(p.client_name || p.name)}</div>
+        ${rows}
+      </div>
+      <div style="padding:12px;border-top:1px solid #1C2333;display:flex;justify-content:flex-end">
+        <button class="btn btn-sm btn-primary" onclick="document.getElementById('logi-day-sheet')?.remove();openProject(${projectId},'install')">Open job</button>
+      </div>
+    </div>`;
+  document.body.appendChild(overlay);
 }
 function _logiAssigneeChips(ids) {
   if (!ids || !ids.length) return '<span class="itask-unassigned">Unassigned</span>';
