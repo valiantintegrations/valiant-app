@@ -7783,14 +7783,36 @@ function _logiTodayAlertHTML(memberId) {
   if (!mine.length) return '';
   mine.sort((a, b) => (a.when !== b.when) ? (a.when === 'today' ? -1 : 1) : (isDrive(b.item) - isDrive(a.item)));
   const anyDrive = mine.some(x => isDrive(x.item));
+  const subMin = (hm, mins) => { if (!hm) return ''; let [h, m] = hm.split(':').map(Number); let t = h * 60 + m - mins; if (t < 0) t = 0; return `${String(Math.floor(t / 60)).padStart(2, '0')}:${String(t % 60).padStart(2, '0')}`; };
+  const whenTagOf = w => w === 'today'
+    ? '<span style="font-size:10px;font-weight:700;color:#F0883E">TODAY</span>'
+    : '<span style="font-size:10px;font-weight:700;color:#D29922">TOMORROW</span>';
   const rows = mine.map(x => {
-    const drive = isDrive(x.item);
+    const whenTag = whenTagOf(x.when);
+    if (isDrive(x.item)) {
+      // Pull the rig out of the title ("Drive to job — F-350 + Trailer") and flag towing.
+      const rig = (x.item.title || '').replace(/^Drive\s+(to job|back)\s*[\u2014-]\s*/i, '').trim() || 'the vehicle';
+      const towing = rig.includes('+');
+      const baseT = x.item.time || '';
+      // Lead time = trailer hookup at the office (~30 min, only if towing) + a traffic buffer (~30 min).
+      const buffer = (towing ? 30 : 0) + 30;
+      const leaveBy = baseT ? subMin(baseT, buffer) : '';
+      const driveTime = baseT ? ' \u00B7 ' + t12(baseT) : '';
+      const leadNote = towing
+        ? `Hook up the trailer at the office and allow for traffic${leaveBy ? ' \u2014 plan to leave by ~' + t12(leaveBy) : ' \u2014 leave early'}.`
+        : `Allow for traffic${leaveBy ? ' \u2014 plan to leave by ~' + t12(leaveBy) : ' \u2014 leave early'} so you load in on time.`;
+      return `<div onclick="openProject(${x.project.id},'install')" style="display:flex;align-items:flex-start;gap:11px;padding:11px 12px;background:#0D1117;border:1px solid #5A3A1A;border-radius:9px;cursor:pointer;margin-top:8px">
+        <span style="font-size:22px;flex:0 0 auto">\u{1F69A}</span>
+        <div style="flex:1;min-width:0">
+          <div style="font-size:14px;font-weight:700;color:#E6EDF3">You're driving: ${esc(rig)}${driveTime}</div>
+          <div style="font-size:12px;color:#8B949E;margin-top:1px">${esc(x.project.name)}</div>
+          <div style="font-size:11.5px;color:#F0B24A;margin-top:5px">\u23F1 ${leadNote}</div>
+        </div>${whenTag}
+      </div>`;
+    }
     const time = x.item.time ? ' \u00B7 ' + t12(x.item.time) : '';
-    const whenTag = x.when === 'today'
-      ? '<span style="font-size:10px;font-weight:700;color:#F0883E">TODAY</span>'
-      : '<span style="font-size:10px;font-weight:700;color:#D29922">TOMORROW</span>';
-    return `<div onclick="openProject(${x.project.id},'install')" style="display:flex;align-items:center;gap:11px;padding:11px 12px;background:#0D1117;border:1px solid ${drive ? '#5A3A1A' : '#1C2333'};border-radius:9px;cursor:pointer;margin-top:8px">
-      <span style="font-size:22px;flex:0 0 auto">${drive ? '\u{1F69A}' : '\u{1F4E6}'}</span>
+    return `<div onclick="openProject(${x.project.id},'install')" style="display:flex;align-items:center;gap:11px;padding:11px 12px;background:#0D1117;border:1px solid #1C2333;border-radius:9px;cursor:pointer;margin-top:8px">
+      <span style="font-size:22px;flex:0 0 auto">\u{1F4E6}</span>
       <div style="flex:1;min-width:0">
         <div style="font-size:14px;font-weight:700;color:#E6EDF3">${esc(x.item.title)}${time}</div>
         <div style="font-size:12px;color:#8B949E;margin-top:1px">${esc(x.project.name)}</div>
@@ -7802,7 +7824,7 @@ function _logiTodayAlertHTML(memberId) {
   const headText = anyDrive ? "You're driving" : 'On-site logistics';
   return `<div class="dashboard-card" style="margin-bottom:16px;border-left:3px solid ${headColor};background:${anyDrive ? '#1F1408' : '#161B22'}">
     <div class="dashboard-card-title"><span style="color:${headColor};display:flex;align-items:center;gap:6px">${headIcon} ${headText} \u2014 today &amp; tomorrow</span></div>
-    <div style="font-size:12px;color:#8B949E">${anyDrive ? "You're assigned to drive a rig. Tap for the job and details." : 'Transport / logistics assigned to you.'}</div>
+    <div style="font-size:12px;color:#8B949E">${anyDrive ? "You're driving \u2014 leave time to hook up and beat traffic. Tap for the job." : 'Transport / logistics assigned to you.'}</div>
     ${rows}
   </div>`;
 }
