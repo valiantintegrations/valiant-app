@@ -9047,26 +9047,25 @@ function _psAssignmentsOnDay(pid, mid, ymd, sched) {
   const mids = String(mid);
   const times = [];
   let present = false;
+  const sameDay = d => String(d || '').slice(0, 10) === ymd;
   (state.installTasks || []).filter(t => t.projectId === pid).forEach(t => (t.subtasks || []).forEach(s => {
-    if (s.date === ymd && (s.assigneeIds || []).map(String).includes(mids)) { present = true; if (s.time) times.push(s.time); }
+    if (sameDay(s.date) && (s.assigneeIds || []).map(String).includes(mids)) { present = true; if (s.time) times.push(s.time); }
   }));
   const proj = (state.projects || []).find(p => String(p.id) === String(pid));
   if (proj) {
     let litems = [];
     try { litems = getLogisticsCalItems(proj) || []; } catch (e) {}
-    litems.forEach(it => { if (it.date === ymd && (it.assigneeIds || []).map(String).includes(mids)) { present = true; if (it.time) times.push(it.time); } });
+    litems.forEach(it => { if (sameDay(it.date) && (it.assigneeIds || []).map(String).includes(mids)) { present = true; if (it.time) times.push(it.time); } });
   }
   const sc = sched || _psLoad(pid);
   ['signoff', 'commissioning'].forEach(k => {
     const o = sc.logistics && sc.logistics[k];
-    if (o && o.date === ymd && (o.assigneeIds || []).map(String).includes(mids)) { present = true; if (o.time) times.push(o.time); }
+    if (o && sameDay(o.date) && (o.assigneeIds || []).map(String).includes(mids)) { present = true; if (o.time) times.push(o.time); }
   });
   return { present, times };
 }
 function _psPresence(sched, pid, mid, ymd) {
-  const ov = sched.presence[mid + '|' + ymd];
-  if (ov !== undefined) return ov;
-  return _psHasTask(pid, mid, ymd, sched);
+  return _psHasTask(pid, mid, ymd, sched) || (sched.presence[mid + '|' + ymd] === true);
 }
 function _psArrival(sched, pid, mid, ymd) {
   if (!_psPresence(sched, pid, mid, ymd)) return null;
@@ -9089,7 +9088,13 @@ function _psToggleGridEdit(pid) {
   renderProjectTabContent();
 }
 function _psTogglePresence(pid, mid, ymd) {
-  const s = _psLoad(pid); s.presence[mid + '|' + ymd] = !_psPresence(s, pid, mid, ymd);
+  const s = _psLoad(pid);
+  if (_psHasTask(pid, mid, ymd, s)) {
+    if (typeof showToast === 'function') showToast('They\u2019re on this day via a task or logistics \u2014 change that to take them off', 'info');
+    return;
+  }
+  const key = mid + '|' + ymd;
+  if (s.presence[key] === true) delete s.presence[key]; else s.presence[key] = true;
   _psSave(pid, s);
   _psSyncPresenceRecord(pid, mid, ymd);
   renderProjectTabContent();
@@ -9335,10 +9340,9 @@ function renderProjectScheduleTab(p) {
       let cells = '';
       days.forEach(ymd => {
         const assign = _psAssignmentsOnDay(p.id, m.id, ymd, sched);
-        const ov = sched.presence[m.id + '|' + ymd];
-        const overridden = ov !== undefined;
-        const on = overridden ? ov : assign.present;
-        const cls = on ? (assign.present && !overridden ? 'task' : 'on') : 'off';
+        const added = sched.presence[m.id + '|' + ymd] === true;
+        const on = assign.present || added;
+        const cls = on ? (assign.present ? 'task' : 'on') : 'off';
         let a = '';
         if (on) { const ts = assign.times.slice().sort(); a = ts.length ? ts[0] : ((sched.days[ymd] || {}).loadIn || '09:00'); }
         cells += `<td><span class="ps-cell ${cls}${editMode ? ' edit' : ' locked'}"${editMode ? ` onclick="_psTogglePresence(${p.id},${m.id},'${ymd}')"` : ''}>${on ? '\u2713' : '\u00B7'}</span><div class="ps-arr">${a ? _psT12(a) : ''}</div></td>`;
@@ -9350,7 +9354,7 @@ function renderProjectScheduleTab(p) {
       ${editMode ? `<button class="ps-ovr-done" onclick="_psToggleGridEdit(${p.id})">Done</button>` : ''}
     </div>`;
     gridHTML = `${bar}<div class="ps-grid"><table><tr><th class="nm">Crew</th>${days.map(d => `<th>${_psDayLabel(d).replace(/^[A-Za-z]+, /, '')}</th>`).join('')}</tr>${rows}</table></div>
-      <div class="ps-note">${editMode ? 'Override is on \u2014 tap a cell to add someone with no task (green) or remove them. Added people get it on their calendar with an arrival time and a heads-up. Tap Done to lock.' : 'Locked. Installers show on a day when they have a task (blue). Tap \u201COverride schedule\u201D to add or remove people by hand.'}</div>`;
+      <div class="ps-note">${editMode ? 'Override is on \u2014 tap an empty cell to add someone to help (green), tap again to remove. People already on via a task, logistics, or a milestone (blue) are managed there. Added people get it on their calendar. Tap Done to lock.' : 'Locked. People show on a day from tasks, logistics, and milestones like commissioning/sign-off (blue). Tap \u201COverride schedule\u201D to add an extra helper by hand.'}</div>`;
   } else {
     gridHTML = `<div class="ps-empty-b" style="padding:4px 2px">No crew yet. Assign install crew on the project or assign install tasks — anyone with a task on a day shows here automatically.</div>`;
   }
