@@ -7721,7 +7721,7 @@ function _gatherOnSite(memberId) {
     if (subs.length) {
       subs.forEach(sub => {
         const ids = (sub.assigneeIds && sub.assigneeIds.length) ? sub.assigneeIds : (t.assigneeIds || []);
-        if (ids.includes(memberId)) add(t.projectId, { type: 'task', taskId: t.id, subId: sub.id, phase: 'install', title: sub.title, parent: t.title, done: !!sub.done, date: sub.date || null, photoRequired: !!sub.photoRequired, photo: sub.photo || null, photoReview: sub.photoReview || null });
+        if (ids.includes(memberId)) add(t.projectId, { type: 'task', taskId: t.id, subId: sub.id, phase: 'install', title: sub.title, parent: t.title, done: !!sub.done, date: sub.date || null, priority: (sub.priority != null ? sub.priority : 999), photoRequired: !!sub.photoRequired, photo: sub.photo || null, photoReview: sub.photoReview || null });
       });
     } else if ((t.assigneeIds || []).includes(memberId)) {
       const dr = getTaskDateRange(t);
@@ -7795,7 +7795,9 @@ function _renderWorkBucket(memberId, bucketId, title, groups) {
     const collapsed = _workCollapsed.has(bucketId + ':' + String(gkey));
     const grpCount = countNum(gkey);
     const sorted = g.lines.slice().sort((a, b) =>
-      (a.done ? 1 : 0) - (b.done ? 1 : 0) || dkey(a.date).localeCompare(dkey(b.date)));
+      (a.done ? 1 : 0) - (b.done ? 1 : 0) ||
+      dkey(a.date).localeCompare(dkey(b.date)) ||
+      ((a.priority != null ? a.priority : 999) - (b.priority != null ? b.priority : 999)));
     const lines = sorted.map(ln => {
       let tag, tagCls, rowClick, cb, photoAff = '';
       if (ln.type === 'meeting') {
@@ -10935,6 +10937,28 @@ function _calPeopleChips(ids) {
   return `<div style="display:flex;flex-wrap:wrap;gap:5px;margin-top:4px">${inner}</div>`;
 }
 
+function _buildDayHover(dateStr) {
+  const byProj = {};
+  const add = (pid, entry) => { if (pid == null) return; (byProj[pid] = byProj[pid] || []).push(entry); };
+  const taskScan = (store, phase) => (store || []).forEach(t => {
+    (t.subtasks || []).forEach(s => { if (s.date === dateStr) add(t.projectId, { title: `${t.title}: ${s.title}`, ids: s.assigneeIds || [], icon: phase === 'design' ? '📐 ' : '◷ ' }); });
+    if (t.isMilestone && t.dueDate === dateStr) add(t.projectId, { title: t.title, ids: t.assigneeIds || [], icon: '🚩 ' });
+  });
+  taskScan(state.installTasks, 'install');
+  taskScan(state.designTasks, 'design');
+  (state.projects || []).forEach(p => getLogisticsCalItems(p).forEach(it => { if (it.date === dateStr) add(p.id, { title: it.title + (it.time ? ' · ' + _fmtTime12(it.time) : ''), ids: it.assigneeIds || [], icon: '🚚 ' }); }));
+  const pids = Object.keys(byProj);
+  let html = `<div class="cal-hover-title">${esc(fmtDateLocal(dateStr))}</div>`;
+  if (!pids.length) return html + '<div class="cal-hover-empty">Nothing scheduled</div>';
+  pids.forEach(pid => {
+    const proj = (state.projects || []).find(p => String(p.id) === String(pid));
+    html += `<div class="cal-hover-section-label">${esc(proj ? (proj.client_name || proj.name) : 'Project')}</div>`;
+    byProj[pid].forEach(r => {
+      html += `<div class="cal-hover-task"><div class="cal-hover-task-title">${r.icon}${esc(r.title)}</div>${r.ids.length ? _calPeopleChips(r.ids) : '<div class="cal-hover-task-who" style="color:#D29922">Unassigned</div>'}</div>`;
+    });
+  });
+  return html;
+}
 function _calBuildHoverContent(eventId, dateStr) {
   if (!eventId) return '';
   const m = /^([a-z_]+)-(\d+)$/.exec(eventId);
@@ -11023,6 +11047,7 @@ function _calBuildHoverContent(eventId, dateStr) {
       <div class="cal-hover-row">${esc(time)}</div>
     `;
   }
+  if (kind === 'calday') return _buildDayHover(dateStr);
   return '';
 }
 
@@ -13364,9 +13389,15 @@ function renderCalendar(c) {
       if (!range) return;
     }
     if (range.end < gridStartStr || range.start > gridEndStr) return;
-    // Skip when project install window already covers this range
+    // Collapse into the install window bar when the window already covers this
+    // task's whole range — keeps the calendar uncluttered; the day-cell / window
+    // hover still lists that day's tasks. Only collapse when the window bar is
+    // actually shown (respects filters); tasks outside the window still get a bar.
     const win = getInstallWindow(proj);
-    /* show scheduled tasks even inside the install window (was: skip when covered) */
+    if (win && win.start && win.end && projectIdsWithInstallBar.has(t.projectId)
+        && range.start >= win.start && range.end <= win.end) {
+      return;
+    }
 
     const allAttendees = new Set();
     (t.assigneeIds || []).forEach(id => allAttendees.add(id));
@@ -13622,7 +13653,7 @@ function renderCalendar(c) {
 
       cellsHTML.push(`
         <div class="mcal-month-cell${inMonth ? '' : ' is-other-month'}${isToday ? ' is-today' : ''}" data-date="${dk}" onclick="${inMonth ? `openCalendarDayDetail('${dk}')` : 'void(0)'}">
-          <div class="mcal-month-daynum">${dayNum}</div>
+          <div class="mcal-month-daynum"${inMonth ? ` onmouseenter="_calHoverEnter(event,'calday-0','${dk}')" onmouseleave="_calHoverLeave()"` : ''}>${dayNum}</div>
           <div class="mcal-month-events" style="margin-top:${maxLane * PER_LANE}px">
             ${projHTML}${meetingHTML}${personalHTML}${taskHTML}
             ${overflowCount > 0 ? `<div class="mcal-month-overflow">+${overflowCount} more</div>` : ''}
@@ -15226,6 +15257,152 @@ function renderAllOpenProjectsDashboard(activeProjects) {
 // Asset & people-centric: crew scheduling, tools, trucks/cases, safety,
 // trainings, oil changes. Widgets populated in Drop B3c.
 // ════════════════════════════════════════════════════════════════════════════
+// ── Crew Manager "Run of Show" — per-install, per-day task ordering ──
+// Lists install steps for a chosen job + day; ▲▼ sets each step's `priority`,
+// which the installer's On-site dashboard sorts by for that day.
+function _crewDayItems(projectId, date) {
+  const items = [];
+  (state.installTasks || []).forEach(t => {
+    if (String(t.projectId) !== String(projectId)) return;
+    (t.subtasks || []).forEach(s => { if (s.date === date) items.push({ t, s }); });
+    if (t.isMilestone && t.dueDate === date) items.push({ t, s: null });
+  });
+  items.sort((a, b) => {
+    const pa = a.s && a.s.priority != null ? a.s.priority : 999;
+    const pb = b.s && b.s.priority != null ? b.s.priority : 999;
+    return pa - pb || (a.s ? a.s.title : a.t.title).localeCompare(b.s ? b.s.title : b.t.title);
+  });
+  return items;
+}
+function _crewDaySetProject(pid) { if (!window._crewDay) window._crewDay = {}; const n = parseInt(pid, 10); window._crewDay.projectId = isNaN(n) ? pid : n; window._crewDay.date = null; renderCurrentPage(); }
+function _crewDaySetDate(d) { if (!window._crewDay) window._crewDay = {}; window._crewDay.date = d; renderCurrentPage(); }
+function _crewDayReorder(projectId, date, subId, dir) {
+  const subs = _crewDayItems(projectId, date).filter(i => i.s);
+  const idx = subs.findIndex(i => String(i.s.id) === String(subId));
+  if (idx < 0) return;
+  const swap = idx + dir;
+  if (swap < 0 || swap >= subs.length) return;
+  const tmp = subs[idx]; subs[idx] = subs[swap]; subs[swap] = tmp;
+  subs.forEach((it, i) => { it.s.priority = i; });
+  _syncTasksNow('install');
+  renderCurrentPage();
+}
+function renderCrewDayToDay(activeProjects) {
+  const jobs = (activeProjects || []).filter(p => getInstallWindow(p))
+    .sort((a, b) => ((getInstallWindow(a) || {}).start || '').localeCompare((getInstallWindow(b) || {}).start || ''));
+  if (!jobs.length) {
+    return `<div class="dashboard-card" style="margin-bottom:14px">
+      <div class="dashboard-card-title" style="margin-bottom:6px">Run of Show</div>
+      <div style="font-size:12px;color:#8B949E">No installs with a booked window yet. Set an install window on a job to plan its days here.</div>
+    </div>`;
+  }
+  if (!window._crewDay) window._crewDay = {};
+  let pid = window._crewDay.projectId;
+  if (!jobs.some(j => String(j.id) === String(pid))) { pid = jobs[0].id; window._crewDay.projectId = pid; }
+  const job = jobs.find(j => String(j.id) === String(pid));
+  const win = getInstallWindow(job);
+  const days = [];
+  if (win && win.start) { let c = _parseLocalYmd(win.start); const end = _parseLocalYmd(win.end || win.start); while (_ymd(c) <= _ymd(end)) { days.push(_ymd(c)); c = _addDays(c, 1); } }
+  const todayStr = _ymd(new Date());
+  let date = window._crewDay.date;
+  if (!days.includes(date)) { date = days.includes(todayStr) ? todayStr : days[0]; window._crewDay.date = date; }
+
+  const jobOpts = jobs.map(j => `<option value="${j.id}" ${String(j.id) === String(pid) ? 'selected' : ''}>${esc(j.client_name || j.name)}</option>`).join('');
+  const dayTabs = days.map(d => {
+    const dt = _parseLocalYmd(d);
+    const lbl = dt.toLocaleDateString('en-US', { weekday: 'short', month: 'numeric', day: 'numeric' });
+    const sel = d === date;
+    return `<button onclick="_crewDaySetDate('${d}')" style="flex:0 0 auto;padding:5px 9px;border-radius:6px;border:1px solid ${sel ? '#FF7B72' : '#30363D'};background:${sel ? '#FF7B7220' : 'transparent'};color:${sel ? '#FF7B72' : '#8B949E'};font-size:11px;font-weight:600;white-space:nowrap;cursor:pointer">${d === todayStr ? '● ' : ''}${esc(lbl)}</button>`;
+  }).join('');
+
+  const items = _crewDayItems(pid, date);
+  const subs = items.filter(i => i.s);
+  const rows = items.length ? items.map((it, idx) => {
+    const isSub = !!it.s;
+    const title = isSub ? it.s.title : it.t.title;
+    const parent = isSub ? it.t.title : null;
+    const done = isSub ? !!it.s.done : !!it.t.done;
+    const ids = isSub ? (it.s.assigneeIds && it.s.assigneeIds.length ? it.s.assigneeIds : (it.t.assigneeIds || [])) : (it.t.assigneeIds || []);
+    const who = ids.map(id => ((getTeamMember(id) || {}).name || '').split(' ')[0]).filter(Boolean).join(', ') || 'Unassigned';
+    const si = isSub ? subs.findIndex(x => String(x.s.id) === String(it.s.id)) : -1;
+    const upDis = !isSub || si <= 0;
+    const dnDis = !isSub || si < 0 || si >= subs.length - 1;
+    const reorder = isSub ? `<div style="display:flex;flex-direction:column;gap:1px;margin-right:2px">
+        <button onclick="_crewDayReorder(${pid},'${date}',${it.s.id},-1)" ${upDis ? 'disabled' : ''} style="border:none;background:none;color:${upDis ? '#30363D' : '#8B949E'};cursor:${upDis ? 'default' : 'pointer'};font-size:11px;line-height:1;padding:0">▲</button>
+        <button onclick="_crewDayReorder(${pid},'${date}',${it.s.id},1)" ${dnDis ? 'disabled' : ''} style="border:none;background:none;color:${dnDis ? '#30363D' : '#8B949E'};cursor:${dnDis ? 'default' : 'pointer'};font-size:11px;line-height:1;padding:0">▼</button>
+      </div>` : '<div style="width:12px;margin-right:2px"></div>';
+    return `<div style="display:flex;align-items:center;gap:8px;padding:7px 8px;border:1px solid #1C2333;border-radius:6px;margin-bottom:5px;${done ? 'opacity:.6' : ''}">
+      ${reorder}
+      <span style="flex-shrink:0;width:20px;height:20px;border-radius:50%;background:#FF7B7220;color:#FF7B72;display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:700">${idx + 1}</span>
+      <div style="flex:1;min-width:0">
+        <div style="font-size:13px;font-weight:600;color:#E6EDF3">${isSub && it.t.isMilestone ? '🚩 ' : ''}${esc(title)}</div>
+        <div style="font-size:11px;color:#8B949E">${parent ? esc(parent) + ' · ' : ''}${esc(who)}</div>
+      </div>
+      ${done ? '<span style="font-size:11px;color:#3FB950;flex-shrink:0">✓</span>' : ''}
+    </div>`;
+  }).join('') : '<div style="font-size:12px;color:#8B949E;padding:8px 0">No install tasks scheduled on this day.</div>';
+
+  return `<div class="dashboard-card" style="margin-bottom:14px">
+    <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:8px">
+      <div class="dashboard-card-title" style="margin-bottom:0">Run of Show</div>
+      <select onchange="_crewDaySetProject(this.value)" class="form-input" style="max-width:55%;font-size:12px;padding:4px 6px">${jobOpts}</select>
+    </div>
+    <div style="display:flex;gap:6px;overflow-x:auto;padding-bottom:6px;margin-bottom:8px">${dayTabs}</div>
+    <div style="font-size:11px;color:#6E7681;margin-bottom:8px">Reorder with ▲▼ — this sets the order the crew sees on their dashboard that day.</div>
+    ${rows}
+  </div>`;
+}
+
+// ── "This Week" agenda — tasks spelled out day by day (dashboard, not the
+// main calendar). memberId null = everyone (manager view); else scoped to one.
+function _weekAgendaItems(dayStr, memberId) {
+  const out = [];
+  const mine = ids => memberId == null || (ids || []).includes(memberId);
+  (state.installTasks || []).forEach(t => {
+    (t.subtasks || []).forEach(s => { if (s.date === dayStr) { const ids = (s.assigneeIds && s.assigneeIds.length) ? s.assigneeIds : (t.assigneeIds || []); if (mine(ids)) out.push({ icon: '◷', tab: 'install', title: `${t.title}: ${s.title}`, pid: t.projectId, ids, time: s.time || null, done: !!s.done, priority: s.priority != null ? s.priority : 999 }); } });
+    if (t.isMilestone && t.dueDate === dayStr && mine(t.assigneeIds)) out.push({ icon: '🚩', tab: 'install', title: t.title, pid: t.projectId, ids: t.assigneeIds || [], time: null, done: !!t.done, priority: 999 });
+  });
+  (state.designTasks || []).forEach(t => {
+    (t.subtasks || []).forEach(s => { if (s.date === dayStr) { const ids = (s.assigneeIds && s.assigneeIds.length) ? s.assigneeIds : (t.assigneeIds || []); if (mine(ids)) out.push({ icon: '📐', tab: 'design', title: `${t.title}: ${s.title}`, pid: t.projectId, ids, time: s.time || null, done: !!s.done, priority: 999 }); } });
+  });
+  (state.projects || []).forEach(p => getLogisticsCalItems(p).forEach(it => { if (it.date === dayStr && mine(it.assigneeIds)) out.push({ icon: '🚚', tab: 'install', title: it.title, pid: p.id, ids: it.assigneeIds || [], time: it.time || null, done: !!it.done, priority: 900 }); }));
+  out.sort((a, b) => (a.done ? 1 : 0) - (b.done ? 1 : 0) || a.priority - b.priority || (a.time || '99:99').localeCompare(b.time || '99:99') || a.title.localeCompare(b.title));
+  return out;
+}
+function renderWeekAgenda(memberId, titleText) {
+  const today = new Date();
+  let html = '';
+  let anyItems = false;
+  for (let i = 0; i < 7; i++) {
+    const d = _addDays(today, i);
+    const dk = _ymd(d);
+    const items = _weekAgendaItems(dk, memberId);
+    if (i > 0 && !items.length) continue; // skip empty days, but always show today
+    if (items.length) anyItems = true;
+    const lbl = i === 0 ? 'Today' : (i === 1 ? 'Tomorrow' : d.toLocaleDateString('en-US', { weekday: 'long' }));
+    const sub = d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+    html += `<div style="margin-bottom:10px">
+      <div style="font-size:12px;font-weight:700;color:${i === 0 ? '#FF7B72' : '#C9D1D9'};margin-bottom:5px;border-bottom:1px solid #1C2333;padding-bottom:3px">${lbl} <span style="font-weight:500;color:#6E7681">${sub}</span></div>
+      ${items.length ? items.map(it => {
+        const proj = (state.projects || []).find(p => String(p.id) === String(it.pid));
+        const who = (it.ids || []).map(id => ((getTeamMember(id) || {}).name || '').split(' ')[0]).filter(Boolean).join(', ');
+        return `<div onclick="${proj ? `openProject(${it.pid},'${it.tab}')` : 'void(0)'}" style="display:flex;align-items:flex-start;gap:8px;padding:4px 0;cursor:${proj ? 'pointer' : 'default'};${it.done ? 'opacity:.55' : ''}">
+          <span style="flex-shrink:0;font-size:12px">${it.icon}</span>
+          <div style="flex:1;min-width:0">
+            <div style="font-size:12px;color:#E6EDF3;${it.done ? 'text-decoration:line-through' : ''}">${esc(it.title)}${it.time ? ' · ' + esc(_fmtTime12(it.time)) : ''}</div>
+            <div style="font-size:10px;color:#8B949E">${proj ? esc(proj.client_name || proj.name) : ''}${who ? ' · ' + esc(who) : ''}</div>
+          </div>
+        </div>`;
+      }).join('') : '<div style="font-size:11px;color:#6E7681">Nothing scheduled</div>'}
+    </div>`;
+  }
+  if (!anyItems) html = '<div style="font-size:12px;color:#8B949E">Nothing scheduled in the next 7 days.</div>';
+  return `<div class="dashboard-card" style="margin-bottom:14px">
+    <div class="dashboard-card-title" style="margin-bottom:10px">${esc(titleText || 'This Week')}</div>
+    ${html}
+  </div>`;
+}
+
 function renderCrewManagerDashboard(activeProjects) {
   // Crew snapshot: install team members + their current assignments
   const allInstallers = (state.team || []).filter(m => {
@@ -15245,6 +15422,8 @@ function renderCrewManagerDashboard(activeProjects) {
   });
 
   return `
+    ${renderCrewDayToDay(activeProjects)}
+    ${renderWeekAgenda(null, 'This Week — all crew')}
     <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:10px;margin-bottom:18px">
       <div class="metric-card">
         <div class="metric-label">Crew</div>
