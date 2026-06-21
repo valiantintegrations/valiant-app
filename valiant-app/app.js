@@ -10772,14 +10772,15 @@ function _calBuildHoverContent(eventId, dateStr) {
   const kind = m[1];
   const rawId = parseInt(m[2], 10);
 
-  function renderProjectBlock(project) {
+  function renderProjectBlock(project, phase) {
     if (!project) return '';
+    const taskStore = ((phase === 'design' ? state.designTasks : state.installTasks) || []);
     const clientName = project.client_name || '';
     const projName = project.name || '';
     const scopeTags = Array.isArray(project.scope_tags) ? project.scope_tags : [];
     // Subtasks landing on this day across all tasks for this project
     const daySubs = [];
-    (state.installTasks || []).forEach(t => {
+    taskStore.forEach(t => {
       if (t.projectId !== project.id) return;
       (t.subtasks || []).forEach(s => {
         if (s.date === dateStr) daySubs.push({ task: t, subtask: s });
@@ -10812,13 +10813,17 @@ function _calBuildHoverContent(eventId, dateStr) {
 
   if (kind === 'install') {
     const p = state.projects.find(x => x.id === rawId);
-    return renderProjectBlock(p);
+    return renderProjectBlock(p, 'install');
+  }
+  if (kind === 'design') {
+    const p = state.projects.find(x => x.id === rawId);
+    return renderProjectBlock(p, 'design');
   }
   if (kind === 'itask') {
     const t = (state.installTasks || []).find(x => x.id === rawId);
     if (!t) return '';
     const p = state.projects.find(x => x.id === t.projectId);
-    return renderProjectBlock(p);
+    return renderProjectBlock(p, 'install');
   }
   if (kind === 'meeting') {
     const meeting = (state.meetings || []).find(x => x.id === rawId);
@@ -10887,6 +10892,78 @@ function _calHoverEnter(e, eventId, dateStr) {
 function _calHoverLeave() {
   const tip = document.getElementById('cal-hover-tip');
   if (tip) tip.style.display = 'none';
+}
+
+// ── Mobile tap-to-info for calendar events ──
+// Desktop keeps hover-to-preview + click-to-open. On touch devices (no hover),
+// a tap opens a bottom sheet showing the same hover content; tapping the sheet
+// (or its primary button) navigates to the project on the correct tab.
+function _calIsTouch() {
+  return !!(window.matchMedia && window.matchMedia('(hover: none)').matches);
+}
+function _calRunEventAction(opts) {
+  if (!opts) return;
+  if (opts.meetingId != null) { openMeetingDetail(opts.meetingId); return; }
+  if (opts.projectId != null) { openProject(opts.projectId, opts.tab || 'install'); return; }
+  if (opts.dateStr) { openCalendarDayDetail(opts.dateStr); return; }
+}
+function _calTapEvent(ev, opts) {
+  if (ev && ev.stopPropagation) ev.stopPropagation();
+  if (_calIsTouch()) { openCalEventSheet(opts); return; }
+  _calRunEventAction(opts);  // desktop: same behavior as before
+}
+function _ensureCalSheetStyles() {
+  if (document.getElementById('vi-cal-sheet')) return;
+  const st = document.createElement('style');
+  st.id = 'vi-cal-sheet';
+  st.textContent = `
+    .cal-event-sheet-overlay{position:fixed;inset:0;z-index:9999;background:rgba(0,0,0,0.55);display:flex;align-items:flex-end;justify-content:center;opacity:0;transition:opacity .18s ease;-webkit-tap-highlight-color:transparent}
+    .cal-event-sheet-overlay.is-open{opacity:1}
+    .cal-event-sheet-card{width:100%;max-width:520px;background:#161B22;border:1px solid #30363D;border-bottom:none;border-radius:16px 16px 0 0;padding:10px 16px calc(16px + env(safe-area-inset-bottom));box-shadow:0 -8px 30px rgba(0,0,0,0.5);transform:translateY(100%);transition:transform .2s ease;max-height:80vh;overflow-y:auto;box-sizing:border-box}
+    .cal-event-sheet-overlay.is-open .cal-event-sheet-card{transform:translateY(0)}
+    .cal-event-sheet-grab{width:38px;height:4px;border-radius:999px;background:#30363D;margin:2px auto 12px}
+    /* Reuse the hover-tooltip's inner styling but neutralize its fixed-tooltip positioning */
+    .cal-event-sheet-tip{position:static!important;display:block!important;max-width:none!important;width:auto!important;left:auto!important;top:auto!important;right:auto!important;bottom:auto!important;box-shadow:none!important;background:transparent!important;border:none!important;padding:0!important;margin:0 0 14px!important;pointer-events:none;opacity:1!important;visibility:visible!important}
+    .cal-event-sheet-body{cursor:pointer}
+    .cal-event-sheet-go{display:block;width:100%;box-sizing:border-box;margin-top:4px;padding:12px;border-radius:10px;border:none;background:#1F6FEB;color:#fff;font-size:14px;font-weight:600;cursor:pointer}
+    .cal-event-sheet-close{display:block;width:100%;box-sizing:border-box;margin-top:8px;padding:11px;border-radius:10px;border:1px solid #30363D;background:transparent;color:#8B949E;font-size:13px;font-weight:500;cursor:pointer}
+  `;
+  document.head.appendChild(st);
+}
+function openCalEventSheet(opts) {
+  opts = opts || {};
+  _ensureCalSheetStyles();
+  document.getElementById('cal-event-sheet')?.remove();
+  const body = ((typeof _calBuildHoverContent === 'function') ? _calBuildHoverContent(opts.eventId, opts.dateStr) : '') || '<div class="cal-hover-title">Event</div>';
+  let actionLabel = 'Open';
+  if (opts.meetingId != null) actionLabel = 'Open meeting details';
+  else if (opts.projectId != null) actionLabel = (opts.tab === 'design') ? 'Open Design tab' : 'Open Install tab';
+  else if (opts.dateStr) actionLabel = 'View day';
+  const overlay = document.createElement('div');
+  overlay.id = 'cal-event-sheet';
+  overlay.className = 'cal-event-sheet-overlay';
+  overlay.addEventListener('click', (e) => { if (e.target === overlay) closeCalEventSheet(); });
+  const go = () => { closeCalEventSheet(); _calRunEventAction(opts); };
+  overlay.innerHTML = `
+    <div class="cal-event-sheet-card" role="dialog" aria-modal="true">
+      <div class="cal-event-sheet-grab"></div>
+      <div class="cal-event-sheet-body">
+        <div class="cal-hover-tip cal-event-sheet-tip">${body}</div>
+      </div>
+      <button type="button" class="cal-event-sheet-go">${esc(actionLabel)} &rarr;</button>
+      <button type="button" class="cal-event-sheet-close">Close</button>
+    </div>`;
+  overlay.querySelector('.cal-event-sheet-body').addEventListener('click', go);
+  overlay.querySelector('.cal-event-sheet-go').addEventListener('click', go);
+  overlay.querySelector('.cal-event-sheet-close').addEventListener('click', closeCalEventSheet);
+  document.body.appendChild(overlay);
+  requestAnimationFrame(() => overlay.classList.add('is-open'));
+}
+function closeCalEventSheet() {
+  const el = document.getElementById('cal-event-sheet');
+  if (!el) return;
+  el.classList.remove('is-open');
+  setTimeout(() => { el.remove(); }, 180);
 }
 
 function _dayPickerCommit(dateStr) {
@@ -13304,7 +13381,7 @@ function renderCalendar(c) {
         const proj = state.projects.find(pp => pp.id === e.id);
         const st = getEventStyle(getProjectColor(e.id), !!e.booked);
         const label = e.clientName || e.name;
-        return `<div class="mcal-month-event" style="${st.css}" onclick="event.stopPropagation();openProject(${e.id},'install')" onmouseenter="_calHoverEnter(event,'install-${e.id}','${dk}')" onmouseleave="_calHoverLeave()">${proj?.scheduling_notes ? '📝 ' : ''}${esc(label)}</div>`;
+        return `<div class="mcal-month-event" style="${st.css}" onclick="_calTapEvent(event,{eventId:'install-${e.id}',dateStr:'${dk}',projectId:${e.id},tab:'install'})" onmouseenter="_calHoverEnter(event,'install-${e.id}','${dk}')" onmouseleave="_calHoverLeave()">${proj?.scheduling_notes ? '📝 ' : ''}${esc(label)}</div>`;
       }).join('');
 
       const meetingHTML = meetingShown.map(m => {
@@ -13313,7 +13390,7 @@ function renderCalendar(c) {
         const isPending = m.status === 'pending_approval';
         const st = getEventStyle(mColor, !isPending);
         const timeColor = st.fill === 'transparent' ? mColor : st.text;
-        return `<div class="mcal-month-event" style="${st.css}" onclick="event.stopPropagation();openMeetingDetail(${m.id})" onmouseenter="_calHoverEnter(event,'meeting-${m.id}','${dk}')" onmouseleave="_calHoverLeave()">${timeLabel ? `<span style="font-weight:600;color:${timeColor}">${esc(timeLabel)}</span>` : ''}${esc(m.title)}</div>`;
+        return `<div class="mcal-month-event" style="${st.css}" onclick="_calTapEvent(event,{eventId:'meeting-${m.id}',dateStr:'${dk}',meetingId:${m.id}})" onmouseenter="_calHoverEnter(event,'meeting-${m.id}','${dk}')" onmouseleave="_calHoverLeave()">${timeLabel ? `<span style="font-weight:600;color:${timeColor}">${esc(timeLabel)}</span>` : ''}${esc(m.title)}</div>`;
       }).join('');
 
       const personalHTML = personalShown.map(pe => {
@@ -13321,7 +13398,7 @@ function renderCalendar(c) {
         const viewerIsOwner = pe.memberId === viewerId;
         const label = getPersonalEventDisplayLabel(pe, viewerIsOwner);
         const ownerLabel = (!viewerIsOwner && owner) ? `${owner.name.split(' ')[0]}: ` : '';
-        return `<div class="mcal-month-event mcal-month-event-personal" style="background:${getPersonalEventColor(pe)}1F;border-color:${getPersonalEventColor(pe)};color:${getPersonalEventColor(pe)}" onclick="event.stopPropagation();openCalendarDayDetail('${dk}')" onmouseenter="_calHoverEnter(event,'pe-${pe.id}','${dk}')" onmouseleave="_calHoverLeave()">${esc(ownerLabel + label)}</div>`;
+        return `<div class="mcal-month-event mcal-month-event-personal" style="background:${getPersonalEventColor(pe)}1F;border-color:${getPersonalEventColor(pe)};color:${getPersonalEventColor(pe)}" onclick="_calTapEvent(event,{eventId:'pe-${pe.id}',dateStr:'${dk}'})" onmouseenter="_calHoverEnter(event,'pe-${pe.id}','${dk}')" onmouseleave="_calHoverLeave()">${esc(ownerLabel + label)}</div>`;
       }).join('');
 
       const taskHTML = taskShown.map(({ task, subtask }) => {
@@ -13331,7 +13408,7 @@ function renderCalendar(c) {
         const isMile = !subtask && task.isMilestone;
         const stepLabel = subtask ? subtask.title : task.title;
         const chipText = clientName ? `${clientName} · ${stepLabel}` : stepLabel;
-        return `<div class="mcal-month-event" style="background:transparent;border:1px solid ${cc};color:${cc}" onclick="event.stopPropagation();openProject(${task.projectId})" onmouseenter="_calHoverEnter(event,'install-${task.projectId}','${dk}')" onmouseleave="_calHoverLeave()">${isMile ? '🚩 ' : '◷ '}${esc(chipText)}</div>`;
+        return `<div class="mcal-month-event" style="background:transparent;border:1px solid ${cc};color:${cc}" onclick="_calTapEvent(event,{eventId:'install-${task.projectId}',dateStr:'${dk}',projectId:${task.projectId},tab:'install'})" onmouseenter="_calHoverEnter(event,'install-${task.projectId}','${dk}')" onmouseleave="_calHoverLeave()">${isMile ? '🚩 ' : '◷ '}${esc(chipText)}</div>`;
       }).join('');
 
       const overflowCount = totalCount - (projShown.length + meetingShown.length + personalShown.length + taskShown.length);
@@ -13370,11 +13447,12 @@ function renderCalendar(c) {
         return `<span class="mcal-initials-badge" style="background:${memberColor}22;border-color:${memberColor};color:${memberColor}">${esc(ini)}</span>`;
       }).join('');
       const targetTab = bar.type === 'design_task' ? 'design' : 'install';
-      const hoverAttrs = `onmouseenter="_calHoverEnter(event,'install-${bar.projectId}','${runStartDate}')" onmouseleave="_calHoverLeave()"`;
+      const barKind = bar.type === 'design_task' ? 'design' : 'install';
+      const hoverAttrs = `onmouseenter="_calHoverEnter(event,'${barKind}-${bar.projectId}','${runStartDate}')" onmouseleave="_calHoverLeave()"`;
       return `
         <div class="mcal-month-bar" style="${st.css};${radiusStyle};left:${leftPct}%;width:${widthPct}%;top:${top}px;height:${BAR_HEIGHT}px"
              ${hoverAttrs}
-             onclick="event.stopPropagation();openProject(${bar.projectId},'${targetTab}')">
+             onclick="_calTapEvent(event,{eventId:'${barKind}-${bar.projectId}',dateStr:'${runStartDate}',projectId:${bar.projectId},tab:'${targetTab}'})">
           <span class="mcal-month-bar-label">${bar.hasNotes ? '📝 ' : ''}${esc(label)}</span>${initials}
         </div>
       `;
