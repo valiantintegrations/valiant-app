@@ -19674,7 +19674,7 @@ function _addDaysYmd(ymd, n) {
 function getAllocationsForProject(pid) { return (state.assetAllocations || []).filter(a => String(a.projectId) === String(pid)); }
 function getAllocationsForAsset(assetId) { return (state.assetAllocations || []).filter(a => String(a.assetId) === String(assetId)); }
 // Committed span = the full time the asset is tied up (prep day → dump day).
-function _allocCommitted(a) { return { start: a.prep || a.start, end: a.deprep || a.end || a.start }; }
+function _allocCommitted(a) { return { start: a.start, end: a.end || a.start }; }
 function _spansOverlap(s1, e1, s2, e2) { if (!s1 || !e1 || !s2 || !e2) return false; return s1 <= e2 && s2 <= e1; } // ISO YMD compares lexically
 // Other allocations of this asset whose committed span overlaps [start,end].
 function assetConflicts(assetId, start, end, excludeAllocId) {
@@ -19689,7 +19689,7 @@ function _defaultAllocWindow(p) {
   const win = getInstallWindow(p);
   const start = win && win.start ? win.start : null;
   const end = win && win.end ? win.end : start;
-  return { start, end, prep: start ? _addDaysYmd(start, -1) : null, deprep: end ? _addDaysYmd(end, 1) : null };
+  return { start, end };
 }
 function _persistAllocations() {
   return _syncKeyNow('vi_asset_allocations', state.assetAllocations).then(r => {
@@ -19697,10 +19697,10 @@ function _persistAllocations() {
     return r;
   });
 }
-function addAllocation({ projectId, assetId, start, end, prep, deprep }) {
+function addAllocation({ projectId, assetId, start, end }) {
   if (!Array.isArray(state.assetAllocations)) state.assetAllocations = [];
   const id = _genId('alloc_');
-  state.assetAllocations.push({ id, projectId, assetId, start: start || null, end: end || null, prep: prep || null, deprep: deprep || null, notes: '' });
+  state.assetAllocations.push({ id, projectId, assetId, start: start || null, end: end || null, towedBy: null, notes: '' });
   _persistAllocations();
   return id;
 }
@@ -19727,7 +19727,7 @@ function renderAssetAllocationTab(container, p) {
         <div class="dashboard-card-title" style="margin-bottom:0">Asset Allocation</div>
         <button class="btn btn-sm" onclick="openAssetPicker(${p.id})">+ Allocate asset</button>
       </div>
-      <div style="font-size:12px;color:#8B949E">Install window: <span style="color:#C9D1D9">${winLabel}</span>. New allocations default to the window with a prep day before and a dump day after \u2014 adjust each below.</div>
+      <div style="font-size:12px;color:#8B949E">Install window: <span style="color:#C9D1D9">${winLabel}</span>. Assets default to the whole job \u2014 narrow the on-site dates below only if one's needed just part of the time. Link a trailer to a truck so they share one drive task.</div>
     </div>
     ${allocs.length ? allocs.map(_renderAllocationRow).join('') : `
       <div class="dashboard-card" style="color:#8B949E;font-size:13px">No assets allocated yet. Tap <strong>+ Allocate asset</strong> to pick vehicles, trailers or lifts for this job.</div>`}
@@ -19737,8 +19737,7 @@ function _renderAllocationRow(a) {
   const asset = getAssetById(a.assetId);
   const name = asset ? asset.name : 'Unknown asset';
   const typeLabel = asset ? _assetTypeLabel(asset.type) : '';
-  const committed = _allocCommitted(a);
-  const conflicts = assetConflicts(a.assetId, committed.start, committed.end, a.id);
+  const conflicts = assetConflicts(a.assetId, a.start, a.end || a.start, a.id);
   const conflictHTML = conflicts.length ? `
     <div style="display:flex;align-items:flex-start;gap:6px;margin-top:8px;padding:6px 8px;background:#2A1A0E;border:1px solid #5A3A1A;border-radius:5px;font-size:11px;color:#F0883E">
       \u26A0 Double-booked: also on ${conflicts.map(c => { const cp = state.projects.find(x => String(x.id) === String(c.projectId)); const cc = _allocCommitted(c); return `${cp ? esc(cp.name) : 'another job'} (${fmtDateLocal(cc.start)}\u2013${fmtDateLocal(cc.end)})`; }).join(', ')}
@@ -19747,6 +19746,17 @@ function _renderAllocationRow(a) {
     <label style="display:flex;flex-direction:column;gap:2px;font-size:10px;color:#8B949E">${label}
       <input type="date" value="${val || ''}" class="form-input" style="font-size:12px;padding:4px 6px" onchange="updateAllocation('${a.id}',{${field}:this.value||null})">
     </label>`;
+  // Trailers can be towed by an allocated truck (shared drive task) or left unlinked (own drive task).
+  let towedHTML = '';
+  if (asset && asset.type === 'trailer') {
+    const vehicleAllocs = getAllocationsForProject(a.projectId).filter(x => { const ax = getAssetById(x.assetId); return ax && ax.type === 'vehicle'; });
+    const opts = ['<option value="">Own / personal truck (separate drive task)</option>']
+      .concat(vehicleAllocs.map(v => { const va = getAssetById(v.assetId); return `<option value="${v.id}" ${String(a.towedBy) === String(v.id) ? 'selected' : ''}>Towed by ${esc(va ? va.name : 'vehicle')}</option>`; }));
+    towedHTML = `
+      <label style="display:flex;flex-direction:column;gap:2px;font-size:10px;color:#8B949E;margin-top:8px">Towing
+        <select class="form-input" style="font-size:12px;padding:4px 6px" onchange="updateAllocation('${a.id}',{towedBy:this.value||null})">${opts.join('')}</select>
+      </label>`;
+  }
   return `
     <div class="dashboard-card" style="margin-bottom:10px">
       <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px">
@@ -19755,11 +19765,10 @@ function _renderAllocationRow(a) {
         <span style="cursor:pointer;color:#6E7681;font-size:16px;padding:0 4px" title="Remove" onclick="removeAllocation('${a.id}')">\u00D7</span>
       </div>
       <div style="display:grid;grid-template-columns:repeat(2,1fr);gap:8px">
-        ${dateField('Prep day', 'prep', a.prep)}
         ${dateField('On-site start', 'start', a.start)}
         ${dateField('On-site end', 'end', a.end)}
-        ${dateField('Dump day', 'deprep', a.deprep)}
       </div>
+      ${towedHTML}
       ${conflictHTML}
     </div>`;
 }
@@ -19777,7 +19786,7 @@ function openAssetPicker(projectId) {
 function _renderAssetPickerContent(projectId) {
   const p = state.projects.find(x => String(x.id) === String(projectId));
   const win = _defaultAllocWindow(p);
-  const cand = { start: win.prep || win.start, end: win.deprep || win.end };
+  const cand = { start: win.start, end: win.end };
   const haveWindow = !!(cand.start && cand.end);
   const already = new Set(getAllocationsForProject(projectId).map(a => String(a.assetId)));
   const groups = ASSET_TYPES.map(t => {
@@ -19810,7 +19819,7 @@ function _renderAssetPickerContent(projectId) {
         <button class="modal-close" onclick="document.getElementById('asset-picker')?.remove()">&times;</button>
       </div>
       <div class="modal-body" style="overflow-y:auto">
-        <div style="font-size:11px;color:#8B949E;margin-bottom:12px">Availability checked for ${haveWindow ? `${fmtDateLocal(cand.start)} \u2013 ${fmtDateLocal(cand.end)}` : 'this job'} (prep through dump). Tap an asset to allocate; adjust dates after.</div>
+        <div style="font-size:11px;color:#8B949E;margin-bottom:12px">Availability checked for ${haveWindow ? `${fmtDateLocal(cand.start)} \u2013 ${fmtDateLocal(cand.end)}` : 'this job'}. Tap an asset to allocate; adjust dates after.</div>
         ${groups || '<div style="color:#8B949E;font-size:13px">No assets yet \u2014 add them in Settings.</div>'}
       </div>
     </div>`;
@@ -19821,7 +19830,7 @@ function _pickAsset(projectId, assetId, busy) {
   const asset = getAssetById(assetId);
   if (busy && !confirm(`${asset ? asset.name : 'This asset'} is already allocated to another job on overlapping dates. Allocate anyway?`)) return;
   const win = _defaultAllocWindow(p);
-  addAllocation({ projectId: p.id, assetId, start: win.start, end: win.end, prep: win.prep, deprep: win.deprep });
+  addAllocation({ projectId: p.id, assetId, start: win.start, end: win.end });
   const overlay = document.getElementById('asset-picker');
   if (overlay) overlay.querySelector('.modal-container').outerHTML = _renderAssetPickerContent(projectId);
   renderCurrentPage();
