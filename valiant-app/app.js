@@ -8695,7 +8695,15 @@ function renderProjectPage(c) {
           </div>
         ` : ''}
       </div>
-      ${needsReview ? `
+      ${needsReview ? (isMobilizationComplete(p.id) ? `
+        <div class="project-page-review-banner" style="border-color:#2EA04355;background:#0E2A16">
+          <div style="display:flex;align-items:center;gap:8px;flex:1;min-width:0">
+            <div style="width:8px;height:8px;border-radius:50%;background:#2EA043;flex-shrink:0"></div>
+            <span style="font-size:12px;font-weight:600;color:#3FB950">MOBILIZATION COMPLETE &mdash; READY TO SEND TO DESIGN &amp; INSTALL</span>
+          </div>
+          <button class="btn-primary" onclick="openMobilizationDialog(${p.id})" style="background:#238636;padding:6px 12px;font-size:12px;min-height:32px;flex-shrink:0">Review &amp; Send &rarr;</button>
+        </div>
+      ` : `
         <div class="project-page-review-banner">
           <div style="display:flex;align-items:center;gap:8px;flex:1;min-width:0">
             <div style="width:8px;height:8px;border-radius:50%;background:#DA3633;animation:pulse 1.5s infinite;flex-shrink:0"></div>
@@ -8703,7 +8711,7 @@ function renderProjectPage(c) {
           </div>
           <button class="btn-primary" onclick="openMobilizationDialog(${p.id})" style="background:#238636;padding:6px 12px;font-size:12px;min-height:32px;flex-shrink:0">Open Checklist &rarr;</button>
         </div>
-      ` : ''}
+      `) : ''}
       <div class="project-page-body-wrap">
         <aside class="prail">${railHTML}</aside>
         <div class="project-page-body" id="project-page-body"></div>
