@@ -19751,11 +19751,13 @@ function _renderAllocationRow(a) {
   let towedHTML = '';
   if (asset && asset.type === 'trailer') {
     const vehicleAllocs = getAllocationsForProject(a.projectId).filter(x => { const ax = getAssetById(x.assetId); return ax && ax.type === 'vehicle'; });
-    const opts = ['<option value="">Own / personal truck (separate drive task)</option>']
-      .concat(vehicleAllocs.map(v => { const va = getAssetById(v.assetId); return `<option value="${v.id}" ${String(a.towedBy) === String(v.id) ? 'selected' : ''}>Towed by ${esc(va ? va.name : 'vehicle')}</option>`; }));
+    const tow = _trailerTow(a);
+    const selVal = tow.mode === 'vehicle' ? String(tow.vehicleAllocId) : 'personal';
+    const opts = vehicleAllocs.map(v => { const va = getAssetById(v.assetId); return `<option value="${v.id}" ${selVal === String(v.id) ? 'selected' : ''}>Towed by ${esc(va ? va.name : 'vehicle')}</option>`; })
+      .concat([`<option value="personal" ${selVal === 'personal' ? 'selected' : ''}>Own / personal truck (separate drive task)</option>`]);
     towedHTML = `
       <label style="display:flex;flex-direction:column;gap:2px;font-size:10px;color:#8B949E;margin-top:8px">Towing
-        <select class="form-input" style="font-size:12px;padding:4px 6px" onchange="updateAllocation('${a.id}',{towedBy:this.value||null})">${opts.join('')}</select>
+        <select class="form-input" style="font-size:12px;padding:4px 6px" onchange="updateAllocation('${a.id}',{towedBy:this.value})">${opts.join('')}</select>
       </label>`;
   }
   return `
@@ -19889,23 +19891,35 @@ function toggleLogisticsPacked(pid, allocId) {
   r.picklist[allocId] = cur.packed ? { packed: false } : { packed: true, packedAt: new Date().toISOString(), packedBy: _whoNow() };
   _persistLogistics(); renderCurrentPage();
 }
-// Rigs that need a driver: each allocated vehicle (with any trailers it tows noted),
-// plus each allocated trailer NOT linked to a truck (personal-truck tow).
+// Resolve how a trailer travels. Default (unset towedBy) = towed by the first
+// allocated truck; 'personal' is an explicit, rare choice; an allocId pins a truck.
+function _trailerTow(a) {
+  const vehicles = getAllocationsForProject(a.projectId).filter(x => { const ax = getAssetById(x.assetId); return ax && ax.type === 'vehicle'; });
+  if (a.towedBy === 'personal') return { mode: 'personal' };
+  if (a.towedBy && vehicles.some(v => String(v.id) === String(a.towedBy))) return { mode: 'vehicle', vehicleAllocId: a.towedBy };
+  if (vehicles.length) return { mode: 'vehicle', vehicleAllocId: vehicles[0].id };
+  return { mode: 'personal' };
+}
+// Rigs needing a driver: each allocated truck (noting trailers it tows) + each
+// trailer set to personal-truck tow.
 function getLogisticsRigs(pid) {
   const allocs = getAllocationsForProject(pid);
+  const vehicles = allocs.filter(a => { const x = getAssetById(a.assetId); return x && x.type === 'vehicle'; });
+  const trailers = allocs.filter(a => { const x = getAssetById(a.assetId); return x && x.type === 'trailer'; });
   const rigs = [];
-  allocs.forEach(a => {
-    const asset = getAssetById(a.assetId);
-    if (!asset) return;
-    if (asset.type === 'vehicle') {
-      const towed = allocs.filter(t => { const x = getAssetById(t.assetId); return x && x.type === 'trailer' && String(t.towedBy) === String(a.id); })
-        .map(t => (getAssetById(t.assetId) || {}).name).filter(Boolean);
-      rigs.push({ id: a.id, label: asset.name + (towed.length ? ' + ' + towed.join(' + ') : '') });
-    } else if (asset.type === 'trailer' && !a.towedBy) {
-      rigs.push({ id: a.id, label: asset.name + ' (personal truck)' });
-    }
+  vehicles.forEach(v => {
+    const vname = (getAssetById(v.assetId) || {}).name || 'Vehicle';
+    const towed = trailers.filter(t => { const tow = _trailerTow(t); return tow.mode === 'vehicle' && String(tow.vehicleAllocId) === String(v.id); })
+      .map(t => (getAssetById(t.assetId) || {}).name).filter(Boolean);
+    rigs.push({ id: v.id, label: vname + (towed.length ? ' + ' + towed.join(' + ') : '') });
   });
+  trailers.forEach(t => { if (_trailerTow(t).mode === 'personal') { const tn = (getAssetById(t.assetId) || {}).name || 'Trailer'; rigs.push({ id: t.id, label: tn + ' (personal truck)' }); } });
   return rigs;
+}
+function _toggleLogiPack(pid) {
+  if (!window._logiPackOpen) window._logiPackOpen = {};
+  window._logiPackOpen[pid] = !window._logiPackOpen[pid];
+  renderCurrentPage();
 }
 function _logiAssigneeChips(ids) {
   if (!ids || !ids.length) return '';
@@ -19960,32 +19974,36 @@ function renderLogisticsCard(p) {
     const started = !!it.started, done = !!it.done;
     const hasPeople = it.assigneeIds && it.assigneeIds.length;
     return `
-      <div style="display:flex;align-items:flex-start;gap:8px;padding:8px;border:1px solid #1C2333;border-radius:6px;margin-bottom:6px;${done ? 'opacity:.7' : ''}">
-        <span onclick="toggleLogisticsDone(${p.id},'${key}')" title="${done ? 'Mark not done' : 'Mark done'}" style="flex-shrink:0;width:18px;height:18px;border-radius:4px;border:1.5px solid ${done ? '#2EA043' : '#30363D'};background:${done ? '#238636' : 'transparent'};color:#fff;display:flex;align-items:center;justify-content:center;font-size:12px;cursor:pointer;margin-top:1px">${done ? '✓' : ''}</span>
+      <div style="display:flex;align-items:center;gap:8px;padding:5px 7px;border:1px solid #1C2333;border-radius:6px;margin-bottom:4px;${done ? 'opacity:.65' : ''}">
+        <span onclick="toggleLogisticsDone(${p.id},'${key}')" title="${done ? 'Mark not done' : 'Mark done'}" style="flex-shrink:0;width:16px;height:16px;border-radius:4px;border:1.5px solid ${done ? '#2EA043' : '#30363D'};background:${done ? '#238636' : 'transparent'};color:#fff;display:flex;align-items:center;justify-content:center;font-size:11px;cursor:pointer">${done ? '✓' : ''}</span>
         <div style="flex:1;min-width:0">
-          <div style="font-size:13px;font-weight:600;color:#E6EDF3">${esc(title)}</div>
-          <div style="font-size:11px;color:#8B949E;margin-top:1px">${dateStr ? esc(fmtDateLocal(dateStr)) : 'No date'} · <span style="cursor:pointer;color:#58A6FF" onclick="openLogisticsAssignPicker(${p.id},'${key}')">${hasPeople ? 'Reassign' : 'Assign'}</span></div>
-          ${hasPeople ? `<div style="margin-top:4px">${_logiAssigneeChips(it.assigneeIds)}</div>` : ''}
+          <div style="font-size:13px;font-weight:600;color:#E6EDF3;line-height:1.2">${esc(title)}</div>
+          <div style="font-size:10px;color:#8B949E;margin-top:1px">${dateStr ? esc(fmtDateLocal(dateStr)) : 'No date'} · <span style="cursor:pointer;color:#58A6FF" onclick="openLogisticsAssignPicker(${p.id},'${key}')">${hasPeople ? _logiAssigneeChips(it.assigneeIds) : 'Assign'}</span></div>
           ${_subStatusMetaHTML(it)}
           ${extra || ''}
         </div>
-        <button onclick="toggleLogisticsStarted(${p.id},'${key}')" title="${started ? 'Mark not started' : 'Mark started'}" style="flex-shrink:0;align-self:flex-start;font-size:10px;padding:3px 8px;border-radius:999px;border:1px solid ${started ? '#2EA043' : '#30363D'};background:${started ? '#0E2A16' : 'transparent'};color:${started ? '#3FB950' : '#8B949E'};cursor:pointer;white-space:nowrap">${started ? '● Started' : '▶ Start'}</button>
+        <button onclick="toggleLogisticsStarted(${p.id},'${key}')" title="${started ? 'Mark not started' : 'Mark started'}" style="flex-shrink:0;font-size:10px;padding:2px 8px;border-radius:999px;border:1px solid ${started ? '#2EA043' : '#30363D'};background:${started ? '#0E2A16' : 'transparent'};color:${started ? '#3FB950' : '#8B949E'};cursor:pointer;white-space:nowrap">${started ? '● Started' : '▶ Start'}</button>
       </div>`;
   };
 
-  const picklistHTML = cases.length ? `
-    <div style="margin-top:8px;padding-left:2px">
-      <div style="font-size:10px;font-weight:600;color:#8B949E;text-transform:uppercase;letter-spacing:.05em;margin-bottom:4px">Pack list</div>
-      ${cases.map(c => {
+  const packTotal = cases.length;
+  const packedCount = cases.filter(c => { const pk = (rec && rec.picklist && rec.picklist[c.id]) || {}; return pk.packed; }).length;
+  const packOpen = !!(window._logiPackOpen && window._logiPackOpen[p.id]);
+  const picklistHTML = packTotal ? `
+    <div style="margin-top:5px">
+      <div onclick="event.stopPropagation();_toggleLogiPack(${p.id})" style="display:inline-flex;align-items:center;gap:5px;cursor:pointer;font-size:11px;font-weight:600;color:${packedCount === packTotal ? '#3FB950' : '#8B949E'};user-select:none">
+        <span style="display:inline-block;transform:rotate(${packOpen ? 90 : 0}deg);transition:transform .1s">▸</span>Pack list · ${packedCount}/${packTotal} packed
+      </div>
+      ${packOpen ? `<div style="margin-top:3px;padding-left:4px">${cases.map(c => {
         const asset = getAssetById(c.assetId);
         const pk = (rec && rec.picklist && rec.picklist[c.id]) ? rec.picklist[c.id] : {};
-        return `<label style="display:flex;align-items:center;gap:8px;font-size:12px;color:${pk.packed ? '#6E7681' : '#C9D1D9'};padding:3px 0;cursor:pointer">
-          <input type="checkbox" ${pk.packed ? 'checked' : ''} onchange="toggleLogisticsPacked(${p.id},'${c.id}')">
+        return `<label style="display:flex;align-items:center;gap:8px;font-size:12px;color:${pk.packed ? '#6E7681' : '#C9D1D9'};padding:2px 0;cursor:pointer">
+          <input type="checkbox" ${pk.packed ? 'checked' : ''} onchange="event.stopPropagation();toggleLogisticsPacked(${p.id},'${c.id}')">
           <span style="${pk.packed ? 'text-decoration:line-through' : ''}">${esc(asset ? asset.name : 'Item')}</span>
         </label>`;
-      }).join('')}
+      }).join('')}</div>` : ''}
     </div>`
-    : '<div style="margin-top:8px;font-size:11px;color:#6E7681">No Cases &amp; Gear allocated yet — add them on the Assets tab to build the pack list.</div>';
+    : '<div style="margin-top:5px;font-size:11px;color:#6E7681">No Cases &amp; Gear allocated — add them on the Assets tab.</div>';
 
   const driveOut = rigs.map(r => taskRow('drive_out_' + r.id, 'Drive to job — ' + r.label, dates.load)).join('');
   const driveBack = rigs.map(r => taskRow('drive_back_' + r.id, 'Drive back — ' + r.label, dates.deprep)).join('');
