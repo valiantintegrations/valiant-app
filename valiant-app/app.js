@@ -755,6 +755,8 @@ const SCOPE_TAGS = [
   'LED Wall',
   'Key Lights',
   'House Lights',
+  'House Lighting – 110V',
+  'House Lighting – Low Volt',
   'Broadcast Video System',
   'Streaming Audio System',
   'Camera',
@@ -964,6 +966,52 @@ const TEMPLATES = {
     }
   },
   install: {
+    house_lighting_lowvolt: {
+      name: 'House Lighting – Low Volt Install',
+      items: [
+        { title: 'If there are old fixtures, have the electricians remove them', note: 'Locate the dumpster and show the electricians where to dump.' },
+        'Locate rack location for power distro',
+        'Lay out the first light of each zone on the floor (marks the start of each zone)',
+        'Pull cable from the first light of each zone to the lighting rack',
+        'Mount the lighting rack on the wall',
+        'Dress zone cables into the lighting rack',
+        'Mount the first lights in the zones',
+        'Test the first light in each zone',
+        { title: 'Mount remaining fixtures and daisy-chain the zones together per the drawing spec', note: 'Use Wago connectors to connect the house-light zone cables to the fixtures. Use 3-way Wagos on all lights.' },
+        'Full test of all colors on all zones to verify all Wagos are connected properly',
+        'Test control from the DMX console or computer — confirm it is patched and controlling the lights properly. If there is a 10-scene or scene controller, build presets into LightKey (or the computer) for simple preset saving',
+        { title: 'Finishing — follow all cable paths, dress all cables extremely nice, and confirm all lights are addressed', note: 'Take a photo of the node / distro rack the low-voltage cable comes from.', photo: true }
+      ]
+    },
+    house_lighting_110v: {
+      name: 'House Lighting – 110V Install',
+      items: [
+        { title: 'If fixtures need to be removed, have the electrician remove them', note: 'Locate the dumpster and show the electricians where to dump.' },
+        'Verify all electrical scope is finished (e.g. outlets for the lights). If needed, mark outlet locations so the electrician places them correctly',
+        'Lay out the light locations on the floor with gaff tape and crosshairs so a laser hits the exact spot',
+        'Locate the node the DMX signal comes from and pull cable from the node to the house lights (refer to the drawings for how many cables run from the distros to the house lights)',
+        'Verify all DMX addresses are preset',
+        'Rig the house-light fixtures, make cable whips up to the outlets, and install them',
+        'Make sure every light is installed with a safety',
+        'Daisy-chain the DMX from fixture to fixture per the drawing set. Label wires as you go',
+        'After the first couple of fixtures are installed, do a functional test to confirm DMX and lights work properly',
+        { title: 'Dress all cables extremely nice', note: 'Take a photo of the dressed cabling on three fixtures.', photo: true },
+        'Test control from the DMX console or computer — confirm it is patched and controlling the lights properly. If there is a 10-scene or scene controller, build presets into LightKey (or the computer) for simple preset saving',
+        { title: 'Finishing — follow all cable paths, dress all cables extremely nice, and confirm all lights are addressed', note: 'Take a photo of the node / distro rack the signal comes from.', photo: true }
+      ]
+    },
+    projector_install: {
+      name: 'Projector Install',
+      items: [
+        'Locate the projector mount location by checking the distance from screen to projector per the drawing set. If the screen is not mounted yet, mount the screen first, then measure from the front of the screen to the back of the projector and confirm it is in spec with the drawings',
+        'Mount the projector mount, then drop it so the projector lines up with the top of the screen (do not center it on the screen height)',
+        'Check the signal cable type from the drawing set (network or SDI) and run cable from the projector back to the signal source per spec',
+        'Make a power whip and plug directly into the closest outlet. If an electrician needs to run this outlet, give them a marked point so they know where to drop it',
+        { title: 'Dress all cables to the projector — power, data, and control', note: 'Take a photo to complete this task.', photo: true },
+        'Once powered on, zoom, focus, and corner-pin the projector to fit the screen properly',
+        'Test control of the projector (network or remote) and verify it works from the ground / area of control'
+      ]
+    },
     led_wall: {
       name: 'LED Wall Install',
       items: [
@@ -1729,7 +1777,7 @@ function toggleInstallTaskDone(taskId) {
   save('vi_install_tasks', state.installTasks);
 }
 
-function addInstallSubtask(taskId, { title, date, assigneeIds, notes }) {
+function addInstallSubtask(taskId, { title, date, assigneeIds, notes, photoRequired }) {
   const t = getInstallTaskById(taskId);
   if (!t) return;
   if (!t.subtasks) t.subtasks = [];
@@ -1740,6 +1788,7 @@ function addInstallSubtask(taskId, { title, date, assigneeIds, notes }) {
     date: date || null,
     assigneeIds: ids,
     notes: notes || '',
+    photoRequired: !!photoRequired,
     done: false
   });
   save('vi_install_tasks', state.installTasks);
@@ -2134,13 +2183,16 @@ const SCOPE_TAG_TO_SYSTEM = {
   'LED Wall': 'led_wall',
   'Key Lights': 'lighting',
   'House Lights': 'lighting',
+  'House Lighting – 110V': 'house_lighting_110v',
+  'House Lighting – Low Volt': 'house_lighting_lowvolt',
+  'Projection': 'projector_install',
   'Broadcast Video System': 'streaming',
   'Streaming Audio System': 'streaming',
   'Camera': 'camera',
   'Control (Q-sys)': 'control',
   'Control (AHM)': 'control',
   'Control (Atlona)': 'control'
-  // tags without a default template (Distributed Audio, TVs, Projection,
+  // tags without a default template (Distributed Audio, TVs,
   // Conferencing, Mics, Acoustic Treatment, Drape, Network) just don't seed —
   // user can add a custom template for them through the UI.
 };
@@ -2155,11 +2207,44 @@ function _migrateInstallTaskTemplates() {
     seeded[sysKey] = {
       systemKey: sysKey,
       label: t.name || sysKey,
-      subtasks: (t.items || []).map(item => ({ title: item, notes: '' }))
+      subtasks: (t.items || []).map(_normalizeTemplateItem)
     };
   });
   state.installTaskTemplates = seeded;
   save('vi_install_task_templates', seeded);
+}
+
+// Template items may be a plain string or { title, note, photo } — normalize to
+// the stored subtask shape { title, notes, photoRequired }.
+function _normalizeTemplateItem(item) {
+  if (typeof item === 'string') return { title: item, notes: '', photoRequired: false };
+  return {
+    title: item.title || '',
+    notes: item.note || item.notes || '',
+    photoRequired: !!(item.photo || item.photoRequired)
+  };
+}
+
+// Top-up: install templates introduced after a device first seeded its editable
+// map (the first-time migrate above runs only once). Add-if-missing for these
+// specific keys only; a one-time flag prevents re-adding after a user deletes one.
+function _ensureNewInstallTemplates() {
+  try { if (localStorage.getItem('vi_install_tpl_v2') === '1') return; } catch (e) {}
+  if (!state.installTaskTemplates) state.installTaskTemplates = {};
+  const src = (typeof TEMPLATES !== 'undefined' && TEMPLATES && TEMPLATES.install) ? TEMPLATES.install : {};
+  const NEW_KEYS = ['house_lighting_110v', 'house_lighting_lowvolt', 'projector_install'];
+  let added = 0;
+  NEW_KEYS.forEach(k => {
+    if (state.installTaskTemplates[k] || !src[k]) return;
+    state.installTaskTemplates[k] = {
+      systemKey: k,
+      label: src[k].name || k,
+      subtasks: (src[k].items || []).map(_normalizeTemplateItem)
+    };
+    added++;
+  });
+  try { localStorage.setItem('vi_install_tpl_v2', '1'); } catch (e) {}
+  if (added) _syncKeyNow('vi_install_task_templates', state.installTaskTemplates);
 }
 
 function getInstallTaskTemplate(systemKey) {
@@ -2175,7 +2260,7 @@ function upsertInstallTaskTemplate(systemKey, { label, subtasks }) {
   state.installTaskTemplates[systemKey] = {
     systemKey,
     label: label || systemKey,
-    subtasks: (subtasks || []).map(s => ({ title: s.title || '', notes: s.notes || '' }))
+    subtasks: (subtasks || []).map(s => ({ title: s.title || '', notes: s.notes || '', photoRequired: !!s.photoRequired }))
   };
   save('vi_install_task_templates', state.installTaskTemplates);
 }
@@ -2308,7 +2393,7 @@ function seedTasksFromProjectScope(projectId, { overwrite } = {}) {
     });
     // Add each template subtask with no date / no assignees — user fills in
     (tpl.subtasks || []).forEach(s => addInstallSubtask(master.id, {
-      title: s.title, notes: s.notes || '', date: null, assigneeIds: []
+      title: s.title, notes: s.notes || '', date: null, assigneeIds: [], photoRequired: !!s.photoRequired
     }));
     seededCount++;
   });
@@ -19624,7 +19709,7 @@ function openTaskTemplateDialog(systemKey) {
   overlay.onclick = (e) => { if (e.target === overlay) overlay.remove(); };
   // Working copy held on the dialog for additions/removals before save
   window._tasktplEdit = existing
-    ? { systemKey: existing.systemKey, label: existing.label, subtasks: existing.subtasks.map(s => ({ title: s.title, notes: s.notes || '' })) }
+    ? { systemKey: existing.systemKey, label: existing.label, subtasks: existing.subtasks.map(s => ({ title: s.title, notes: s.notes || '', photoRequired: !!s.photoRequired })) }
     : { systemKey: '', label: '', subtasks: [] };
   overlay.innerHTML = _renderTaskTemplateDialogContent();
   document.body.appendChild(overlay);
@@ -19653,14 +19738,22 @@ function _renderTaskTemplateDialogContent() {
           <label class="form-label">Default subtasks (created when seeding)</label>
           <div style="display:flex;flex-direction:column;gap:6px">
             ${w.subtasks.map((s, i) => `
-              <div style="display:flex;align-items:center;gap:8px;padding:6px 8px;background:#0D1117;border:1px solid #1C2333;border-radius:5px">
-                <span style="font-size:11px;color:#6E7681;width:18px;text-align:right">${i + 1}.</span>
-                <input class="form-input tpl-sub-title" type="text" value="${esc(s.title)}" style="flex:1;font-size:12px;padding:4px 6px" oninput="window._tasktplEdit.subtasks[${i}].title=this.value">
-                <span style="cursor:pointer;color:#6E7681;font-size:16px;padding:0 4px" onclick="window._tasktplEdit.subtasks.splice(${i},1);document.getElementById('tasktpl-dialog').querySelector('.modal-container').outerHTML=_renderTaskTemplateDialogContent()">×</span>
+              <div style="display:flex;flex-direction:column;gap:4px;padding:6px 8px;background:#0D1117;border:1px solid #1C2333;border-radius:5px">
+                <div style="display:flex;align-items:center;gap:8px">
+                  <span style="font-size:11px;color:#6E7681;width:18px;text-align:right">${i + 1}.</span>
+                  <input class="form-input tpl-sub-title" type="text" value="${esc(s.title)}" style="flex:1;font-size:12px;padding:4px 6px" oninput="window._tasktplEdit.subtasks[${i}].title=this.value">
+                  <span style="cursor:pointer;color:#6E7681;font-size:16px;padding:0 4px" onclick="window._tasktplEdit.subtasks.splice(${i},1);document.getElementById('tasktpl-dialog').querySelector('.modal-container').outerHTML=_renderTaskTemplateDialogContent()">×</span>
+                </div>
+                <div style="display:flex;align-items:center;gap:8px;padding-left:26px">
+                  <input class="form-input" type="text" value="${esc(s.notes || '')}" placeholder="Note (optional)" style="flex:1;font-size:11px;padding:3px 6px;color:#C9D1D9" oninput="window._tasktplEdit.subtasks[${i}].notes=this.value">
+                  <label style="display:flex;align-items:center;gap:4px;font-size:11px;color:#8B949E;white-space:nowrap;cursor:pointer">
+                    <input type="checkbox" ${s.photoRequired ? 'checked' : ''} onchange="window._tasktplEdit.subtasks[${i}].photoRequired=this.checked"> 📷 photo
+                  </label>
+                </div>
               </div>
             `).join('')}
           </div>
-          <button class="btn btn-sm" style="margin-top:8px;font-size:11px;padding:5px 10px" onclick="window._tasktplEdit.subtasks.push({title:'',notes:''});document.getElementById('tasktpl-dialog').querySelector('.modal-container').outerHTML=_renderTaskTemplateDialogContent()">+ Add subtask</button>
+          <button class="btn btn-sm" style="margin-top:8px;font-size:11px;padding:5px 10px" onclick="window._tasktplEdit.subtasks.push({title:'',notes:'',photoRequired:false});document.getElementById('tasktpl-dialog').querySelector('.modal-container').outerHTML=_renderTaskTemplateDialogContent()">+ Add subtask</button>
         </div>
         <div style="display:flex;gap:8px;justify-content:space-between;align-items:center;margin-top:4px">
           <div>
@@ -21001,6 +21094,7 @@ async function init() {
   _migrateRoles();
   _migrateInstallTaskShape();
   _migrateInstallTaskTemplates();
+  _ensureNewInstallTemplates();
   _migrateInstallSubtasksToTasks();
   _migrateDesignTaskTemplates();
   _migrateDesignSubtasksToTasks();
