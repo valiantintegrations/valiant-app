@@ -445,6 +445,7 @@ const state = {
   vehicles: JSON.parse(localStorage.getItem('vi_vehicles') || '[]'),
   tools: JSON.parse(localStorage.getItem('vi_tools') || '[]'),
   assets: JSON.parse(localStorage.getItem('vi_assets') || '[]'),
+  assetAllocations: JSON.parse(localStorage.getItem('vi_asset_allocations') || '[]'),
   bundles: JSON.parse(localStorage.getItem('vi_bundles') || 'null') || JSON.parse(JSON.stringify(DEFAULT_BUNDLES)),
   userPermissions: JSON.parse(localStorage.getItem('vi_user_perms') || '{}'),
   dashboardMode: localStorage.getItem('vi_dashboard_mode') || 'mine',
@@ -3539,7 +3540,7 @@ function openProject(id, tabOrAnchor, anchor) {
   }
   state.currentProject = p;
   // If second arg looks like a known tab, use it as the tab. Otherwise treat as anchor on default tab.
-  const KNOWN_TABS = ['overview','progress','details','design','install','location','files','notes'];
+  const KNOWN_TABS = ['overview','progress','details','design','install','assets','location','files','notes'];
   let tab = getDefaultProjectTab();
   let anchorKey = null;
   if (tabOrAnchor && KNOWN_TABS.includes(tabOrAnchor)) {
@@ -8727,6 +8728,7 @@ function renderProjectPage(c) {
     { key: 'details',  label: 'Details'  },
     { key: 'design',   label: 'Design'   },
     { key: 'install',  label: 'Install'  },
+    { key: 'assets',   label: 'Assets'   },
     { key: 'location', label: 'Location' },
     { key: 'files',    label: 'Files'    },
     { key: 'notes',    label: 'Notes'    }
@@ -8825,6 +8827,9 @@ function renderProjectTabContent() {
   } else if (tab === 'install') {
     body.innerHTML = '';
     renderChecklistTab(body, p, 'install');
+  } else if (tab === 'assets') {
+    body.innerHTML = '';
+    renderAssetAllocationTab(body, p);
   } else if (tab === 'location') {
     body.innerHTML = '';
     renderLocationTab(body, p);
@@ -19555,6 +19560,174 @@ function addAssetFromSettings() {
   const type = document.getElementById('asset-new-type')?.value || 'vehicle';
   const name = document.getElementById('asset-new-name')?.value || '';
   addAsset({ type, name });
+}
+
+// ── Asset allocations (per-project) — Drop 2 ──
+function _genId(prefix) {
+  const rnd = (typeof crypto !== 'undefined' && crypto.randomUUID)
+    ? crypto.randomUUID().replace(/-/g, '').slice(0, 12)
+    : (Math.random().toString(36).slice(2) + Date.now().toString(36));
+  return (prefix || 'id_') + rnd;
+}
+function _addDaysYmd(ymd, n) {
+  const d = _parseLocalYmd(ymd);
+  if (!d) return ymd || null;
+  return _ymd(_addDays(d, n));
+}
+function getAllocationsForProject(pid) { return (state.assetAllocations || []).filter(a => String(a.projectId) === String(pid)); }
+function getAllocationsForAsset(assetId) { return (state.assetAllocations || []).filter(a => String(a.assetId) === String(assetId)); }
+// Committed span = the full time the asset is tied up (prep day → dump day).
+function _allocCommitted(a) { return { start: a.prep || a.start, end: a.deprep || a.end || a.start }; }
+function _spansOverlap(s1, e1, s2, e2) { if (!s1 || !e1 || !s2 || !e2) return false; return s1 <= e2 && s2 <= e1; } // ISO YMD compares lexically
+// Other allocations of this asset whose committed span overlaps [start,end].
+function assetConflicts(assetId, start, end, excludeAllocId) {
+  if (!start || !end) return [];
+  return getAllocationsForAsset(assetId).filter(a => {
+    if (excludeAllocId && String(a.id) === String(excludeAllocId)) return false;
+    const c = _allocCommitted(a);
+    return _spansOverlap(start, end, c.start, c.end);
+  });
+}
+function _defaultAllocWindow(p) {
+  const win = getInstallWindow(p);
+  const start = win && win.start ? win.start : null;
+  const end = win && win.end ? win.end : start;
+  return { start, end, prep: start ? _addDaysYmd(start, -1) : null, deprep: end ? _addDaysYmd(end, 1) : null };
+}
+function _persistAllocations() {
+  return _syncKeyNow('vi_asset_allocations', state.assetAllocations).then(r => {
+    if (!r.ok) showToast('Allocation didn\u2019t save: ' + r.err + ' \u2014 try again', 'error');
+    return r;
+  });
+}
+function addAllocation({ projectId, assetId, start, end, prep, deprep }) {
+  if (!Array.isArray(state.assetAllocations)) state.assetAllocations = [];
+  const id = _genId('alloc_');
+  state.assetAllocations.push({ id, projectId, assetId, start: start || null, end: end || null, prep: prep || null, deprep: deprep || null, notes: '' });
+  _persistAllocations();
+  return id;
+}
+function updateAllocation(id, patch) {
+  const a = (state.assetAllocations || []).find(x => String(x.id) === String(id));
+  if (!a) return;
+  Object.assign(a, patch);
+  _persistAllocations();
+  renderCurrentPage();
+}
+function removeAllocation(id) {
+  state.assetAllocations = (state.assetAllocations || []).filter(x => String(x.id) !== String(id));
+  _persistAllocations();
+  renderCurrentPage();
+}
+
+function renderAssetAllocationTab(container, p) {
+  const allocs = getAllocationsForProject(p.id);
+  const win = getInstallWindow(p);
+  const winLabel = win && win.start ? `${fmtDateLocal(win.start)} \u2013 ${fmtDateLocal(win.end || win.start)}` : 'No install window set';
+  container.innerHTML = `
+    <div class="dashboard-card" style="margin-bottom:14px">
+      <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:8px">
+        <div class="dashboard-card-title" style="margin-bottom:0">Asset Allocation</div>
+        <button class="btn btn-sm" onclick="openAssetPicker(${p.id})">+ Allocate asset</button>
+      </div>
+      <div style="font-size:12px;color:#8B949E">Install window: <span style="color:#C9D1D9">${winLabel}</span>. New allocations default to the window with a prep day before and a dump day after \u2014 adjust each below.</div>
+    </div>
+    ${allocs.length ? allocs.map(_renderAllocationRow).join('') : `
+      <div class="dashboard-card" style="color:#8B949E;font-size:13px">No assets allocated yet. Tap <strong>+ Allocate asset</strong> to pick vehicles, trailers or lifts for this job.</div>`}
+  `;
+}
+function _renderAllocationRow(a) {
+  const asset = getAssetById(a.assetId);
+  const name = asset ? asset.name : 'Unknown asset';
+  const typeLabel = asset ? _assetTypeLabel(asset.type) : '';
+  const committed = _allocCommitted(a);
+  const conflicts = assetConflicts(a.assetId, committed.start, committed.end, a.id);
+  const conflictHTML = conflicts.length ? `
+    <div style="display:flex;align-items:flex-start;gap:6px;margin-top:8px;padding:6px 8px;background:#2A1A0E;border:1px solid #5A3A1A;border-radius:5px;font-size:11px;color:#F0883E">
+      \u26A0 Double-booked: also on ${conflicts.map(c => { const cp = state.projects.find(x => String(x.id) === String(c.projectId)); const cc = _allocCommitted(c); return `${cp ? esc(cp.name) : 'another job'} (${fmtDateLocal(cc.start)}\u2013${fmtDateLocal(cc.end)})`; }).join(', ')}
+    </div>` : '';
+  const dateField = (label, field, val) => `
+    <label style="display:flex;flex-direction:column;gap:2px;font-size:10px;color:#8B949E">${label}
+      <input type="date" value="${val || ''}" class="form-input" style="font-size:12px;padding:4px 6px" onchange="updateAllocation('${a.id}',{${field}:this.value||null})">
+    </label>`;
+  return `
+    <div class="dashboard-card" style="margin-bottom:10px">
+      <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px">
+        <span style="font-size:10px;font-weight:600;color:#6E7681;text-transform:uppercase;letter-spacing:.05em">${esc(typeLabel)}</span>
+        <span style="flex:1;font-size:14px;font-weight:600;color:#E6EDF3">${esc(name)}</span>
+        <span style="cursor:pointer;color:#6E7681;font-size:16px;padding:0 4px" title="Remove" onclick="removeAllocation('${a.id}')">\u00D7</span>
+      </div>
+      <div style="display:grid;grid-template-columns:repeat(2,1fr);gap:8px">
+        ${dateField('Prep day', 'prep', a.prep)}
+        ${dateField('On-site start', 'start', a.start)}
+        ${dateField('On-site end', 'end', a.end)}
+        ${dateField('Dump day', 'deprep', a.deprep)}
+      </div>
+      ${conflictHTML}
+    </div>`;
+}
+function openAssetPicker(projectId) {
+  const p = state.projects.find(x => String(x.id) === String(projectId));
+  if (!p) return;
+  document.getElementById('asset-picker')?.remove();
+  const overlay = document.createElement('div');
+  overlay.id = 'asset-picker';
+  overlay.className = 'modal-overlay';
+  overlay.onclick = (e) => { if (e.target === overlay) overlay.remove(); };
+  overlay.innerHTML = _renderAssetPickerContent(projectId);
+  document.body.appendChild(overlay);
+}
+function _renderAssetPickerContent(projectId) {
+  const p = state.projects.find(x => String(x.id) === String(projectId));
+  const win = _defaultAllocWindow(p);
+  const cand = { start: win.prep || win.start, end: win.deprep || win.end };
+  const haveWindow = !!(cand.start && cand.end);
+  const already = new Set(getAllocationsForProject(projectId).map(a => String(a.assetId)));
+  const groups = ASSET_TYPES.map(t => {
+    const items = getAssetsByType(t.key);
+    if (!items.length) return '';
+    return `
+      <div style="margin-bottom:12px">
+        <div style="font-size:11px;font-weight:600;color:#8B949E;margin-bottom:6px">${t.label}</div>
+        ${items.map(a => {
+          const isAllocated = already.has(String(a.id));
+          const conflicts = (haveWindow && !isAllocated) ? assetConflicts(a.id, cand.start, cand.end) : [];
+          const busy = conflicts.length > 0;
+          let badge;
+          if (isAllocated) badge = `<span style="font-size:10px;color:#3FB950">\u2713 Allocated</span>`;
+          else if (!haveWindow) badge = `<span style="font-size:10px;color:#6E7681">No window set</span>`;
+          else if (busy) { const c = conflicts[0]; const cp = state.projects.find(x => String(x.id) === String(c.projectId)); const cc = _allocCommitted(c); badge = `<span style="font-size:10px;color:#F0883E">\u26A0 ${cp ? esc(cp.name) : 'booked'} ${fmtDateLocal(cc.start)}\u2013${fmtDateLocal(cc.end)}</span>`; }
+          else badge = `<span style="font-size:10px;color:#3FB950">Available</span>`;
+          return `
+            <div style="display:flex;align-items:center;gap:8px;padding:8px;background:#0D1117;border:1px solid ${busy ? '#5A3A1A' : '#1C2333'};border-radius:5px;margin-bottom:4px;${isAllocated ? 'opacity:.55' : 'cursor:pointer'}" ${isAllocated ? '' : `onclick="_pickAsset('${projectId}','${a.id}',${busy})"`}>
+              <span style="flex:1;font-size:13px;color:#E6EDF3">${esc(a.name)}</span>
+              ${badge}
+            </div>`;
+        }).join('')}
+      </div>`;
+  }).join('');
+  return `
+    <div class="modal-container" style="max-width:480px;max-height:88vh;display:flex;flex-direction:column">
+      <div class="modal-header">
+        <div class="modal-title">Allocate assets</div>
+        <button class="modal-close" onclick="document.getElementById('asset-picker')?.remove()">&times;</button>
+      </div>
+      <div class="modal-body" style="overflow-y:auto">
+        <div style="font-size:11px;color:#8B949E;margin-bottom:12px">Availability checked for ${haveWindow ? `${fmtDateLocal(cand.start)} \u2013 ${fmtDateLocal(cand.end)}` : 'this job'} (prep through dump). Tap an asset to allocate; adjust dates after.</div>
+        ${groups || '<div style="color:#8B949E;font-size:13px">No assets yet \u2014 add them in Settings.</div>'}
+      </div>
+    </div>`;
+}
+function _pickAsset(projectId, assetId, busy) {
+  const p = state.projects.find(x => String(x.id) === String(projectId));
+  if (!p) return;
+  const asset = getAssetById(assetId);
+  if (busy && !confirm(`${asset ? asset.name : 'This asset'} is already allocated to another job on overlapping dates. Allocate anyway?`)) return;
+  const win = _defaultAllocWindow(p);
+  addAllocation({ projectId: p.id, assetId, start: win.start, end: win.end, prep: win.prep, deprep: win.deprep });
+  const overlay = document.getElementById('asset-picker');
+  if (overlay) overlay.querySelector('.modal-container').outerHTML = _renderAssetPickerContent(projectId);
+  renderCurrentPage();
 }
 
 function renderSettings(c) {
