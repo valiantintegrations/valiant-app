@@ -9058,6 +9058,14 @@ function _psSetDay(pid, ymd, field, value) {
   if (field === 'longDay') s.days[ymd][field] = !s.days[ymd][field]; else s.days[ymd][field] = value;
   _psSave(pid, s); renderProjectTabContent();
 }
+// Override mode is an explicit, opt-in lock: the grid is read-only until the
+// user taps "Override schedule," so a stray tap can never silently change who's
+// on a day. Kept per-project in a window flag (UI state, not persisted).
+function _psToggleGridEdit(pid) {
+  if (!window._psGridEdit) window._psGridEdit = {};
+  window._psGridEdit[pid] = !window._psGridEdit[pid];
+  renderProjectTabContent();
+}
 function _psTogglePresence(pid, mid, ymd) {
   const s = _psLoad(pid); s.presence[mid + '|' + ymd] = !_psPresence(s, pid, mid, ymd);
   _psSave(pid, s);
@@ -9250,6 +9258,12 @@ function renderProjectScheduleTab(p) {
     .ps-cell.on{background:#143726;color:#3FB950}
     .ps-cell.task{background:#13243F;color:#9CC2FF}
     .ps-cell.off{color:#484F5C}
+    .ps-cell.locked{cursor:default}
+    .ps-cell.edit{cursor:pointer;box-shadow:inset 0 0 0 1px #3a4556}
+    .ps-grid-bar{display:flex;align-items:center;gap:8px;margin-bottom:10px}
+    .ps-ovr-btn{font-size:12px;font-weight:600;color:#8B949E;background:transparent;border:1px solid #30363D;border-radius:8px;padding:7px 12px;cursor:pointer}
+    .ps-ovr-btn.on{color:#3FB950;border-color:#1F5A40;background:#0E2A16}
+    .ps-ovr-done{font-size:12px;font-weight:600;color:#58A6FF;background:transparent;border:1px solid #30363D;border-radius:8px;padding:7px 12px;cursor:pointer}
     .ps-arr{font-size:10px;color:#8B949E;margin-top:2px}
     .ps-note{font-size:11px;color:#6E7681;margin:7px 2px 0;line-height:1.45}
     .ps-blocker{display:flex;gap:9px;align-items:center;background:#221A0C;border:1px solid #5A4612;border-radius:10px;padding:10px 12px;margin-bottom:10px;color:#E3C77A;font-size:12.5px}
@@ -9294,6 +9308,7 @@ function renderProjectScheduleTab(p) {
 
   let gridHTML;
   if (crew.length) {
+    const editMode = !!(window._psGridEdit && window._psGridEdit[p.id]);
     let rows = '';
     crew.forEach(m => {
       let cells = '';
@@ -9303,12 +9318,16 @@ function renderProjectScheduleTab(p) {
         const overridden = sched.presence[m.id + '|' + ymd] !== undefined;
         const cls = on ? (viaTask && !overridden ? 'task' : 'on') : 'off';
         const a = _psArrival(sched, p.id, m.id, ymd);
-        cells += `<td><span class="ps-cell ${cls}" onclick="_psTogglePresence(${p.id},${m.id},'${ymd}')">${on ? '\u2713' : '\u00B7'}</span><div class="ps-arr">${a ? _psT12(a) : ''}</div></td>`;
+        cells += `<td><span class="ps-cell ${cls}${editMode ? ' edit' : ' locked'}"${editMode ? ` onclick="_psTogglePresence(${p.id},${m.id},'${ymd}')"` : ''}>${on ? '\u2713' : '\u00B7'}</span><div class="ps-arr">${a ? _psT12(a) : ''}</div></td>`;
       });
       rows += `<tr><td class="nm">${esc((m.name || '').split(' ')[0])}</td>${cells}</tr>`;
     });
-    gridHTML = `<div class="ps-grid"><table><tr><th class="nm">Crew</th>${days.map(d => `<th>${_psDayLabel(d).replace(/^[A-Za-z]+, /, '')}</th>`).join('')}</tr>${rows}</table></div>
-      <div class="ps-note">Installers appear on a day when they have a task (blue). Tap a cell to add someone with no task (green) — they get it on their calendar with an arrival time and a heads-up. Tap again to remove.</div>`;
+    const bar = `<div class="ps-grid-bar">
+      <button class="ps-ovr-btn${editMode ? ' on' : ''}" onclick="_psToggleGridEdit(${p.id})">${editMode ? '\u2713 Override on' : '\u270E Override schedule'}</button>
+      ${editMode ? `<button class="ps-ovr-done" onclick="_psToggleGridEdit(${p.id})">Done</button>` : ''}
+    </div>`;
+    gridHTML = `${bar}<div class="ps-grid"><table><tr><th class="nm">Crew</th>${days.map(d => `<th>${_psDayLabel(d).replace(/^[A-Za-z]+, /, '')}</th>`).join('')}</tr>${rows}</table></div>
+      <div class="ps-note">${editMode ? 'Override is on \u2014 tap a cell to add someone with no task (green) or remove them. Added people get it on their calendar with an arrival time and a heads-up. Tap Done to lock.' : 'Locked. Installers show on a day when they have a task (blue). Tap \u201COverride schedule\u201D to add or remove people by hand.'}</div>`;
   } else {
     gridHTML = `<div class="ps-empty-b" style="padding:4px 2px">No crew yet. Assign install crew on the project or assign install tasks — anyone with a task on a day shows here automatically.</div>`;
   }
