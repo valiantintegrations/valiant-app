@@ -444,6 +444,7 @@ const state = {
   planningAssignments: JSON.parse(localStorage.getItem('vi_planning_assignments') || '{}'),
   vehicles: JSON.parse(localStorage.getItem('vi_vehicles') || '[]'),
   tools: JSON.parse(localStorage.getItem('vi_tools') || '[]'),
+  assets: JSON.parse(localStorage.getItem('vi_assets') || '[]'),
   bundles: JSON.parse(localStorage.getItem('vi_bundles') || 'null') || JSON.parse(JSON.stringify(DEFAULT_BUNDLES)),
   userPermissions: JSON.parse(localStorage.getItem('vi_user_perms') || '{}'),
   dashboardMode: localStorage.getItem('vi_dashboard_mode') || 'mine',
@@ -19485,6 +19486,77 @@ function renderCalendarSubscribeCard() {
       </div>`;
 }
 
+// ── Assets (vehicles / trailers / lifts / cases / kits) — Drop 1: inventory ──
+const ASSET_TYPES = [
+  { key: 'vehicle', label: 'Vehicles' },
+  { key: 'trailer', label: 'Trailers' },
+  { key: 'lift',    label: 'Lifts' },
+  { key: 'case',    label: 'Cases' },
+  { key: 'kit',     label: 'Kits / Limited Stock' }
+];
+function _assetTypeLabel(k) { const t = ASSET_TYPES.find(x => x.key === k); return t ? t.label : k; }
+function _newAssetId() {
+  const rnd = (typeof crypto !== 'undefined' && crypto.randomUUID)
+    ? crypto.randomUUID().replace(/-/g, '').slice(0, 12)
+    : (Math.random().toString(36).slice(2) + Date.now().toString(36));
+  return 'ast_' + rnd;
+}
+function getAssets(opts) {
+  const o = opts || {};
+  let list = (state.assets || []);
+  if (!o.includeInactive) list = list.filter(a => a.active !== false);
+  return list;
+}
+function getAssetsByType(type, opts) { return getAssets(opts).filter(a => a.type === type); }
+function getAssetById(id) { return (state.assets || []).find(a => String(a.id) === String(id)) || null; }
+function _ensureAssetsSeed() {
+  try { if (localStorage.getItem('vi_assets_seed_v1') === '1') return; } catch (e) {}
+  if (!Array.isArray(state.assets)) state.assets = [];
+  if (state.assets.length === 0) {
+    const seed = [
+      ['vehicle', 'F-350'],
+      ['vehicle', 'Dodge ProMaster'],
+      ['trailer', '24\u2032 Trailer'],
+      ['trailer', '22\u2032 Trailer'],
+      ['trailer', 'Tilt-Deck Trailer'],
+      ['trailer', 'Single-Man-Mast Trailer'],
+      ['lift', 'Snorkel Scissor Lift'],
+      ['lift', 'Genie 1930 Scissor Lift'],
+      ['lift', 'Genie Single-Man Mast'],
+      ['lift', 'JLG Single-Man Mast']
+    ];
+    state.assets = seed.map(([type, name]) => ({ id: _newAssetId(), type, name, active: true, notes: '' }));
+    _syncKeyNow('vi_assets', state.assets);
+  }
+  try { localStorage.setItem('vi_assets_seed_v1', '1'); } catch (e) {}
+}
+function addAsset({ type, name }) {
+  if (!name || !name.trim()) { showToast('Asset needs a name', 'info'); return; }
+  if (!Array.isArray(state.assets)) state.assets = [];
+  state.assets.push({ id: _newAssetId(), type: type || 'vehicle', name: name.trim(), active: true, notes: '' });
+  _syncKeyNow('vi_assets', state.assets).then(r => { if (!r.ok) showToast('Asset didn\u2019t save: ' + r.err, 'error'); });
+  renderCurrentPage();
+}
+function updateAsset(id, patch) {
+  const a = getAssetById(id); if (!a) return;
+  Object.assign(a, patch);
+  _syncKeyNow('vi_assets', state.assets).then(r => { if (!r.ok) showToast('Asset didn\u2019t save: ' + r.err, 'error'); });
+  renderCurrentPage();
+}
+function toggleAssetActive(id) { const a = getAssetById(id); if (!a) return; updateAsset(id, { active: a.active === false }); }
+function deleteAsset(id) {
+  const a = getAssetById(id); if (!a) return;
+  if (!confirm('Remove ' + a.name + ' from assets? (Existing allocations are not changed.)')) return;
+  state.assets = (state.assets || []).filter(x => String(x.id) !== String(id));
+  _syncKeyNow('vi_assets', state.assets).then(r => { if (!r.ok) showToast('Asset didn\u2019t save: ' + r.err, 'error'); });
+  renderCurrentPage();
+}
+function addAssetFromSettings() {
+  const type = document.getElementById('asset-new-type')?.value || 'vehicle';
+  const name = document.getElementById('asset-new-name')?.value || '';
+  addAsset({ type, name });
+}
+
 function renderSettings(c) {
   const size = state.textSize || 'normal';
   c.innerHTML = `
@@ -19520,6 +19592,34 @@ function renderSettings(c) {
         <div style="font-size:14px;font-weight:600;color:#E6EDF3;margin-bottom:2px">Mark jobs completed</div>
         <div style="font-size:12px;color:#8B949E;margin-bottom:12px">Bulk-mark finished jobs as completed (handy for the data migration). They drop off dashboards and file under Completed in the Projects tab. Reversible.</div>
         <button type="button" class="btn btn-sm" style="background:#238636;border:none;color:#fff;font-weight:600" onclick="viBulkComplete()">Open bulk picker</button>
+      </div>` : ''}
+      ${(isMasterAdminLogin() || currentUserHasPermission('install.manage_crew')) ? `
+      <div class="dashboard-card" style="margin-top:14px">
+        <div style="font-size:11px;font-weight:600;color:#6E7681;text-transform:uppercase;letter-spacing:0.08em;margin-bottom:4px">Assets</div>
+        <div style="font-size:14px;font-weight:600;color:#E6EDF3;margin-bottom:2px">Vehicles, trailers &amp; lifts</div>
+        <div style="font-size:12px;color:#8B949E;margin-bottom:12px">Manage the shop's allocatable assets. These feed the per-job Asset Allocation picker.</div>
+        ${ASSET_TYPES.map(t => {
+          const items = getAssetsByType(t.key, { includeInactive: true });
+          if (!items.length) return '';
+          return `
+          <div style="margin-bottom:10px">
+            <div style="font-size:11px;font-weight:600;color:#8B949E;margin-bottom:4px">${t.label}</div>
+            ${items.map(a => `
+              <div style="display:flex;align-items:center;gap:8px;padding:6px 8px;background:#0D1117;border:1px solid #1C2333;border-radius:5px;margin-bottom:4px">
+                <span style="flex:1;font-size:13px;color:${a.active === false ? '#6E7681' : '#E6EDF3'};${a.active === false ? 'text-decoration:line-through' : ''}">${esc(a.name)}</span>
+                <button class="btn btn-sm" style="font-size:11px;padding:3px 8px" onclick="toggleAssetActive('${a.id}')">${a.active === false ? 'Restore' : 'Retire'}</button>
+                <span style="cursor:pointer;color:#6E7681;font-size:16px;padding:0 4px" title="Delete" onclick="deleteAsset('${a.id}')">×</span>
+              </div>
+            `).join('')}
+          </div>`;
+        }).join('')}
+        <div style="display:flex;gap:8px;align-items:center;margin-top:8px">
+          <select id="asset-new-type" class="form-input" style="flex:0 0 auto;font-size:12px;padding:5px 6px">
+            ${ASSET_TYPES.map(t => `<option value="${t.key}">${t.label.replace(/s$/, '')}</option>`).join('')}
+          </select>
+          <input id="asset-new-name" class="form-input" type="text" placeholder="New asset name" style="flex:1;font-size:12px;padding:5px 6px">
+          <button class="btn-primary" style="font-size:12px;padding:6px 12px" onclick="addAssetFromSettings()">Add</button>
+        </div>
       </div>` : ''}
       ${renderCalendarSubscribeCard()}
     </div>
@@ -21095,6 +21195,7 @@ async function init() {
   _migrateInstallTaskShape();
   _migrateInstallTaskTemplates();
   _ensureNewInstallTemplates();
+  _ensureAssetsSeed();
   _migrateInstallSubtasksToTasks();
   _migrateDesignTaskTemplates();
   _migrateDesignSubtasksToTasks();
