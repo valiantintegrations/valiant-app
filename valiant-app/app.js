@@ -19921,6 +19921,13 @@ function _toggleLogiPack(pid) {
   window._logiPackOpen[pid] = !window._logiPackOpen[pid];
   renderCurrentPage();
 }
+function _logiSectionOpen(pid, key) { return !!(window._logiOpen && window._logiOpen[pid + ':' + key]); }
+function _toggleLogiSection(pid, key) {
+  if (!window._logiOpen) window._logiOpen = {};
+  const k = pid + ':' + key;
+  window._logiOpen[k] = !window._logiOpen[k];
+  renderCurrentPage();
+}
 function _logiAssigneeChips(ids) {
   if (!ids || !ids.length) return '';
   return ids.map(id => { const m = getTeamMember(id); if (!m) return ''; return `<span style="display:inline-block;font-size:10px;background:#1C2333;border:1px solid #30363D;color:#C9D1D9;border-radius:10px;padding:1px 7px;margin-right:4px">${esc((m.name || '').split(' ')[0])}</span>`; }).join('');
@@ -20007,22 +20014,38 @@ function renderLogisticsCard(p) {
 
   const driveOut = rigs.map(r => taskRow('drive_out_' + r.id, 'Drive to job — ' + r.label, dates.load)).join('');
   const driveBack = rigs.map(r => taskRow('drive_back_' + r.id, 'Drive back — ' + r.label, dates.deprep)).join('');
-  const noRigs = rigs.length ? '' : '<div style="font-size:11px;color:#6E7681;margin-bottom:6px">No vehicles/trailers allocated — add them on the Assets tab to get drive tasks.</div>';
+  const noRigsNote = '<div style="font-size:11px;color:#6E7681">No vehicles/trailers allocated — add them on the Assets tab to get drive tasks.</div>';
+
+  const doneOf = keys => { const t = keys.length; const d = keys.filter(k => getLogisticsItem(p.id, k).done).length; return t ? `${d}/${t} done` : ''; };
+  const driveOutKeys = rigs.map(r => 'drive_out_' + r.id);
+  const driveBackKeys = rigs.map(r => 'drive_back_' + r.id);
+
+  const section = (skey, title, bodyHTML, summary) => {
+    const open = _logiSectionOpen(p.id, skey);
+    return `
+      <div style="border:1px solid #1C2333;border-radius:6px;margin-bottom:6px;overflow:hidden">
+        <div onclick="_toggleLogiSection(${p.id},'${skey}')" style="display:flex;align-items:center;gap:8px;padding:8px 10px;cursor:pointer;user-select:none;background:#0D1117">
+          <span style="display:inline-block;transform:rotate(${open ? 90 : 0}deg);transition:transform .1s;color:#8B949E">▸</span>
+          <span style="flex:1;font-size:13px;font-weight:700;color:#E6EDF3">${esc(title)}</span>
+          <span style="font-size:10px;color:#8B949E">${summary || ''}</span>
+        </div>
+        ${open ? `<div style="padding:6px 8px 8px">${bodyHTML}</div>` : ''}
+      </div>`;
+  };
 
   return `
     <div class="dashboard-card" style="margin-bottom:14px">
       <div class="dashboard-card-title" style="margin-bottom:8px">Logistics</div>
-      <div style="display:grid;grid-template-columns:repeat(2,1fr);gap:8px;margin-bottom:12px">
+      <div style="display:grid;grid-template-columns:repeat(2,1fr);gap:8px;margin-bottom:10px">
         ${dateInput('Prep day', 'prep')}
         ${dateInput('Load day', 'load')}
         ${dateInput('Unload day', 'unload')}
         ${dateInput('De-prep day', 'deprep')}
       </div>
-      ${taskRow('prep', 'Prep', dates.prep, picklistHTML)}
-      ${taskRow('load', 'Load', dates.load)}
-      ${noRigs}${driveOut}${driveBack}
-      ${taskRow('unload', 'Unload', dates.unload)}
-      ${taskRow('deprep', 'De-prep', dates.deprep)}
+      ${section('prep_load', 'Prep & Load', taskRow('prep', 'Prep', dates.prep, picklistHTML) + taskRow('load', 'Load', dates.load), doneOf(['prep', 'load']))}
+      ${section('drive_out', 'Drive to job', rigs.length ? driveOut : noRigsNote, doneOf(driveOutKeys))}
+      ${section('drive_back', 'Drive back', rigs.length ? driveBack : noRigsNote, doneOf(driveBackKeys))}
+      ${section('unload_deprep', 'Unload & De-prep', taskRow('unload', 'Unload', dates.unload) + taskRow('deprep', 'De-prep', dates.deprep), doneOf(['unload', 'deprep']))}
     </div>`;
 }
 
