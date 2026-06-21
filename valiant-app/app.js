@@ -1779,7 +1779,7 @@ function toggleInstallTaskDone(taskId) {
   save('vi_install_tasks', state.installTasks);
 }
 
-function addInstallSubtask(taskId, { title, date, assigneeIds, notes, photoRequired }) {
+function addInstallSubtask(taskId, { title, date, assigneeIds, notes, photoRequired, time }) {
   const t = getInstallTaskById(taskId);
   if (!t) return;
   if (!t.subtasks) t.subtasks = [];
@@ -1788,6 +1788,7 @@ function addInstallSubtask(taskId, { title, date, assigneeIds, notes, photoRequi
     id: _nextTaskId(),
     title: title || 'Subtask',
     date: date || null,
+    time: time || null,
     assigneeIds: ids,
     notes: notes || '',
     photoRequired: !!photoRequired,
@@ -1821,8 +1822,16 @@ function toggleInstallSubtaskDone(taskId, subtaskId) {
   if (!t) return;
   const s = (t.subtasks || []).find(x => x.id === subtaskId);
   if (!s) return;
-  s.done = !s.done;
-  save('vi_install_tasks', state.installTasks);
+  _applyDone(s);
+  _syncTasksNow('install');
+}
+function toggleInstallSubtaskStarted(taskId, subtaskId) {
+  const t = getInstallTaskById(taskId);
+  if (!t) return;
+  const s = (t.subtasks || []).find(x => x.id === subtaskId);
+  if (!s) return;
+  _applyStarted(s);
+  _syncTasksNow('install');
 }
 
 // ────────────────────────────────────────────────────────────────────────────
@@ -1880,7 +1889,7 @@ function toggleDesignTaskDone(taskId) {
   save('vi_design_tasks', state.designTasks);
 }
 
-function addDesignSubtask(taskId, { title, date, assigneeIds, notes }) {
+function addDesignSubtask(taskId, { title, date, assigneeIds, notes, photoRequired, time }) {
   const t = getDesignTaskById(taskId);
   if (!t) return;
   if (!t.subtasks) t.subtasks = [];
@@ -1889,8 +1898,10 @@ function addDesignSubtask(taskId, { title, date, assigneeIds, notes }) {
     id: _nextTaskId(),
     title: title || 'Subtask',
     date: date || null,
+    time: time || null,
     assigneeIds: ids,
     notes: notes || '',
+    photoRequired: !!photoRequired,
     done: false
   });
   save('vi_design_tasks', state.designTasks);
@@ -1919,8 +1930,16 @@ function toggleDesignSubtaskDone(taskId, subtaskId) {
   if (!t) return;
   const s = (t.subtasks || []).find(x => x.id === subtaskId);
   if (!s) return;
-  s.done = !s.done;
-  save('vi_design_tasks', state.designTasks);
+  _applyDone(s);
+  _syncTasksNow('design');
+}
+function toggleDesignSubtaskStarted(taskId, subtaskId) {
+  const t = getDesignTaskById(taskId);
+  if (!t) return;
+  const s = (t.subtasks || []).find(x => x.id === subtaskId);
+  if (!s) return;
+  _applyStarted(s);
+  _syncTasksNow('design');
 }
 
 // ── Phase router — given a task id, return which phase it belongs to ──
@@ -1950,6 +1969,48 @@ function deleteTask(taskId) {
 }
 function toggleSubtaskDone(taskId, subtaskId) {
   return _getTaskPhase(taskId) === 'design' ? toggleDesignSubtaskDone(taskId, subtaskId) : toggleInstallSubtaskDone(taskId, subtaskId);
+}
+function toggleSubtaskStarted(taskId, subtaskId) {
+  return _getTaskPhase(taskId) === 'design' ? toggleDesignSubtaskStarted(taskId, subtaskId) : toggleInstallSubtaskStarted(taskId, subtaskId);
+}
+// ── Subtask status stamping (started / completed, each records who + when) ──
+function _whoNow() { return (typeof getActiveTeamMemberId === 'function') ? getActiveTeamMemberId() : null; }
+function _applyStarted(s) {
+  s.started = !s.started;
+  if (s.started) { s.startedAt = new Date().toISOString(); s.startedBy = _whoNow(); }
+  else { s.startedAt = null; s.startedBy = null; }
+}
+function _applyDone(s) {
+  s.done = !s.done;
+  if (s.done) { s.doneAt = new Date().toISOString(); s.doneBy = _whoNow(); }
+  else { s.doneAt = null; s.doneBy = null; }
+}
+function _memberName(id) {
+  if (id == null) return 'someone';
+  const m = (typeof getTeamMember === 'function') ? getTeamMember(id) : null;
+  if (!m) return 'someone';
+  return (m.name || '').split(' ')[0] || m.name || 'someone';
+}
+function _fmtStamp(iso) {
+  if (!iso) return '';
+  const d = new Date(iso);
+  if (isNaN(d.getTime())) return '';
+  return d.toLocaleString('en-US', { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
+}
+function _fmtTime12(hhmm) {
+  if (!hhmm) return '';
+  const m = /^(\d{1,2}):(\d{2})/.exec(hhmm);
+  if (!m) return hhmm;
+  let h = parseInt(m[1], 10); const min = m[2];
+  const ap = h >= 12 ? 'PM' : 'AM'; h = h % 12; if (h === 0) h = 12;
+  return `${h}:${min} ${ap}`;
+}
+function _subStatusMetaHTML(s) {
+  const bits = [];
+  if (s.startedAt) bits.push('Started ' + _memberName(s.startedBy) + ' \u00B7 ' + _fmtStamp(s.startedAt));
+  if (s.doneAt) bits.push('Done ' + _memberName(s.doneBy) + ' \u00B7 ' + _fmtStamp(s.doneAt));
+  if (!bits.length) return '';
+  return '<div style="font-size:10px;color:#6E7681;margin-top:2px">' + bits.map(esc).join('  \u00B7  ') + '</div>';
 }
 function deleteSubtask(taskId, subtaskId) {
   return _getTaskPhase(taskId) === 'design' ? deleteDesignSubtask(taskId, subtaskId) : deleteInstallSubtask(taskId, subtaskId);
@@ -9625,12 +9686,14 @@ function renderProjectTasksSection(p) {
           <div class="itask-sub-body" onclick="openSubtaskDialog(${t.id},${s.id})">
             <div class="itask-sub-title">${esc(s.title)}</div>
             <div class="itask-sub-meta">
-              ${s.date ? esc(fmtDateLocal(s.date)) : '<span class="itask-nodate">No date</span>'}
+              ${s.date ? esc(fmtDateLocal(s.date)) : '<span class="itask-nodate">No date</span>'}${s.time ? ' · ' + esc(_fmtTime12(s.time)) : ''}
               <span class="itask-sub-assignees">${assigneeChips(s.assigneeIds)}</span>
             </div>
+            ${_subStatusMetaHTML(s)}
             ${photoBadge}
             ${s.notes ? `<div class="itask-sub-notes">${esc(s.notes)}</div>` : ''}
           </div>
+          <button onclick="event.stopPropagation();toggleSubtaskStarted(${t.id},${s.id});renderCurrentPage()" title="${s.started ? 'Mark not started' : 'Mark started'}" style="flex-shrink:0;align-self:flex-start;font-size:10px;padding:3px 8px;border-radius:999px;border:1px solid ${s.started ? '#2EA043' : '#30363D'};background:${s.started ? '#0E2A16' : 'transparent'};color:${s.started ? '#3FB950' : '#8B949E'};cursor:pointer;white-space:nowrap">${s.started ? '● Started' : '▶ Start'}</button>
           <span class="itask-del" onclick="event.stopPropagation();if(confirm('Delete this step?')){deleteInstallSubtask(${t.id},${s.id});renderCurrentPage();}">×</span>
         </div>
       `;
@@ -9831,12 +9894,14 @@ function renderProjectDesignTasksSection(p) {
           <div class="itask-sub-body" onclick="openSubtaskDialog(${t.id},${s.id})">
             <div class="itask-sub-title">${esc(s.title)}</div>
             <div class="itask-sub-meta">
-              ${s.date ? esc(fmtDateLocal(s.date)) : '<span class="itask-nodate">No date</span>'}
+              ${s.date ? esc(fmtDateLocal(s.date)) : '<span class="itask-nodate">No date</span>'}${s.time ? ' · ' + esc(_fmtTime12(s.time)) : ''}
               <span class="itask-sub-assignees">${assigneeChips(s.assigneeIds)}</span>
             </div>
+            ${_subStatusMetaHTML(s)}
             ${photoBadge}
             ${s.notes ? `<div class="itask-sub-notes">${esc(s.notes)}</div>` : ''}
           </div>
+          <button onclick="event.stopPropagation();toggleSubtaskStarted(${t.id},${s.id});renderCurrentPage()" title="${s.started ? 'Mark not started' : 'Mark started'}" style="flex-shrink:0;align-self:flex-start;font-size:10px;padding:3px 8px;border-radius:999px;border:1px solid ${s.started ? '#2EA043' : '#30363D'};background:${s.started ? '#0E2A16' : 'transparent'};color:${s.started ? '#3FB950' : '#8B949E'};cursor:pointer;white-space:nowrap">${s.started ? '● Started' : '▶ Start'}</button>
           <span class="itask-del" onclick="event.stopPropagation();if(confirm('Delete this step?')){deleteSubtask(${t.id},${s.id});renderCurrentPage();}">×</span>
         </div>
       `;
@@ -10105,6 +10170,7 @@ function openSubtaskDialog(taskId, subtaskId) {
         rows: [{
           title: existing.title || '',
           date: existing.date || '',
+          time: existing.time || '',
           assigneeIds: Array.isArray(existing.assigneeIds) ? [...existing.assigneeIds] : [],
           notes: existing.notes || '',
           photoRequired: !!existing.photoRequired
@@ -10116,7 +10182,7 @@ function openSubtaskDialog(taskId, subtaskId) {
         mode: 'add',
         taskId,
         subtaskId: null,
-        rows: [{ title: '', date: '', assigneeIds: [], notes: '', photoRequired: false }],
+        rows: [{ title: '', date: '', time: '', assigneeIds: [], notes: '', photoRequired: false }],
         pool: sortedPool,
         crewIds: [...crewIds]
       };
@@ -10158,6 +10224,11 @@ function _renderSubDialogContent() {
               <span class="sub-row-date-label">${row.date ? esc(fmtDateLocal(row.date)) : '— Pick a day —'}</span>
             </button>
             <input type="hidden" class="sub-row-date" value="${esc(row.date || '')}">
+          </div>
+          <div>
+            <label class="form-label form-label-sm">Time (optional)</label>
+            <input type="time" class="form-input sub-row-time" value="${esc(row.time || '')}"
+              onchange="window._subDialogState.rows[${i}].time=this.value||null">
           </div>
           <div>
             <label class="form-label form-label-sm">Assignees</label>
@@ -10565,6 +10636,7 @@ function _saveSubtaskDialog() {
   const rows = Array.from(rowEls).map((rowEl, i) => {
     const titleEl = rowEl.querySelector('.sub-row-title');
     const dateEl = rowEl.querySelector('.sub-row-date');
+    const timeEl = rowEl.querySelector('.sub-row-time');
     const notesEl = rowEl.querySelector('.sub-row-notes');
     const photoReqEl = rowEl.querySelector('.sub-row-photoreq');
     // Assignees: only the assignee chips (not the photo-required checkbox)
@@ -10574,6 +10646,7 @@ function _saveSubtaskDialog() {
     return {
       title: titleEl ? (titleEl.value || '').trim() : '',
       date: dateEl ? (dateEl.value || null) : null,
+      time: timeEl ? (timeEl.value || null) : null,
       assigneeIds,
       notes: notesEl ? (notesEl.value || '').trim() : '',
       photoRequired: photoReqEl ? !!photoReqEl.checked : false
@@ -19496,7 +19569,7 @@ const ASSET_TYPES = [
   { key: 'vehicle', label: 'Vehicles' },
   { key: 'trailer', label: 'Trailers' },
   { key: 'lift',    label: 'Lifts' },
-  { key: 'case',    label: 'Cases' },
+  { key: 'case',    label: 'Cases & Gear' },
   { key: 'kit',     label: 'Kits / Limited Stock' }
 ];
 function _assetTypeLabel(k) { const t = ASSET_TYPES.find(x => x.key === k); return t ? t.label : k; }
@@ -19534,6 +19607,30 @@ function _ensureAssetsSeed() {
     _syncKeyNow('vi_assets', state.assets);
   }
   try { localStorage.setItem('vi_assets_seed_v1', '1'); } catch (e) {}
+}
+// Top-up batch (cases / kits / ladders / scaff). Add-if-missing by name so it
+// won't duplicate; one-time flag so retiring one later sticks.
+function _ensureNewAssets() {
+  try { if (localStorage.getItem('vi_assets_seed_v2') === '1') return; } catch (e) {}
+  if (!Array.isArray(state.assets)) state.assets = [];
+  const NEW = [
+    ['case', 'Toolkit 1A'], ['case', 'Toolkit 1B'], ['case', 'Toolkit 1C'],
+    ['case', 'Toolkit 2A'], ['case', 'Toolkit 2B'], ['case', 'Toolkit 2C'],
+    ['case', 'Rigging Trunk 1'],
+    ['case', 'Term Kit 1A'], ['case', 'Term Kit 1B'],
+    ['case', 'Term Kit 2A'], ['case', 'Term Kit 2B'],
+    ['case', 'Paint Kit'],
+    ['case', '10 ft Ladder'], ['case', '8 ft Ladder'], ['case', 'Little Giant Ladder'], ['case', 'Small Scaff']
+  ];
+  const have = new Set((state.assets || []).map(a => (a.name || '').trim().toLowerCase()));
+  let added = 0;
+  NEW.forEach(([type, name]) => {
+    if (have.has(name.toLowerCase())) return;
+    state.assets.push({ id: _newAssetId(), type, name, active: true, notes: '' });
+    added++;
+  });
+  try { localStorage.setItem('vi_assets_seed_v2', '1'); } catch (e) {}
+  if (added) _syncKeyNow('vi_assets', state.assets);
 }
 function addAsset({ type, name }) {
   if (!name || !name.trim()) { showToast('Asset needs a name', 'info'); return; }
@@ -21369,6 +21466,7 @@ async function init() {
   _migrateInstallTaskTemplates();
   _ensureNewInstallTemplates();
   _ensureAssetsSeed();
+  _ensureNewAssets();
   _migrateInstallSubtasksToTasks();
   _migrateDesignTaskTemplates();
   _migrateDesignSubtasksToTasks();
