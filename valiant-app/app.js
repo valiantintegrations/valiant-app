@@ -13446,7 +13446,37 @@ function renderCalendar(c) {
     designTaskIdsWithBar.add(t.id);
   });
 
-  // Does the install bar render on a given date? (handles weekend skip)
+  // Logistics items (prep / load / drive / unload / de-prep) as single-day bars.
+  // Respects the People filter via assignees ∪ the project's install/PM crew, so
+  // prep & de-prep days surface for the crew even before someone's assigned.
+  (state.projects || []).forEach(proj => {
+    if (!proj || proj.id == null) return;
+    const items = getLogisticsCalItems(proj);
+    if (!items.length) return;
+    const a = getProjectAssignment(proj.id) || {};
+    const crewIds = [...((a.install || []).map(x => x.id)), ...((a.pm || []).map(x => x.id))];
+    items.forEach(it => {
+      if (it.date < gridStartStr || it.date > gridEndStr) return;
+      const attendees = new Set(it.assigneeIds);
+      crewIds.forEach(id => attendees.add(id));
+      if (!_calEffective.some(mid => attendees.has(mid))) return;
+      installBars.push({
+        type: 'logistics',
+        projectId: proj.id,
+        name: it.title,
+        clientName: proj.client_name || '',
+        booked: true,
+        start: it.date,
+        end: it.date,
+        excludeWeekends: false,
+        weekendIncludes: [],
+        attendeeIds: it.assigneeIds.slice(),
+        hasNotes: false,
+        isMilestone: false,
+        titleOverride: `🚚 ${proj.client_name || proj.name} · ${it.title}${it.time ? ' ' + _fmtTime12(it.time) : ''}`
+      });
+    });
+  });
   function installCoversDate(bar, dateStr) {
     if (dateStr < bar.start || dateStr > bar.end) return false;
     const dt = _parseLocalYmd(dateStr);
@@ -19883,6 +19913,13 @@ function setLogisticsItemAssignees(pid, key, ids) {
   if (typeof ensureOnProjectCrew === 'function' && r.items[key].assigneeIds.length) ensureOnProjectCrew(pid, r.items[key].assigneeIds);
   _persistLogistics(); renderCurrentPage();
 }
+function setLogisticsItem(pid, key, patch) {
+  const r = _ensureLogiRec(pid);
+  if (!r.items[key]) r.items[key] = { assigneeIds: [] };
+  Object.assign(r.items[key], patch);
+  if (Array.isArray(patch.assigneeIds) && patch.assigneeIds.length && typeof ensureOnProjectCrew === 'function') ensureOnProjectCrew(pid, patch.assigneeIds);
+  _persistLogistics(); renderCurrentPage();
+}
 function toggleLogisticsStarted(pid, key) { const r = _ensureLogiRec(pid); if (!r.items[key]) r.items[key] = { assigneeIds: [] }; _applyStarted(r.items[key]); _persistLogistics(); renderCurrentPage(); }
 function toggleLogisticsDone(pid, key) { const r = _ensureLogiRec(pid); if (!r.items[key]) r.items[key] = { assigneeIds: [] }; _applyDone(r.items[key]); _persistLogistics(); renderCurrentPage(); }
 function toggleLogisticsPacked(pid, allocId) {
@@ -19928,41 +19965,76 @@ function _toggleLogiSection(pid, key) {
   window._logiOpen[k] = !window._logiOpen[k];
   renderCurrentPage();
 }
+// Dated logistics items for calendar surfacing: prep/load/unload/de-prep + per-rig drives.
+function getLogisticsCalItems(p) {
+  if (!_isInstallJob(p)) return [];
+  const dates = getLogisticsDates(p);
+  const items = [];
+  const push = (key, title, date) => { if (date) { const it = getLogisticsItem(p.id, key); items.push({ key, title, date, time: it.time || null, assigneeIds: (it.assigneeIds || []).slice(), done: !!it.done }); } };
+  push('prep', 'Prep', dates.prep);
+  push('load', 'Load', dates.load);
+  getLogisticsRigs(p.id).forEach(r => push('drive_out_' + r.id, 'Drive to job — ' + r.label, dates.load));
+  const win = getInstallWindow(p);
+  push('load_in', 'Load in', win && win.start ? win.start : dates.load);
+  push('load_out', 'Load out', win && win.end ? win.end : dates.deprep);
+  getLogisticsRigs(p.id).forEach(r => push('drive_back_' + r.id, 'Drive back — ' + r.label, dates.deprep));
+  push('unload', 'Unload', dates.unload);
+  push('deprep', 'De-prep', dates.deprep);
+  return items;
+}
 function _logiAssigneeChips(ids) {
-  if (!ids || !ids.length) return '';
-  return ids.map(id => { const m = getTeamMember(id); if (!m) return ''; return `<span style="display:inline-block;font-size:10px;background:#1C2333;border:1px solid #30363D;color:#C9D1D9;border-radius:10px;padding:1px 7px;margin-right:4px">${esc((m.name || '').split(' ')[0])}</span>`; }).join('');
+  if (!ids || !ids.length) return '<span class="itask-unassigned">Unassigned</span>';
+  return ids.map(id => {
+    const m = getTeamMember(id);
+    if (!m) return '';
+    const memberColor = (DASHBOARD_ACCESS.find(d => d.key === m.primaryRole) || {}).color || '#6E7681';
+    const initials = m.initials || (m.name || '').slice(0, 2).toUpperCase();
+    const first = (m.name || '').split(' ')[0];
+    return `<span class="itask-assignee-chipv2" title="${esc(m.name)}">
+      <span class="itask-assignee-badge" style="background:${memberColor}22;border-color:${memberColor};color:${memberColor}">${esc(initials)}</span>
+      <span class="itask-assignee-name">${esc(first)}</span>
+    </span>`;
+  }).join('');
 }
 function openLogisticsAssignPicker(pid, key) {
   const it = getLogisticsItem(pid, key);
   const current = new Set((it.assigneeIds || []).map(String));
+  const crew = getProjectAssignment(pid) || {};
+  const crewIds = new Set([...((crew.install || []).map(x => x.id)), ...((crew.pm || []).map(x => x.id))]);
+  const pool = [...(state.team || [])].sort((a, b) => { const ao = crewIds.has(a.id) ? 0 : 1, bo = crewIds.has(b.id) ? 0 : 1; return ao !== bo ? ao - bo : a.name.localeCompare(b.name); });
   document.getElementById('logi-assign')?.remove();
-  const team = state.team || [];
   const overlay = document.createElement('div');
   overlay.id = 'logi-assign';
   overlay.className = 'modal-overlay';
   overlay.style.zIndex = '10001';
   overlay.onclick = (e) => { if (e.target === overlay) overlay.remove(); };
   overlay.innerHTML = `
-    <div class="modal-container" style="max-width:380px;max-height:80vh;display:flex;flex-direction:column">
-      <div class="modal-header"><div class="modal-title">Assign</div><button class="modal-close" onclick="document.getElementById('logi-assign')?.remove()">&times;</button></div>
+    <div class="modal-container" style="max-width:420px;max-height:80vh;display:flex;flex-direction:column">
+      <div class="modal-header"><div class="modal-title">Assign people</div><button class="modal-close" onclick="document.getElementById('logi-assign')?.remove()">&times;</button></div>
       <div class="modal-body" style="overflow-y:auto">
-        ${team.map(m => `
-          <label style="display:flex;align-items:center;gap:8px;padding:7px;border-radius:5px;cursor:pointer;font-size:13px;color:#E6EDF3">
-            <input type="checkbox" class="logi-assign-cb" value="${m.id}" ${current.has(String(m.id)) ? 'checked' : ''}>
-            <span>${esc(m.name)}</span>
-          </label>`).join('')}
+        <label class="form-label form-label-sm">Time (optional)</label>
+        <input type="time" id="logi-assign-time" class="form-input" value="${esc(it.time || '')}" style="margin-bottom:12px">
+        <div class="itask-assignee-pick">
+          ${pool.map(m => `
+            <label class="itask-assignee-chip">
+              <input type="checkbox" class="logi-assign-cb" value="${m.id}" ${current.has(String(m.id)) ? 'checked' : ''}>
+              <span>${esc(m.name)}${crewIds.has(m.id) ? '' : ' <span style="font-size:9px;color:#D29922">(not on crew)</span>'}</span>
+            </label>`).join('')}
+        </div>
       </div>
       <div style="padding:12px;border-top:1px solid #1C2333;display:flex;justify-content:flex-end;gap:8px">
-        <button class="btn" onclick="document.getElementById('logi-assign')?.remove()">Cancel</button>
-        <button class="btn-primary" onclick="_saveLogiAssign(${pid},'${key}')">Save</button>
+        <button class="btn btn-sm" onclick="document.getElementById('logi-assign')?.remove()">Cancel</button>
+        <button class="btn btn-sm btn-primary" onclick="_saveLogiAssign(${pid},'${key}')">Save</button>
       </div>
     </div>`;
   document.body.appendChild(overlay);
 }
 function _saveLogiAssign(pid, key) {
   const ids = Array.from(document.querySelectorAll('.logi-assign-cb:checked')).map(cb => parseInt(cb.value, 10)).filter(n => !isNaN(n));
+  const timeEl = document.getElementById('logi-assign-time');
+  const time = timeEl ? (timeEl.value || null) : null;
   document.getElementById('logi-assign')?.remove();
-  setLogisticsItemAssignees(pid, key, ids);
+  setLogisticsItem(pid, key, { assigneeIds: ids, time });
 }
 function renderLogisticsCard(p) {
   if (!_isInstallJob(p)) return '';
@@ -19979,17 +20051,19 @@ function renderLogisticsCard(p) {
   const taskRow = (key, title, dateStr, extra) => {
     const it = getLogisticsItem(p.id, key);
     const started = !!it.started, done = !!it.done;
-    const hasPeople = it.assigneeIds && it.assigneeIds.length;
     return `
-      <div style="display:flex;align-items:center;gap:8px;padding:5px 7px;border:1px solid #1C2333;border-radius:6px;margin-bottom:4px;${done ? 'opacity:.65' : ''}">
-        <span onclick="toggleLogisticsDone(${p.id},'${key}')" title="${done ? 'Mark not done' : 'Mark done'}" style="flex-shrink:0;width:16px;height:16px;border-radius:4px;border:1.5px solid ${done ? '#2EA043' : '#30363D'};background:${done ? '#238636' : 'transparent'};color:#fff;display:flex;align-items:center;justify-content:center;font-size:11px;cursor:pointer">${done ? '✓' : ''}</span>
-        <div style="flex:1;min-width:0">
-          <div style="font-size:13px;font-weight:600;color:#E6EDF3;line-height:1.2">${esc(title)}</div>
-          <div style="font-size:10px;color:#8B949E;margin-top:1px">${dateStr ? esc(fmtDateLocal(dateStr)) : 'No date'} · <span style="cursor:pointer;color:#58A6FF" onclick="openLogisticsAssignPicker(${p.id},'${key}')">${hasPeople ? _logiAssigneeChips(it.assigneeIds) : 'Assign'}</span></div>
+      <div class="itask-sub${done ? ' is-done' : ''}">
+        <span class="itask-check" onclick="event.stopPropagation();toggleLogisticsDone(${p.id},'${key}')">${done ? '✓' : ''}</span>
+        <div class="itask-sub-body" onclick="openLogisticsAssignPicker(${p.id},'${key}')">
+          <div class="itask-sub-title">${esc(title)}</div>
+          <div class="itask-sub-meta">
+            ${dateStr ? esc(fmtDateLocal(dateStr)) : '<span class="itask-nodate">No date</span>'}${it.time ? ' · ' + esc(_fmtTime12(it.time)) : ''}
+            <span class="itask-sub-assignees">${_logiAssigneeChips(it.assigneeIds)}</span>
+          </div>
           ${_subStatusMetaHTML(it)}
           ${extra || ''}
         </div>
-        <button onclick="toggleLogisticsStarted(${p.id},'${key}')" title="${started ? 'Mark not started' : 'Mark started'}" style="flex-shrink:0;font-size:10px;padding:2px 8px;border-radius:999px;border:1px solid ${started ? '#2EA043' : '#30363D'};background:${started ? '#0E2A16' : 'transparent'};color:${started ? '#3FB950' : '#8B949E'};cursor:pointer;white-space:nowrap">${started ? '● Started' : '▶ Start'}</button>
+        <button onclick="event.stopPropagation();toggleLogisticsStarted(${p.id},'${key}')" title="${started ? 'Mark not started' : 'Mark started'}" style="flex-shrink:0;align-self:flex-start;font-size:10px;padding:3px 8px;border-radius:999px;border:1px solid ${started ? '#2EA043' : '#30363D'};background:${started ? '#0E2A16' : 'transparent'};color:${started ? '#3FB950' : '#8B949E'};cursor:pointer;white-space:nowrap">${started ? '● Started' : '▶ Start'}</button>
       </div>`;
   };
 
@@ -20015,6 +20089,9 @@ function renderLogisticsCard(p) {
   const driveOut = rigs.map(r => taskRow('drive_out_' + r.id, 'Drive to job — ' + r.label, dates.load)).join('');
   const driveBack = rigs.map(r => taskRow('drive_back_' + r.id, 'Drive back — ' + r.label, dates.deprep)).join('');
   const noRigsNote = '<div style="font-size:11px;color:#6E7681">No vehicles/trailers allocated — add them on the Assets tab to get drive tasks.</div>';
+  const win = getInstallWindow(p);
+  const onsiteStart = win && win.start ? win.start : dates.load;
+  const onsiteEnd = win && win.end ? win.end : dates.deprep;
 
   const doneOf = keys => { const t = keys.length; const d = keys.filter(k => getLogisticsItem(p.id, k).done).length; return t ? `${d}/${t} done` : ''; };
   const driveOutKeys = rigs.map(r => 'drive_out_' + r.id);
@@ -20044,6 +20121,7 @@ function renderLogisticsCard(p) {
       </div>
       ${section('prep_load', 'Prep & Load', taskRow('prep', 'Prep', dates.prep, picklistHTML) + taskRow('load', 'Load', dates.load), doneOf(['prep', 'load']))}
       ${section('drive_out', 'Drive to job', rigs.length ? driveOut : noRigsNote, doneOf(driveOutKeys))}
+      ${section('loadinout', 'Load in & Load out', taskRow('load_in', 'Load in', onsiteStart) + taskRow('load_out', 'Load out', onsiteEnd), doneOf(['load_in', 'load_out']))}
       ${section('drive_back', 'Drive back', rigs.length ? driveBack : noRigsNote, doneOf(driveBackKeys))}
       ${section('unload_deprep', 'Unload & De-prep', taskRow('unload', 'Unload', dates.unload) + taskRow('deprep', 'De-prep', dates.deprep), doneOf(['unload', 'deprep']))}
     </div>`;
