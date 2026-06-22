@@ -333,6 +333,15 @@ function isContractorUser() {
   if (m && m.contractor) return true;
   return getActiveUserBundleKey() === 'contractor';
 }
+// Field crew (installers / install assistants) get a view + check-off
+// experience: they can tick tasks and prep items done, but cannot edit
+// structure — progress milestones, scope tags, design-task creation, install
+// logistics, or asset allocation. Master Admin is always exempt.
+function isFieldCrewLocked() {
+  if (typeof currentUserHasPermission === 'function' && currentUserHasPermission('admin.system')) return false;
+  const k = getActiveUserBundleKey();
+  return k === 'installer' || k === 'install_assistant';
+}
 // The only pages a contractor may reach. Everything else bounces to dashboard.
 const CONTRACTOR_ALLOWED_PAGES = ['dashboard', 'settings'];
 
@@ -10092,7 +10101,7 @@ function renderProjectScopeSection(p) {
     <div class="dashboard-card" style="margin-bottom:14px">
       <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;gap:8px;flex-wrap:wrap">
         <div style="font-size:11px;font-weight:600;color:#6E7681;text-transform:uppercase;letter-spacing:0.08em">Project Scope</div>
-        <button class="btn btn-sm" style="font-size:11px;padding:6px 12px" onclick="openScopeTagsDialog(${p.id})">${current.length === 0 ? '+ Add scope tags' : 'Edit scope tags'}</button>
+        ${isFieldCrewLocked() ? '' : `<button class="btn btn-sm" style="font-size:11px;padding:6px 12px" onclick="openScopeTagsDialog(${p.id})">${current.length === 0 ? '+ Add scope tags' : 'Edit scope tags'}</button>`}
       </div>
       ${current.length === 0 ? `
         <div style="font-size:12px;color:#6E7681;font-style:italic">No scope tags yet. Tag the systems this project covers so install task templates can seed from them.</div>
@@ -10415,7 +10424,7 @@ function renderProjectTasksSection(p) {
     const editBtnStyle = isEditing
       ? 'background:#0D1F0D;border-color:#3FB950;color:#3FB950'
       : 'background:#161B22;border-color:#30363D;color:#C9D1D9';
-    const editBtn = `<button class="itask-editbtn" style="${editBtnStyle}" onclick="event.stopPropagation();_toggleTaskEditMode(${t.id})">${editBtnLabel}</button>`;
+    const editBtn = isFieldCrewLocked() ? '' : `<button class="itask-editbtn" style="${editBtnStyle}" onclick="event.stopPropagation();_toggleTaskEditMode(${t.id})">${editBtnLabel}</button>`;
     const showReseed = isEditing && isInstallAdmin && t.templateKey && hasAnyTemplate;
     const reseedBtn = showReseed
       ? `<button class="itask-reseedbtn" onclick="event.stopPropagation();if(confirm('Re-seed will delete all template-seeded tasks on this project (manual tasks preserved) and reseed from current templates. Continue?'))_seedTasksFromScope(${p.id},true)">Re-seed</button>`
@@ -10458,13 +10467,13 @@ function renderProjectTasksSection(p) {
         </div>
         ${bulkPanel}
         ${subTotal > 0 ? `<div class="itask-subs">${orderedSubs.map((s,i) => subtaskRow(t, s, i)).join('')}</div>` : ''}
-        ${!t.isMilestone ? `<button class="itask-add-sub" onclick="openSubtaskDialog(${t.id},null)">+ Add day / step</button>` : ''}
+        ${!t.isMilestone && !isFieldCrewLocked() ? `<button class="itask-add-sub" onclick="openSubtaskDialog(${t.id},null)">+ Add day / step</button>` : ''}
       </div>
     `;
   }
 
   // Seeding controls
-  const seedBtn = seedable.length > 0
+  const seedBtn = seedable.length > 0 && !isFieldCrewLocked()
     ? `<button class="btn btn-sm" style="font-size:11px;padding:6px 12px;background:#0D1F3D;border-color:#1565C0;color:#58A6FF" onclick="_seedTasksFromScope(${p.id},false)">Seed ${seedable.length} from scope</button>`
     : '';
   const reseedBtn = ''; // Re-seed moved inside per-task Edit mode (admin-only)
@@ -10475,7 +10484,7 @@ function renderProjectTasksSection(p) {
         <div style="font-size:11px;font-weight:600;color:#6E7681;text-transform:uppercase;letter-spacing:0.08em">Install Tasks</div>
         <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap">
           ${seedBtn}${reseedBtn}
-          <button class="btn btn-sm" style="font-size:11px;padding:6px 12px" onclick="openTaskDialog(${p.id},null)">+ Add Task</button>
+          ${isFieldCrewLocked() ? '' : `<button class="btn btn-sm" style="font-size:11px;padding:6px 12px" onclick="openTaskDialog(${p.id},null)">+ Add Task</button>`}
         </div>
       </div>
       ${tasks.length === 0
@@ -10619,7 +10628,7 @@ function renderProjectDesignTasksSection(p) {
     const editBtnStyle = isEditing
       ? 'background:#0D1F0D;border-color:#3FB950;color:#3FB950'
       : 'background:#161B22;border-color:#30363D;color:#C9D1D9';
-    const editBtn = `<button class="itask-editbtn" style="${editBtnStyle}" onclick="event.stopPropagation();_toggleTaskEditMode(${t.id})">${editBtnLabel}</button>`;
+    const editBtn = isFieldCrewLocked() ? '' : `<button class="itask-editbtn" style="${editBtnStyle}" onclick="event.stopPropagation();_toggleTaskEditMode(${t.id})">${editBtnLabel}</button>`;
     const showReseed = isEditing && isDesignAdmin && t.templateKey && hasAnyTemplate;
     const reseedBtn = showReseed
       ? `<button class="itask-reseedbtn" onclick="event.stopPropagation();if(confirm('Re-seed will delete all template-seeded design tasks on this project (manual tasks preserved) and reseed from current templates. Continue?'))_seedDesignTasksFromScope(${p.id},true)">Re-seed</button>`
@@ -10660,12 +10669,12 @@ function renderProjectDesignTasksSection(p) {
         </div>
         ${bulkPanel}
         ${subTotal > 0 ? `<div class="itask-subs">${orderedSubs.map((s,i) => subtaskRow(t, s, i)).join('')}</div>` : ''}
-        ${!t.isMilestone ? `<button class="itask-add-sub" onclick="openSubtaskDialog(${t.id},null)">+ Add day / step</button>` : ''}
+        ${!t.isMilestone && !isFieldCrewLocked() ? `<button class="itask-add-sub" onclick="openSubtaskDialog(${t.id},null)">+ Add day / step</button>` : ''}
       </div>
     `;
   }
 
-  const seedBtn = seedable.length > 0
+  const seedBtn = seedable.length > 0 && !isFieldCrewLocked()
     ? `<button class="btn btn-sm" style="font-size:11px;padding:6px 12px;background:#0D1F3D;border-color:#1565C0;color:#58A6FF" onclick="_seedDesignTasksFromScope(${p.id},false)">Seed ${seedable.length} from scope</button>`
     : '';
 
@@ -10675,7 +10684,7 @@ function renderProjectDesignTasksSection(p) {
         <div style="font-size:11px;font-weight:600;color:#6E7681;text-transform:uppercase;letter-spacing:0.08em">Design Tasks</div>
         <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap">
           ${seedBtn}
-          <button class="btn btn-sm" style="font-size:11px;padding:6px 12px" onclick="openTaskDialog(${p.id},null,'design')">+ Add Task</button>
+          ${isFieldCrewLocked() ? '' : `<button class="btn btn-sm" style="font-size:11px;padding:6px 12px" onclick="openTaskDialog(${p.id},null,'design')">+ Add Task</button>`}
         </div>
       </div>
       ${tasks.length === 0
@@ -12027,7 +12036,7 @@ function renderProjectProgressHTML(p) {
               const action = getMilestoneAction(phase.key, milestone.key);
               return `
                 <div class="milestone-row ${mDone ? 'done' : ''} ${!mUnlocked ? 'locked' : ''}" data-project-anchor="milestone_${phase.key}_${milestone.key}">
-                  <div class="milestone-check ${mDone ? 'checked' : ''}" onclick="${mUnlocked && !isLinked ? `toggleMilestone(${p.id}, '${phase.key}', '${milestone.key}')` : ''}">
+                  <div class="milestone-check ${mDone ? 'checked' : ''}" onclick="${mUnlocked && !isLinked && !isFieldCrewLocked() ? `toggleMilestone(${p.id}, '${phase.key}', '${milestone.key}')` : ''}">
                     ${mDone ? '<svg width="11" height="11" viewBox="0 0 11 11" fill="none"><path d="M2 5.5l2.5 2.5L9 3" stroke="#fff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>' : ''}
                   </div>
                   <div class="milestone-body">
@@ -12045,7 +12054,7 @@ function renderProjectProgressHTML(p) {
                       ${renderProgressLinkedTasks(p, milestone.linkedChecklist, phase.color)}
                     ` : ''}
                   </div>
-                  ${action && mUnlocked ? (() => {
+                  ${action && mUnlocked && !isFieldCrewLocked() ? (() => {
                     // For meeting actions, swap the label when one is already booked
                     let actionLabel = action.label;
                     if ((action.type === 'meeting' || action.type === 'meeting_then_email') && action.meetingType) {
@@ -20612,7 +20621,7 @@ function renderAssetAllocationTab(container, p) {
     <div class="dashboard-card" style="margin-bottom:14px">
       <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:8px">
         <div class="dashboard-card-title" style="margin-bottom:0">Asset Allocation</div>
-        <button class="btn btn-sm" onclick="openAssetPicker(${p.id})">+ Allocate asset</button>
+        ${isFieldCrewLocked() ? '' : `<button class="btn btn-sm" onclick="openAssetPicker(${p.id})">+ Allocate asset</button>`}
       </div>
       <div style="font-size:12px;color:#8B949E">Install window: <span style="color:#C9D1D9">${winLabel}</span>. Assets default to the whole job \u2014 narrow the on-site dates below only if one's needed just part of the time. Link a trailer to a truck so they share one drive task.</div>
     </div>
@@ -20631,7 +20640,9 @@ function _renderAllocationRow(a) {
     </div>` : '';
   const dateField = (label, field, val) => `
     <label style="display:flex;flex-direction:column;gap:2px;font-size:10px;color:#8B949E">${label}
-      <input type="date" value="${val || ''}" class="form-input" style="font-size:12px;padding:4px 6px" onchange="updateAllocation('${a.id}',{${field}:this.value||null})">
+      ${isFieldCrewLocked()
+        ? `<div class="form-input" style="font-size:12px;padding:4px 6px;color:#C9D1D9">${val ? esc(fmtDateLocal(val)) : '—'}</div>`
+        : `<input type="date" value="${val || ''}" class="form-input" style="font-size:12px;padding:4px 6px" onchange="updateAllocation('${a.id}',{${field}:this.value||null})">`}
     </label>`;
   // Trailers can be towed by an allocated truck (shared drive task) or left unlinked (own drive task).
   let towedHTML = '';
@@ -20643,7 +20654,7 @@ function _renderAllocationRow(a) {
       .concat([`<option value="personal" ${selVal === 'personal' ? 'selected' : ''}>Own / personal truck (separate drive task)</option>`]);
     towedHTML = `
       <label style="display:flex;flex-direction:column;gap:2px;font-size:10px;color:#8B949E;margin-top:8px">Towing
-        <select class="form-input" style="font-size:12px;padding:4px 6px" onchange="updateAllocation('${a.id}',{towedBy:this.value})">${opts.join('')}</select>
+        <select class="form-input" style="font-size:12px;padding:4px 6px" ${isFieldCrewLocked() ? 'disabled' : ''} onchange="updateAllocation('${a.id}',{towedBy:this.value})">${opts.join('')}</select>
       </label>`;
   }
   return `
@@ -20651,7 +20662,7 @@ function _renderAllocationRow(a) {
       <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px">
         <span style="font-size:10px;font-weight:600;color:#6E7681;text-transform:uppercase;letter-spacing:.05em">${esc(typeLabel)}</span>
         <span style="flex:1;font-size:14px;font-weight:600;color:#E6EDF3">${esc(name)}</span>
-        <span style="cursor:pointer;color:#6E7681;font-size:16px;padding:0 4px" title="Remove" onclick="removeAllocation('${a.id}')">\u00D7</span>
+        ${isFieldCrewLocked() ? '' : `<span style="cursor:pointer;color:#6E7681;font-size:16px;padding:0 4px" title="Remove" onclick="removeAllocation('${a.id}')">\u00D7</span>`}
       </div>
       <div style="display:grid;grid-template-columns:repeat(2,1fr);gap:8px">
         ${dateField('On-site start', 'start', a.start)}
@@ -20939,7 +20950,9 @@ function renderLogisticsCard(p) {
 
   const dateInput = (label, field) => `
     <label style="display:flex;flex-direction:column;gap:2px;font-size:10px;color:#8B949E">${label}
-      <input type="date" value="${dates[field] || ''}" class="form-input" style="font-size:12px;padding:4px 6px" onchange="setLogisticsDate(${p.id},'${field}',this.value||null)">
+      ${isFieldCrewLocked()
+        ? `<div class="form-input" style="font-size:12px;padding:4px 6px;color:#C9D1D9">${dates[field] ? esc(fmtDateLocal(dates[field])) : '—'}</div>`
+        : `<input type="date" value="${dates[field] || ''}" class="form-input" style="font-size:12px;padding:4px 6px" onchange="setLogisticsDate(${p.id},'${field}',this.value||null)">`}
     </label>`;
 
   const taskRow = (key, title, dateStr, extra) => {
@@ -20948,7 +20961,7 @@ function renderLogisticsCard(p) {
     return `
       <div class="itask-sub${done ? ' is-done' : ''}">
         <span class="itask-check" onclick="event.stopPropagation();toggleLogisticsDone(${p.id},'${key}')">${done ? '✓' : ''}</span>
-        <div class="itask-sub-body" onclick="openLogisticsAssignPicker(${p.id},'${key}')">
+        <div class="itask-sub-body"${isFieldCrewLocked() ? '' : ` onclick="openLogisticsAssignPicker(${p.id},'${key}')"`}>
           <div class="itask-sub-title">${esc(title)}</div>
           <div class="itask-sub-meta">
             ${dateStr ? esc(fmtDateLocal(dateStr)) : '<span class="itask-nodate">No date</span>'}${it.time ? ' · ' + esc(_fmtTime12(it.time)) : ''}
