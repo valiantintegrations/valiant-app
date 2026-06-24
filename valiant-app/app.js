@@ -245,14 +245,6 @@ const DEFAULT_BUNDLES = {
       'design.view'
     ]
   },
-  'contractor': {
-    label: 'Contractor',
-    desc: 'Outside contractor. Maximally restricted login: sees ONLY their assigned work — job location, today/this-week tasks, and job drawings. No project lookup, calendar, or other company data.',
-    color: '#D2A8FF',
-    permissions: [
-      'install.view'
-    ]
-  },
   'warehouse': {
     label: 'Warehouse',
     desc: 'Receive equipment, manage inventory, no financials',
@@ -323,27 +315,6 @@ function getActiveUserBundle() {
   if (!key) return null;
   return state.bundles[key] || null;
 }
-// Contractor = the maximally restricted login. True only for a REAL contractor
-// account — never for Master Admin or the Admin sandbox — so role-switching to a
-// contractor test member exercises the genuine lockdown.
-function isContractorUser() {
-  if (typeof isAdminSandbox === 'function' && isAdminSandbox()) return false;
-  if (typeof currentUserHasPermission === 'function' && currentUserHasPermission('admin.system')) return false;
-  const m = (typeof getTeamMember === 'function') ? getTeamMember(getActiveTeamMemberId()) : null;
-  if (m && m.contractor) return true;
-  return getActiveUserBundleKey() === 'contractor';
-}
-// Field crew (installers / install assistants) get a view + check-off
-// experience: they can tick tasks and prep items done, but cannot edit
-// structure — progress milestones, scope tags, design-task creation, install
-// logistics, or asset allocation. Master Admin is always exempt.
-function isFieldCrewLocked() {
-  if (typeof currentUserHasPermission === 'function' && currentUserHasPermission('admin.system')) return false;
-  const k = getActiveUserBundleKey();
-  return k === 'installer' || k === 'install_assistant';
-}
-// The only pages a contractor may reach. Everything else bounces to dashboard.
-const CONTRACTOR_ALLOWED_PAGES = ['dashboard', 'settings'];
 
 function setUserBundle(memberId, bundleKey) {
   if (!state.userPermissions[memberId]) state.userPermissions[memberId] = {};
@@ -1481,7 +1452,7 @@ function _migrateRoles() {
   if (!state.bundles) state.bundles = {};
 
   // Ensure new bundles exist by copying from DEFAULT_BUNDLES when missing
-  ['system_architect','project_coordinator','install_assistant','contractor','install_admin','design_admin'].forEach(k => {
+  ['system_architect','project_coordinator','install_assistant','install_admin','design_admin'].forEach(k => {
     if (!state.bundles[k]) {
       state.bundles[k] = JSON.parse(JSON.stringify(DEFAULT_BUNDLES[k]));
       changed = true;
@@ -1809,7 +1780,7 @@ function toggleInstallTaskDone(taskId) {
   _syncTasksNow('install');
 }
 
-function addInstallSubtask(taskId, { title, date, assigneeIds, notes, photoRequired, time, deadline }) {
+function addInstallSubtask(taskId, { title, date, assigneeIds, notes, photoRequired, time }) {
   const t = getInstallTaskById(taskId);
   if (!t) return;
   if (!t.subtasks) t.subtasks = [];
@@ -1819,7 +1790,6 @@ function addInstallSubtask(taskId, { title, date, assigneeIds, notes, photoRequi
     title: title || 'Subtask',
     date: date || null,
     time: time || null,
-    deadline: deadline || null,
     assigneeIds: ids,
     notes: notes || '',
     photoRequired: !!photoRequired,
@@ -1920,7 +1890,7 @@ function toggleDesignTaskDone(taskId) {
   _syncTasksNow('design');
 }
 
-function addDesignSubtask(taskId, { title, date, assigneeIds, notes, photoRequired, time, deadline }) {
+function addDesignSubtask(taskId, { title, date, assigneeIds, notes, photoRequired, time }) {
   const t = getDesignTaskById(taskId);
   if (!t) return;
   if (!t.subtasks) t.subtasks = [];
@@ -1930,7 +1900,6 @@ function addDesignSubtask(taskId, { title, date, assigneeIds, notes, photoRequir
     title: title || 'Subtask',
     date: date || null,
     time: time || null,
-    deadline: deadline || null,
     assigneeIds: ids,
     notes: notes || '',
     photoRequired: !!photoRequired,
@@ -3445,9 +3414,6 @@ function toggleMoreMenu() {
 
 // ── Navigation ──
 function navigate(page) {
-  if (typeof isContractorUser === 'function' && isContractorUser() && !CONTRACTOR_ALLOWED_PAGES.includes(page)) {
-    page = 'dashboard';
-  }
   state.currentPage = page;
   state.currentProject = null;
   // Home/Dashboard nav exits the Notepad sub-view (the in-page "Dashboard" pill
@@ -3623,10 +3589,6 @@ function renderCurrentPage() {
 // ── Project Page Navigation ──
 // v1.16: project detail is a full page, not a modal
 function openProject(id, tabOrAnchor, anchor) {
-  if (typeof isContractorUser === 'function' && isContractorUser()) {
-    if (typeof showToast === 'function') showToast('Contractors can only see their assigned work', 'info');
-    return;
-  }
   const p = state.projects.find(x => x.id === id);
   if (!p) return;
   // Cleanup any lingering calendar hover tooltip — fixed-position element
@@ -3640,7 +3602,7 @@ function openProject(id, tabOrAnchor, anchor) {
   }
   state.currentProject = p;
   // If second arg looks like a known tab, use it as the tab. Otherwise treat as anchor on default tab.
-  const KNOWN_TABS = ['overview','progress','details','design','install','schedule','assets','location','files','notes'];
+  const KNOWN_TABS = ['overview','progress','details','design','install','assets','location','files','notes'];
   let tab = getDefaultProjectTab();
   let anchorKey = null;
   if (tabOrAnchor && KNOWN_TABS.includes(tabOrAnchor)) {
@@ -5979,170 +5941,11 @@ function quickAddTask() {
   if (typeof showToast === 'function') showToast('Task added to ' + (proj ? proj.name : 'project') + (phase === 'design' ? ' · Design' : ' · Install'), 'success');
   updateRightPanel();
 }
-// ── Contractor Dashboard ──
-// Maximally restricted view for outside contractors. Shows ONLY the work this
-// person is assigned to (via install-subtask assignment): today's tasks, this
-// week's tasks, the job location(s), and the drawings for those jobs. No project
-// lookup, calendar, or other data — nav is locked in navigate()/openProject()/
-// refreshAdminNav().
-function _conToggleTask(taskId, subId) {
-  const t = (state.installTasks || []).find(x => String(x.id) === String(taskId));
-  if (!t) return;
-  const s = (t.subtasks || []).find(x => String(x.id) === String(subId));
-  if (!s) return;
-  if (typeof _applyDone === 'function') _applyDone(s); else s.done = !s.done;
-  if (typeof _syncTasksNow === 'function') _syncTasksNow('install');
-  else if (typeof save === 'function') save('vi_install_tasks', state.installTasks);
-  if (typeof renderCurrentPage === 'function') renderCurrentPage();
-}
-
-function renderContractorDashboard(memberId, activeMember) {
-  const firstName = activeMember ? ((activeMember.name || '').split(' ')[0]) : '';
-  const ymd = (d) => (typeof _ymd === 'function') ? _ymd(d) : `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
-  const dayLabel = (s) => { if (!s) return 'No date'; const [y,m,dd] = s.split('-').map(Number); const dt = new Date(y, (m||1)-1, dd||1); return dt.toLocaleDateString(undefined, { weekday:'short', month:'short', day:'numeric' }); };
-  const todayStr = ymd(new Date());
-  const we = new Date(); we.setDate(we.getDate() + 6);
-  const weekEndStr = ymd(we);
-
-  // Every install subtask assigned to this contractor.
-  const mine = [];
-  (state.installTasks || []).forEach(t => {
-    (t.subtasks || []).forEach(s => {
-      if ((s.assigneeIds || []).map(String).includes(String(memberId))) {
-        const project = state.projects.find(p => p.id === t.projectId) || null;
-        mine.push({ project, task: t, subtask: s, date: s.date || '' });
-      }
-    });
-  });
-
-  const todayItems = mine.filter(x => x.date === todayStr);
-  const weekItems = mine.filter(x => x.date && x.date > todayStr && x.date <= weekEndStr)
-                        .sort((a,b) => a.date.localeCompare(b.date));
-
-  // Distinct projects this contractor is on.
-  const projIds = [...new Set(mine.map(x => x.project && x.project.id).filter(v => v != null))];
-  const projects = projIds.map(id => state.projects.find(p => p.id === id)).filter(Boolean);
-
-  const taskLine = (x) => {
-    const pname = x.project ? esc(x.project.name) : 'Job';
-    const done = !!x.subtask.done;
-    return `<div class="con-task${done ? ' con-done' : ''}">
-      <span class="con-check${done ? ' on' : ''}" onclick="event.stopPropagation();_conToggleTask('${x.task.id}','${x.subtask.id}')">${done ? '\u2713' : ''}</span>
-      <div class="con-task-body">
-        <div class="con-task-title">${esc(x.subtask.title || x.task.title || 'Task')}</div>
-        <div class="con-task-sub">${pname}${x.subtask.notes ? ' \u00B7 ' + esc(x.subtask.notes) : ''}</div>
-      </div>
-    </div>`;
-  };
-
-  const todayHtml = todayItems.length ? todayItems.map(taskLine).join('')
-    : `<div class="con-empty">Nothing scheduled today.</div>`;
-
-  let weekHtml;
-  if (weekItems.length) {
-    const byDay = {};
-    weekItems.forEach(x => { (byDay[x.date] = byDay[x.date] || []).push(x); });
-    weekHtml = Object.keys(byDay).sort().map(d =>
-      `<div class="con-day"><div class="con-day-h">${dayLabel(d)}</div>${byDay[d].map(taskLine).join('')}</div>`
-    ).join('');
-  } else {
-    weekHtml = `<div class="con-empty">Nothing else scheduled this week.</div>`;
-  }
-
-  let locHtml;
-  if (projects.length) {
-    locHtml = projects.map(p => {
-      const addr = p.address || [p.city, p.state].filter(Boolean).join(', ') || '';
-      const color = getProjectColor(p.id);
-      const dir = addr ? `https://www.google.com/maps/dir/?api=1&destination=${encodeURIComponent(addr)}` : '';
-      return `<div class="con-loc">
-        <div class="con-loc-h"><span class="con-dot" style="background:${color}"></span>${esc(p.name)}</div>
-        <div class="con-loc-addr">${addr ? esc(addr) : 'Address not set'}</div>
-        ${dir ? `<a class="con-link" href="${dir}" target="_blank" rel="noopener">Get directions →</a>` : ''}
-      </div>`;
-    }).join('');
-  } else {
-    locHtml = `<div class="con-empty">No assigned jobs yet.</div>`;
-  }
-
-  let fileHtml = '', anyFiles = false;
-  projects.forEach(p => {
-    const fb = (state.projectFiles && state.projectFiles[p.id]) || {};
-    const drawings = fb.drawings || [];
-    if (!drawings.length) return;
-    anyFiles = true;
-    fileHtml += `<div class="con-file-group"><div class="con-file-proj">${esc(p.name)}</div>` +
-      drawings.map(f => {
-        const name = esc(f.name || f.title || 'Drawing');
-        const url = f.url || f.link || f.href || f.driveUrl || '';
-        return `<div class="con-file"><span class="con-file-ic">▤</span><span class="con-file-name">${name}</span>${url ? `<a class="con-link" href="${esc(url)}" target="_blank" rel="noopener">Open</a>` : '<span class="con-file-na">—</span>'}</div>`;
-      }).join('') + `</div>`;
-  });
-  if (!anyFiles) fileHtml = `<div class="con-empty">No drawings posted yet.</div>`;
-
-  const style = `<style>
-    .con-wrap{max-width:560px;margin:0 auto}
-    .con-banner{display:flex;gap:9px;align-items:flex-start;background:#1C160B;border:1px solid #5A4612;border-radius:10px;padding:10px 12px;margin-bottom:14px;color:#E3C77A;font-size:12px;line-height:1.45}
-    .con-banner b{color:#F0CE7E}
-    .con-head{display:flex;align-items:center;justify-content:space-between;margin:2px 2px 12px}
-    .con-head .nm{font-size:18px;font-weight:600;color:#E6EDF3}
-    .con-pill{font-size:11px;font-weight:600;padding:3px 10px;border-radius:999px;color:#D2A8FF;border:1px solid #3B2D55;background:#1B1430}
-    .con-sec{font-size:11px;letter-spacing:.12em;text-transform:uppercase;color:#8B949E;font-weight:600;margin:18px 2px 8px}
-    .con-card{background:#161B22;border:1px solid #30363D;border-radius:12px;padding:12px;margin-bottom:10px}
-    .con-task{display:flex;gap:10px;align-items:flex-start;padding:8px 2px;border-bottom:1px solid #21262D}
-    .con-task:last-child{border-bottom:0}
-    .con-check{width:22px;height:22px;border-radius:6px;border:1.5px solid #6E7681;flex:0 0 auto;margin-top:1px;display:inline-grid;place-items:center;font-size:13px;color:#fff;cursor:pointer;user-select:none;background:transparent}
-    .con-check.on{background:#238636;border-color:#2EA043}
-    .con-done .con-task-title{text-decoration:line-through;color:#6E7681}
-    .con-done .con-task-sub{color:#586069}
-    .con-dot{width:9px;height:9px;border-radius:50%;flex:0 0 auto;margin-top:5px}
-    .con-task-title{font-size:14px;color:#E6EDF3;font-weight:500}
-    .con-task-sub{font-size:12px;color:#8B949E;margin-top:1px}
-    .con-day{margin-bottom:6px}
-    .con-day-h{font-size:12px;font-weight:600;color:#58A6FF;margin:6px 2px 2px}
-    .con-loc{padding:9px 2px;border-bottom:1px solid #21262D}
-    .con-loc:last-child{border-bottom:0}
-    .con-loc-h{display:flex;align-items:center;gap:8px;font-size:14px;font-weight:600;color:#E6EDF3}
-    .con-loc-addr{font-size:12px;color:#8B949E;margin:3px 0 5px 17px}
-    .con-link{font-size:12px;color:#58A6FF;text-decoration:none;font-weight:600;margin-left:17px}
-    .con-file-group{margin-bottom:8px}
-    .con-file-proj{font-size:12px;font-weight:600;color:#8B949E;margin:4px 2px}
-    .con-file{display:flex;align-items:center;gap:9px;padding:7px 2px;border-bottom:1px solid #21262D}
-    .con-file:last-child{border-bottom:0}
-    .con-file-ic{width:24px;height:24px;border-radius:6px;background:#21314A;color:#9CC2FF;display:inline-grid;place-items:center;font-size:13px;flex:0 0 auto}
-    .con-file-name{flex:1;font-size:13px;color:#E6EDF3}
-    .con-file .con-link{margin-left:0}
-    .con-file-na{color:#6E7681;font-size:12px}
-    .con-empty{color:#8B949E;font-size:13px;padding:10px 4px}
-    .con-note{font-size:11px;color:#6E7681;margin:14px 2px 0;line-height:1.5}
-  </style>`;
-
-  return `${style}<div class="con-wrap">
-    <div class="con-head"><span class="nm">My Work${firstName ? ' — ' + esc(firstName) : ''}</span><span class="con-pill">Contractor</span></div>
-    ${_logiTodayAlertHTML(memberId)}
-    <div class="con-sec">Today</div>
-    <div class="con-card">${todayHtml}</div>
-    <div class="con-sec">This week</div>
-    <div class="con-card">${weekHtml}</div>
-    <div class="con-sec">Location</div>
-    <div class="con-card">${locHtml}</div>
-    <div class="con-sec">Job drawings</div>
-    <div class="con-card">${fileHtml}</div>
-  </div>`;
-}
-
 // ── Dashboard ──
 function renderDashboard(c) {
   const activeMember = getTeamMember(getActiveTeamMemberId());
   const memberId = activeMember?.id;
   document.getElementById('page-title').textContent = 'Dashboard';
-
-  // Contractor login: a single locked dashboard — no tab strip, no other modes,
-  // no way to switch views. Everything they're allowed to see lives here.
-  if (typeof isContractorUser === 'function' && isContractorUser()) {
-    c.innerHTML = renderContractorDashboard(memberId, activeMember);
-    return;
-  }
 
   const canSeeAllProjects = currentUserHasPermission('projects.view_all');
   const isMasterAdmin = currentUserHasPermission('admin.system');
@@ -7783,79 +7586,6 @@ function renderMyWorkNotepad(memberId) {
   `;
 }
 
-// Morning alert: logistics tasks (esp. truck drives) assigned to this person
-// for today or tomorrow. Reads the existing per-rig drive tasks + load/prep/etc.
-// from getLogisticsCalItems so the assignment finally surfaces on the dashboard.
-// Returns '' when there's nothing.
-function _logiTodayAlertHTML(memberId) {
-  if (memberId == null) return '';
-  const today = _ymd(new Date());
-  const td = new Date(); td.setDate(td.getDate() + 1);
-  const tmrw = _ymd(td);
-  const isDrive = it => /drive/i.test(it.key || '') || /drive/i.test(it.title || '');
-  const t12 = hm => { if (!hm) return ''; let [h, m] = hm.split(':').map(Number); const ap = h >= 12 ? 'PM' : 'AM'; h = h % 12 || 12; return `${h}:${String(m).padStart(2, '0')} ${ap}`; };
-  const mine = [];
-  (state.projects || []).filter(p => !p.archived).forEach(p => {
-    let items = [];
-    try { items = getLogisticsCalItems(p) || []; } catch (e) { items = []; }
-    items.forEach(it => {
-      if (!it.date || (it.date !== today && it.date !== tmrw)) return;
-      if (!(it.assigneeIds || []).map(String).includes(String(memberId))) return;
-      mine.push({ project: p, item: it, when: it.date === today ? 'today' : 'tomorrow' });
-    });
-  });
-  if (!mine.length) return '';
-  mine.sort((a, b) => (a.when !== b.when) ? (a.when === 'today' ? -1 : 1) : (isDrive(b.item) - isDrive(a.item)));
-  const anyDrive = mine.some(x => isDrive(x.item));
-  const subMin = (hm, mins) => { if (!hm) return ''; let [h, m] = hm.split(':').map(Number); let t = h * 60 + m - mins; if (t < 0) t = 0; return `${String(Math.floor(t / 60)).padStart(2, '0')}:${String(t % 60).padStart(2, '0')}`; };
-  const whenTagOf = w => w === 'today'
-    ? '<span style="font-size:10px;font-weight:700;color:#F0883E">TODAY</span>'
-    : '<span style="font-size:10px;font-weight:700;color:#D29922">TOMORROW</span>';
-  const rows = mine.map(x => {
-    const whenTag = whenTagOf(x.when);
-    const addr = (x.project.address || [x.project.city, x.project.state].filter(Boolean).join(', ') || '').trim();
-    if (isDrive(x.item)) {
-      // Title carries the rig, e.g. "Drive to job — F-350 + Trailer". Split truck vs trailer(s).
-      const rig = (x.item.title || '').replace(/^Drive\s+(to job|back)\s*[\u2014-]\s*/i, '').trim() || 'the vehicle';
-      const parts = rig.split(/\s*\+\s*/).filter(Boolean);
-      const truck = parts[0] || 'the vehicle';
-      const trailers = parts.slice(1).join(' + ');
-      const towing = !!trailers;
-      const baseT = x.item.time || '';
-      // Lead time = trailer hookup (~30 min if towing) + a traffic buffer (~30 min).
-      const buffer = (towing ? 30 : 0) + 30;
-      const leaveBy = baseT ? subMin(baseT, buffer) : '';
-      const driveTime = baseT ? ' \u00B7 ' + t12(baseT) : '';
-      const grab = towing ? `Hook up ${esc(trailers)} \u00B7 ` : '';
-      const lead = leaveBy ? `leave by ~${t12(leaveBy)} (hook up + traffic)` : 'leave early \u2014 hook up + traffic';
-      return `<div onclick="openProject(${x.project.id},'install')" style="display:flex;align-items:flex-start;gap:11px;padding:11px 12px;background:#0D1117;border:1px solid #5A3A1A;border-radius:9px;cursor:pointer;margin-top:8px">
-        <span style="font-size:22px;flex:0 0 auto">\u{1F69A}</span>
-        <div style="flex:1;min-width:0">
-          <div style="font-size:14px;font-weight:700;color:#E6EDF3">You're driving: ${esc(truck)}${driveTime}</div>
-          <div style="font-size:12px;color:#8B949E;margin-top:1px">${esc(x.project.name)}${addr ? ' \u00B7 ' + esc(addr) : ''}</div>
-          <div style="font-size:11.5px;color:#F0B24A;margin-top:5px">\u23F1 ${grab}${lead}</div>
-        </div>${whenTag}
-      </div>`;
-    }
-    const time = x.item.time ? ' \u00B7 ' + t12(x.item.time) : '';
-    return `<div onclick="openProject(${x.project.id},'install')" style="display:flex;align-items:center;gap:11px;padding:11px 12px;background:#0D1117;border:1px solid #1C2333;border-radius:9px;cursor:pointer;margin-top:8px">
-      <span style="font-size:22px;flex:0 0 auto">\u{1F4E6}</span>
-      <div style="flex:1;min-width:0">
-        <div style="font-size:14px;font-weight:700;color:#E6EDF3">${esc(x.item.title)}${time}</div>
-        <div style="font-size:12px;color:#8B949E;margin-top:1px">${esc(x.project.name)}${addr ? ' \u00B7 ' + esc(addr) : ''}</div>
-      </div>${whenTag}
-    </div>`;
-  }).join('');
-  const headColor = anyDrive ? '#F0883E' : '#D29922';
-  const headIcon = anyDrive ? '\u{1F69A}' : '\u{1F4CB}';
-  const headText = anyDrive ? "You're driving" : 'On-site logistics';
-  return `<div class="dashboard-card" style="margin-bottom:16px;border-left:3px solid ${headColor};background:${anyDrive ? '#1F1408' : '#161B22'}">
-    <div class="dashboard-card-title"><span style="color:${headColor};display:flex;align-items:center;gap:6px">${headIcon} ${headText} \u2014 today &amp; tomorrow</span></div>
-    <div style="font-size:12px;color:#8B949E">${anyDrive ? "You're driving \u2014 leave time to hook up and beat traffic. Tap for the job." : 'Transport / logistics assigned to you.'}</div>
-    ${rows}
-  </div>`;
-}
-
 function renderMyWorkDashboard(memberId, activeProjects, myAssignments, activeMember) {
   const totalAssigned = Object.values(myAssignments).reduce((n, arr) => n + arr.length, 0);
   const myCloseoutProjects = getMyCloseoutProjects(memberId);
@@ -7944,7 +7674,6 @@ function renderMyWorkDashboard(memberId, activeProjects, myAssignments, activeMe
 
   return `
     ${closeoutBanner}
-    ${_logiTodayAlertHTML(memberId)}
     <div class="mywork-toolbar" style="display:flex;align-items:center;justify-content:space-between;gap:8px">
       <div>${renderMyWorkLayoutToggle()}</div>
       <div style="display:flex;align-items:center;gap:8px">${renderMyWorkCustomizeButton()}</div>
@@ -9040,401 +8769,6 @@ function stagePillHTML(p, extraStyle) {
   return `<span class="status-pill status-${d.stg.color}"${xs ? ` style="${xs}"` : ''}>${esc(d.stg.label)}</span>`;
 }
 
-// ════════════════════════════════════════════════════════════════════════════
-// PROJECT SCHEDULE TAB (Drop B-Sched)
-// ────────────────────────────────────────────────────────────────────────────
-// Per-project logistics tab, filled in after install dates are booked. Holds:
-//   • the day schedule (load-in / go-home / hard-out / long-day per booked day),
-//   • a who's-on grid (presence derived from install-task assignment, with a
-//     presence-only manual override — never holds time),
-//   • a Logistics group with individually-timed Sign-off and Commissioning /
-//     Training entries,
-//   • a client "what to expect" sheet preview.
-// Computed value for the crew = arrival (earliest task start that day, else the
-// day's load-in). Deadlines never feed arrival. Stored per-project at
-// vi_project_schedule_<pid> (per-record key — no single-blob clobber).
-// ════════════════════════════════════════════════════════════════════════════
-function _psKey(pid) { return 'vi_project_schedule_' + pid; }
-function _psLoad(pid) {
-  try { const raw = localStorage.getItem(_psKey(pid)); if (raw) { const o = JSON.parse(raw); o.days = o.days || {}; o.presence = o.presence || {}; o.logistics = o.logistics || {}; o.overrideRefs = o.overrideRefs || {}; return o; } } catch (e) {}
-  return { days: {}, presence: {}, overrideRefs: {}, logistics: { signoff: { date: '', time: '', notes: '' }, commissioning: { date: '', time: '', notes: '' } } };
-}
-function _psSave(pid, sched) { save(_psKey(pid), sched); }
-function _psBookedDays(p) {
-  const b = getBookedTimeline(p.id);
-  if (!b || !b.start) return [];
-  const start = _parseLocalYmd(b.start), end = _parseLocalYmd(b.end || b.start);
-  const exW = b.excludeWeekends !== false;
-  const inc = new Set(b.weekendIncludes || []);
-  const out = [];
-  for (let d = new Date(start); d <= end; d.setDate(d.getDate() + 1)) {
-    const ymd = _ymd(d), dow = d.getDay();
-    if ((dow === 0 || dow === 6) && exW && !inc.has(ymd)) continue;
-    out.push(ymd);
-  }
-  return out;
-}
-function _psCrew(p) {
-  const ids = new Set();
-  const a = getProjectAssignment(p.id);
-  (a.install || []).forEach(x => ids.add(x.id));
-  (state.installTasks || []).filter(t => t.projectId === p.id)
-    .forEach(t => (t.subtasks || []).forEach(s => (s.assigneeIds || []).forEach(id => ids.add(id))));
-  // Install-page logistics (drive / load / load-out / etc.)
-  try { (getLogisticsCalItems(p) || []).forEach(it => (it.assigneeIds || []).forEach(id => ids.add(id))); } catch (e) {}
-  // Schedule logistics (commissioning / sign-off)
-  const sched = _psLoad(p.id);
-  ['signoff', 'commissioning'].forEach(k => { const o = sched.logistics && sched.logistics[k]; if (o) (o.assigneeIds || []).forEach(id => ids.add(id)); });
-  return [...ids].map(id => getTeamMember(id)).filter(Boolean);
-}
-function _psHasTask(pid, mid, ymd, sched) { return _psAssignmentsOnDay(pid, mid, ymd, sched).present; }
-// Every REAL assignment that puts someone on a day: install subtasks,
-// install-page logistics (drive / load / load-out / prep / unload / de-prep),
-// and schedule logistics (commissioning / sign-off). Manual grid overrides are
-// handled separately. Returns presence + the times found (for arrival).
-function _psAssignmentsOnDay(pid, mid, ymd, sched) {
-  const mids = String(mid);
-  const times = [];
-  let present = false;
-  const sameDay = d => String(d || '').slice(0, 10) === ymd;
-  (state.installTasks || []).filter(t => t.projectId === pid).forEach(t => (t.subtasks || []).forEach(s => {
-    if (sameDay(s.date) && (s.assigneeIds || []).map(String).includes(mids)) { present = true; if (s.time) times.push(s.time); }
-  }));
-  const proj = (state.projects || []).find(p => String(p.id) === String(pid));
-  if (proj) {
-    let litems = [];
-    try { litems = getLogisticsCalItems(proj) || []; } catch (e) {}
-    litems.forEach(it => { if (sameDay(it.date) && (it.assigneeIds || []).map(String).includes(mids)) { present = true; if (it.time) times.push(it.time); } });
-  }
-  const sc = sched || _psLoad(pid);
-  ['signoff', 'commissioning'].forEach(k => {
-    const o = sc.logistics && sc.logistics[k];
-    if (o && sameDay(o.date) && (o.assigneeIds || []).map(String).includes(mids)) { present = true; if (o.time) times.push(o.time); }
-  });
-  return { present, times };
-}
-function _psPresence(sched, pid, mid, ymd) {
-  return _psHasTask(pid, mid, ymd, sched) || (sched.presence[mid + '|' + ymd] === true);
-}
-function _psArrival(sched, pid, mid, ymd) {
-  if (!_psPresence(sched, pid, mid, ymd)) return null;
-  const times = _psAssignmentsOnDay(pid, mid, ymd, sched).times.slice().sort();
-  const day = sched.days[ymd] || {};
-  return times.length ? times[0] : (day.loadIn || '09:00');
-}
-// Edit handlers (re-render the tab body in place).
-function _psSetDay(pid, ymd, field, value) {
-  const s = _psLoad(pid); s.days[ymd] = s.days[ymd] || {};
-  if (field === 'longDay') s.days[ymd][field] = !s.days[ymd][field]; else s.days[ymd][field] = value;
-  _psSave(pid, s); renderProjectTabContent();
-}
-// Override mode is an explicit, opt-in lock: the grid is read-only until the
-// user taps "Override schedule," so a stray tap can never silently change who's
-// on a day. Kept per-project in a window flag (UI state, not persisted).
-function _psToggleGridEdit(pid) {
-  if (!window._psGridEdit) window._psGridEdit = {};
-  window._psGridEdit[pid] = !window._psGridEdit[pid];
-  renderProjectTabContent();
-}
-function _psTogglePresence(pid, mid, ymd) {
-  const s = _psLoad(pid);
-  if (_psHasTask(pid, mid, ymd, s)) {
-    if (typeof showToast === 'function') showToast('They\u2019re on this day via a task or logistics \u2014 change that to take them off', 'info');
-    return;
-  }
-  const key = mid + '|' + ymd;
-  if (s.presence[key] === true) delete s.presence[key]; else s.presence[key] = true;
-  _psSave(pid, s);
-  _psSyncPresenceRecord(pid, mid, ymd);
-  renderProjectTabContent();
-}
-// Make a grid override GLOBAL: when someone is manually added to a day with no
-// task of their own, mirror it into a real on-site meeting so it lands on their
-// calendar + upcoming-meetings widget and notifies them. Removed when they're
-// taken off (or when they pick up a task that surfaces them anyway). Linked via
-// overrideRefs[mid|ymd]. Tasks already surface, so only the manual add needs this.
-function _psSyncPresenceRecord(pid, mid, ymd) {
-  if (!Array.isArray(state.meetings)) state.meetings = [];
-  const s = _psLoad(pid);
-  const refKey = mid + '|' + ymd;
-  const shouldHave = (s.presence[refKey] === true) && !_psHasTask(pid, mid, ymd);
-  const existingId = s.overrideRefs ? s.overrideRefs[refKey] : null;
-  if (!shouldHave) {
-    if (existingId) {
-      state.meetings = state.meetings.filter(m => String(m.id) !== String(existingId));
-      if (typeof _syncMeetingsNow === 'function') _syncMeetingsNow();
-      if (s.overrideRefs) { delete s.overrideRefs[refKey]; _psSave(pid, s); }
-    }
-    return;
-  }
-  const proj = (state.projects || []).find(p => String(p.id) === String(pid));
-  const pname = proj ? proj.name : 'Project';
-  const startTime = (s.days[ymd] && s.days[ymd].loadIn) || '09:00';
-  const endTime = (typeof _hhmmAddMinutes === 'function') ? _hhmmAddMinutes(startTime, 480) : null;
-  let m = existingId ? state.meetings.find(x => String(x.id) === String(existingId)) : null;
-  const isNew = !m;
-  if (isNew) { m = { id: Date.now() + Math.floor(Math.random() * 1000), source: 'schedule_override', createdBy: getActiveTeamMemberId(), createdAt: Date.now() }; state.meetings.push(m); }
-  Object.assign(m, {
-    title: 'On site — ' + pname,
-    date: ymd, time: startTime, duration: 'allday',
-    startTime, endTime, status: 'confirmed', type: 'onsite', projectId: pid,
-    attendees: [mid], notes: 'Added on the schedule to help on site.'
-  });
-  s.overrideRefs[refKey] = m.id;
-  _psSave(pid, s);
-  if (typeof _syncMeetingsNow === 'function') _syncMeetingsNow();
-  if (isNew && typeof _pushNotifyMeeting === 'function') { try { _pushNotifyMeeting(m); } catch (e) {} }
-}
-function _psSetLogistics(pid, key, field, value) {
-  const s = _psLoad(pid); s.logistics[key] = s.logistics[key] || { date: '', time: '', notes: '' };
-  s.logistics[key][field] = value; _psSave(pid, s);
-  _psSyncLogisticsMeeting(pid, key);
-  if (field !== 'notes') renderProjectTabContent();
-}
-function _psSetLogisticsNote(pid, key, value) {
-  const s = _psLoad(pid); s.logistics[key] = s.logistics[key] || { date: '', time: '', notes: '' };
-  s.logistics[key].notes = value; _psSave(pid, s);
-  _psSyncLogisticsMeeting(pid, key);
-}
-// People picker for a logistics milestone (sign-off / commissioning).
-function _psOpenLogiAssign(pid, key) {
-  const s = _psLoad(pid);
-  const o = (s.logistics && s.logistics[key]) || { assigneeIds: [] };
-  const current = new Set((o.assigneeIds || []).map(String));
-  const crew = getProjectAssignment(pid) || {};
-  const crewIds = new Set([...((crew.install || []).map(x => x.id)), ...((crew.pm || []).map(x => x.id))]);
-  const pool = [...(state.team || [])].sort((a, b) => { const ao = crewIds.has(a.id) ? 0 : 1, bo = crewIds.has(b.id) ? 0 : 1; return ao !== bo ? ao - bo : a.name.localeCompare(b.name); });
-  const label = key === 'signoff' ? 'Project sign-off' : 'Commissioning / training';
-  document.getElementById('ps-logi-assign')?.remove();
-  const overlay = document.createElement('div');
-  overlay.id = 'ps-logi-assign'; overlay.className = 'modal-overlay'; overlay.style.zIndex = '10001';
-  overlay.onclick = (e) => { if (e.target === overlay) overlay.remove(); };
-  overlay.innerHTML = `<div class="modal-container" style="max-width:420px;max-height:80vh;display:flex;flex-direction:column">
-    <div class="modal-header"><div class="modal-title">Who's at ${esc(label)}?</div><button class="modal-close" onclick="document.getElementById('ps-logi-assign')?.remove()">&times;</button></div>
-    <div class="modal-body" style="overflow-y:auto"><div class="itask-assignee-pick">
-      ${pool.map(m => `<label class="itask-assignee-chip"><input type="checkbox" class="ps-logi-cb" value="${m.id}" ${current.has(String(m.id)) ? 'checked' : ''}><span>${esc(m.name)}${crewIds.has(m.id) ? '' : ' <span style="font-size:9px;color:#D29922">(not on crew)</span>'}</span></label>`).join('')}
-    </div></div>
-    <div style="padding:12px;border-top:1px solid #1C2333;display:flex;justify-content:flex-end;gap:8px">
-      <button class="btn btn-sm" onclick="document.getElementById('ps-logi-assign')?.remove()">Cancel</button>
-      <button class="btn btn-sm btn-primary" onclick="_psSaveLogiAssign(${pid},'${key}')">Save</button>
-    </div></div>`;
-  document.body.appendChild(overlay);
-}
-function _psSaveLogiAssign(pid, key) {
-  const ids = Array.from(document.querySelectorAll('.ps-logi-cb:checked')).map(cb => parseInt(cb.value, 10)).filter(n => !isNaN(n));
-  const s = _psLoad(pid);
-  s.logistics[key] = s.logistics[key] || { date: '', time: '', notes: '' };
-  s.logistics[key].assigneeIds = ids;
-  _psSave(pid, s);
-  document.getElementById('ps-logi-assign')?.remove();
-  _psSyncLogisticsMeeting(pid, key);
-  renderProjectTabContent();
-}
-// Mirror a logistics milestone into a linked meeting so it surfaces on the
-// calendar + the upcoming-meetings widget + notifies attendees. The schedule
-// tab stays the source of truth; the meeting is kept in sync (created/updated/
-// removed) and linked back via logistics[key].meetingId.
-function _psSyncLogisticsMeeting(pid, key) {
-  if (!Array.isArray(state.meetings)) state.meetings = [];
-  const s = _psLoad(pid);
-  const o = (s.logistics && s.logistics[key]) || null;
-  const existingId = o && o.meetingId;
-  if (!o || !o.date) {
-    if (existingId) {
-      state.meetings = state.meetings.filter(m => String(m.id) !== String(existingId));
-      if (typeof _syncMeetingsNow === 'function') _syncMeetingsNow();
-      if (o) { delete o.meetingId; _psSave(pid, s); }
-    }
-    return;
-  }
-  const proj = (state.projects || []).find(p => String(p.id) === String(pid));
-  const pname = proj ? proj.name : 'Project';
-  const baseTitle = key === 'signoff' ? 'Project sign-off' : 'Commissioning / training';
-  const startTime = o.time || null;
-  const endTime = (startTime && typeof _hhmmAddMinutes === 'function') ? _hhmmAddMinutes(startTime, 60) : null;
-  let m = existingId ? state.meetings.find(x => String(x.id) === String(existingId)) : null;
-  const isNew = !m;
-  if (isNew) { m = { id: Date.now(), source: 'project_schedule', createdBy: getActiveTeamMemberId(), createdAt: Date.now() }; state.meetings.push(m); }
-  Object.assign(m, {
-    title: baseTitle + ' — ' + pname,
-    date: o.date, time: o.time || '', duration: '1hr',
-    startTime, endTime, status: 'confirmed', type: key, projectId: pid,
-    attendees: (o.assigneeIds || []).slice(), notes: o.notes || ''
-  });
-  if (isNew) { o.meetingId = m.id; _psSave(pid, s); }
-  if (typeof _syncMeetingsNow === 'function') _syncMeetingsNow();
-  if (isNew && typeof _pushNotifyMeeting === 'function') { try { _pushNotifyMeeting(m); } catch (e) {} }
-}
-function _psT12(hm) { if (!hm) return ''; let [h, m] = hm.split(':').map(Number); const ap = h >= 12 ? 'PM' : 'AM'; h = h % 12 || 12; return `${h}:${String(m).padStart(2, '0')} ${ap}`; }
-function _psDayLabel(s) { if (!s) return ''; const [y, m, d] = s.split('-').map(Number); const dt = new Date(y, (m || 1) - 1, d || 1); return dt.toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric' }); }
-
-function _psLogisticsHTML(p, sched) {
-  const L = sched.logistics || {};
-  const escA = s => String(s || '').replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;');
-  const item = (key, label, desc) => {
-    const o = L[key] || { date: '', time: '', notes: '', assigneeIds: [] };
-    return `<div class="ps-log">
-      <div class="ps-log-h">${label}</div>
-      <div class="ps-log-d">${desc}</div>
-      <div class="ps-log-row">
-        <div class="ps-fld"><label>Date</label><input type="date" value="${o.date || ''}" onchange="_psSetLogistics(${p.id},'${key}','date',this.value)"></div>
-        <div class="ps-fld"><label>Time</label><input type="time" value="${o.time || ''}" onchange="_psSetLogistics(${p.id},'${key}','time',this.value)"></div>
-      </div>
-      <div class="ps-log-people">
-        <span class="ps-log-ppl">${_logiAssigneeChips(o.assigneeIds)}</span>
-        <button class="ps-log-assign" onclick="_psOpenLogiAssign(${p.id},'${key}')">Assign people</button>
-      </div>
-      <input class="ps-log-note" type="text" placeholder="Notes (optional)" value="${escA(o.notes)}" oninput="_psSetLogisticsNote(${p.id},'${key}',this.value)">
-    </div>`;
-  };
-  return `<div class="ps-sec">Logistics <span class="ps-sec-note">each individually timed</span></div>
-    <div class="ps-card ps-log-group">
-      ${item('signoff', 'Project sign-off', 'Client acceptance / final sign-off.')}
-      ${item('commissioning', 'Commissioning / training', 'System commissioning and client training.')}
-    </div>`;
-}
-
-function renderProjectScheduleTab(p) {
-  const allowed = (typeof sbCanAccess === 'function' && sbCanAccess()) || currentUserHasPermission('admin.system');
-  if (!allowed) return `<div class="dashboard-card"><div style="color:#8B949E;font-size:13px;padding:16px">The project schedule is managed by coordinators and the install manager.</div></div>`;
-
-  const sched = _psLoad(p.id);
-  const days = _psBookedDays(p);
-  const crew = _psCrew(p);
-
-  const style = `<style>
-    .ps-wrap{max-width:760px}
-    .ps-sec{font-size:11px;letter-spacing:.12em;text-transform:uppercase;color:#8B949E;font-weight:600;margin:20px 2px 9px;display:flex;align-items:center;gap:8px}
-    .ps-sec:first-child{margin-top:2px}
-    .ps-sec-note{text-transform:none;letter-spacing:0;color:#6E7681;font-weight:500;font-size:11px}
-    .ps-card{background:#161B22;border:1px solid #30363D;border-radius:12px;padding:12px;margin-bottom:10px}
-    .ps-empty{background:#161B22;border:1px dashed #30363D;border-radius:12px;padding:18px;text-align:center}
-    .ps-empty-h{font-size:14px;font-weight:600;color:#E6EDF3}
-    .ps-empty-b{font-size:12.5px;color:#8B949E;margin-top:6px;line-height:1.5}
-    .ps-day{background:#161B22;border:1px solid #30363D;border-radius:12px;padding:12px;margin-bottom:9px}
-    .ps-day-h{display:flex;align-items:center;justify-content:space-between;margin-bottom:9px}
-    .ps-day-lab{font-size:14px;font-weight:600;color:#E6EDF3}
-    .ps-day-arr{font-size:11px;color:#8B949E}
-    .ps-times{display:grid;grid-template-columns:1fr 1fr;gap:8px}
-    .ps-fld{background:#0D1117;border:1px solid #30363D;border-radius:8px;padding:7px 9px}
-    .ps-fld label{display:block;font-size:9.5px;letter-spacing:.07em;text-transform:uppercase;color:#6E7681;margin-bottom:3px}
-    .ps-fld input{width:100%;background:transparent;border:0;color:#E6EDF3;font-family:inherit;font-size:13.5px;font-weight:600;padding:0}
-    .ps-fld input::-webkit-calendar-picker-indicator{filter:invert(.7)}
-    .ps-tg{display:inline-flex;align-items:center;gap:7px;font-size:12px;color:#8B949E;cursor:pointer}
-    .ps-tg .sw{width:34px;height:19px;border-radius:999px;background:#30363D;position:relative;transition:.15s}
-    .ps-tg .sw::after{content:"";position:absolute;top:2px;left:2px;width:15px;height:15px;border-radius:50%;background:#8B949E;transition:.15s}
-    .ps-tg.on{color:#E6EDF3}.ps-tg.on .sw{background:#1F5A40}.ps-tg.on .sw::after{left:17px;background:#3FB950}
-    .ps-grid{overflow-x:auto}
-    .ps-grid table{border-collapse:collapse;width:100%;font-size:12px}
-    .ps-grid th,.ps-grid td{border:1px solid #21262D;padding:6px 5px;text-align:center}
-    .ps-grid th{color:#8B949E;font-weight:600;font-size:11px;background:#0D1117}
-    .ps-grid td.nm{text-align:left;font-weight:600;white-space:nowrap;color:#E6EDF3}
-    .ps-cell{cursor:pointer;user-select:none;border-radius:6px;min-width:30px;height:24px;display:inline-grid;place-items:center;font-size:13px}
-    .ps-cell.on{background:#143726;color:#3FB950}
-    .ps-cell.task{background:#13243F;color:#9CC2FF}
-    .ps-cell.off{color:#484F5C}
-    .ps-cell.locked{cursor:default}
-    .ps-cell.edit{cursor:pointer;box-shadow:inset 0 0 0 1px #3a4556}
-    .ps-grid-bar{display:flex;align-items:center;gap:8px;margin-bottom:10px}
-    .ps-ovr-btn{font-size:12px;font-weight:600;color:#8B949E;background:transparent;border:1px solid #30363D;border-radius:8px;padding:7px 12px;cursor:pointer}
-    .ps-ovr-btn.on{color:#3FB950;border-color:#1F5A40;background:#0E2A16}
-    .ps-ovr-done{font-size:12px;font-weight:600;color:#58A6FF;background:transparent;border:1px solid #30363D;border-radius:8px;padding:7px 12px;cursor:pointer}
-    .ps-arr{font-size:10px;color:#8B949E;margin-top:2px}
-    .ps-note{font-size:11px;color:#6E7681;margin:7px 2px 0;line-height:1.45}
-    .ps-blocker{display:flex;gap:9px;align-items:center;background:#221A0C;border:1px solid #5A4612;border-radius:10px;padding:10px 12px;margin-bottom:10px;color:#E3C77A;font-size:12.5px}
-    .ps-log{background:#0D1117;border:1px solid #30363D;border-radius:10px;padding:11px;margin-bottom:8px}
-    .ps-log:last-child{margin-bottom:0}
-    .ps-log-h{font-size:14px;font-weight:600;color:#E6EDF3}
-    .ps-log-d{font-size:11.5px;color:#8B949E;margin:2px 0 8px}
-    .ps-log-row{display:grid;grid-template-columns:1fr 1fr;gap:8px}
-    .ps-log-note{width:100%;margin-top:8px;background:#161B22;border:1px solid #30363D;border-radius:8px;padding:7px 9px;color:#E6EDF3;font-family:inherit;font-size:12.5px}
-    .ps-log-people{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-top:8px}
-    .ps-log-ppl{font-size:12.5px;color:#C9D1D9;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-    .ps-log-noppl{color:#6E7681}
-    .ps-log-assign{flex:0 0 auto;font-size:11.5px;font-weight:600;color:#58A6FF;background:transparent;border:1px solid #30363D;border-radius:7px;padding:5px 10px;cursor:pointer}
-    .ps-cs-t{font-size:13px;font-weight:600;color:#E6EDF3;margin-bottom:6px}
-    .ps-cs-ln{display:flex;justify-content:space-between;gap:10px;font-size:12.5px;color:#C9D1D9;border-bottom:1px dashed #21262D;padding:5px 0}
-    .ps-cs-ln span:last-child{color:#8B949E;text-align:right}
-  </style>`;
-
-  if (!days.length) {
-    return `${style}<div class="ps-wrap">
-      <div class="ps-empty">
-        <div class="ps-empty-h">No booked install dates yet</div>
-        <div class="ps-empty-b">Book the install window on the <b>Install</b> tab (or in Schedule Builder). Once dates are booked, set the daily load-in / load-out times here. Logistics below can be timed any time.</div>
-      </div>
-      ${_psLogisticsHTML(p, sched)}
-    </div>`;
-  }
-
-  const dayCards = days.map(ymd => {
-    const d = sched.days[ymd] || {};
-    const li = d.loadIn || '09:00', gh = d.goHome || '17:00';
-    return `<div class="ps-day">
-      <div class="ps-day-h"><span class="ps-day-lab">${_psDayLabel(ymd)}</span>
-        <span class="ps-day-arr">default arrival ${_psT12(li)}</span></div>
-      <div class="ps-times">
-        <div class="ps-fld"><label>Load-in</label><input type="time" value="${li}" onchange="_psSetDay(${p.id},'${ymd}','loadIn',this.value)"></div>
-        <div class="ps-fld"><label>Go-home</label><input type="time" value="${gh}" onchange="_psSetDay(${p.id},'${ymd}','goHome',this.value)"></div>
-        <div class="ps-fld"><label>Hard-out (client)</label><input type="time" value="${d.hardOut || ''}" onchange="_psSetDay(${p.id},'${ymd}','hardOut',this.value)"></div>
-        <div class="ps-fld" style="display:flex;align-items:center"><span class="ps-tg ${d.longDay ? 'on' : ''}" onclick="_psSetDay(${p.id},'${ymd}','longDay','')"><span class="sw"></span>Long day</span></div>
-      </div></div>`;
-  }).join('');
-
-  let gridHTML;
-  if (crew.length) {
-    const editMode = !!(window._psGridEdit && window._psGridEdit[p.id]);
-    let rows = '';
-    crew.forEach(m => {
-      let cells = '';
-      days.forEach(ymd => {
-        const assign = _psAssignmentsOnDay(p.id, m.id, ymd, sched);
-        const added = sched.presence[m.id + '|' + ymd] === true;
-        const on = assign.present || added;
-        const cls = on ? (assign.present ? 'task' : 'on') : 'off';
-        let a = '';
-        if (on) { const ts = assign.times.slice().sort(); a = ts.length ? ts[0] : ((sched.days[ymd] || {}).loadIn || '09:00'); }
-        cells += `<td><span class="ps-cell ${cls}${editMode ? ' edit' : ' locked'}"${editMode ? ` onclick="_psTogglePresence(${p.id},${m.id},'${ymd}')"` : ''}>${on ? '\u2713' : '\u00B7'}</span><div class="ps-arr">${a ? _psT12(a) : ''}</div></td>`;
-      });
-      rows += `<tr><td class="nm">${esc((m.name || '').split(' ')[0])}</td>${cells}</tr>`;
-    });
-    const bar = `<div class="ps-grid-bar">
-      <button class="ps-ovr-btn${editMode ? ' on' : ''}" onclick="_psToggleGridEdit(${p.id})">${editMode ? '\u2713 Override on' : '\u270E Override schedule'}</button>
-      ${editMode ? `<button class="ps-ovr-done" onclick="_psToggleGridEdit(${p.id})">Done</button>` : ''}
-    </div>`;
-    gridHTML = `${bar}<div class="ps-grid"><table><tr><th class="nm">Crew</th>${days.map(d => `<th>${_psDayLabel(d).replace(/^[A-Za-z]+, /, '')}</th>`).join('')}</tr>${rows}</table></div>
-      <div class="ps-note">${editMode ? 'Override is on \u2014 tap an empty cell to add someone to help (green), tap again to remove. People already on via a task, logistics, or a milestone (blue) are managed there. Added people get it on their calendar. Tap Done to lock.' : 'Locked. People show on a day from tasks, logistics, and milestones like commissioning/sign-off (blue). Tap \u201COverride schedule\u201D to add an extra helper by hand.'}</div>`;
-  } else {
-    gridHTML = `<div class="ps-empty-b" style="padding:4px 2px">No crew yet. Assign install crew on the project or assign install tasks — anyone with a task on a day shows here automatically.</div>`;
-  }
-
-  const holes = crew.length ? days.filter(ymd => !crew.some(m => _psPresence(sched, p.id, m.id, ymd))) : [];
-  const blockerHTML = holes.length ? `<div class="ps-blocker">\u26A0 <span>${holes.map(_psDayLabel).join(', ')} \u2014 day scheduled, nobody on it.</span></div>` : '';
-
-  // Client sheet
-  const L = sched.logistics || {};
-  const csDays = days.map(ymd => {
-    const d = sched.days[ymd] || {};
-    const li = 'in ' + _psT12(d.loadIn || '09:00');
-    const go = ' \u00B7 out ' + _psT12(d.goHome || '17:00');
-    const ho = d.hardOut ? (' \u00B7 stop by ' + _psT12(d.hardOut)) : '';
-    const ld = d.longDay ? ' (long day)' : '';
-    return `<div class="ps-cs-ln"><span>${_psDayLabel(ymd)}${ld}</span><span>${li}${go}${ho}</span></div>`;
-  }).join('');
-  const csLog = (label, o) => (o && o.date) ? `<div class="ps-cs-ln"><span>${label}</span><span>${_psDayLabel(o.date)}${o.time ? ' \u00B7 ' + _psT12(o.time) : ''}</span></div>` : '';
-  const clientSheet = `<div class="ps-sec">Client sheet preview</div><div class="ps-card"><div class="ps-cs-t">What to expect \u2014 ${esc(p.name)}</div>${csDays}${csLog('Sign-off', L.signoff)}${csLog('Commissioning / training', L.commissioning)}</div>`;
-
-  return `${style}<div class="ps-wrap">
-    ${blockerHTML}
-    <div class="ps-sec">Day schedule</div>
-    ${dayCards}
-    <div class="ps-sec">Who's on \u2014 coverage</div>
-    <div class="ps-card">${gridHTML}</div>
-    ${_psLogisticsHTML(p, sched)}
-    ${clientSheet}
-  </div>`;
-}
-
 function renderProjectPage(c) {
   const p = state.currentProject;
   if (!p) { navigate('dashboard'); return; }
@@ -9458,7 +8792,6 @@ function renderProjectPage(c) {
     { key: 'details',  label: 'Details'  },
     { key: 'design',   label: 'Design'   },
     { key: 'install',  label: 'Install'  },
-    ...(((typeof sbCanAccess === 'function' && sbCanAccess()) || currentUserHasPermission('admin.system')) ? [{ key: 'schedule', label: 'Schedule' }] : []),
     { key: 'assets',   label: 'Assets'   },
     { key: 'location', label: 'Location' },
     { key: 'files',    label: 'Files'    },
@@ -9558,8 +8891,6 @@ function renderProjectTabContent() {
   } else if (tab === 'install') {
     body.innerHTML = '';
     renderChecklistTab(body, p, 'install');
-  } else if (tab === 'schedule') {
-    body.innerHTML = renderProjectScheduleTab(p);
   } else if (tab === 'assets') {
     body.innerHTML = '';
     renderAssetAllocationTab(body, p);
@@ -10101,7 +9432,7 @@ function renderProjectScopeSection(p) {
     <div class="dashboard-card" style="margin-bottom:14px">
       <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;gap:8px;flex-wrap:wrap">
         <div style="font-size:11px;font-weight:600;color:#6E7681;text-transform:uppercase;letter-spacing:0.08em">Project Scope</div>
-        ${isFieldCrewLocked() ? '' : `<button class="btn btn-sm" style="font-size:11px;padding:6px 12px" onclick="openScopeTagsDialog(${p.id})">${current.length === 0 ? '+ Add scope tags' : 'Edit scope tags'}</button>`}
+        <button class="btn btn-sm" style="font-size:11px;padding:6px 12px" onclick="openScopeTagsDialog(${p.id})">${current.length === 0 ? '+ Add scope tags' : 'Edit scope tags'}</button>
       </div>
       ${current.length === 0 ? `
         <div style="font-size:12px;color:#6E7681;font-style:italic">No scope tags yet. Tag the systems this project covers so install task templates can seed from them.</div>
@@ -10424,7 +9755,7 @@ function renderProjectTasksSection(p) {
     const editBtnStyle = isEditing
       ? 'background:#0D1F0D;border-color:#3FB950;color:#3FB950'
       : 'background:#161B22;border-color:#30363D;color:#C9D1D9';
-    const editBtn = isFieldCrewLocked() ? '' : `<button class="itask-editbtn" style="${editBtnStyle}" onclick="event.stopPropagation();_toggleTaskEditMode(${t.id})">${editBtnLabel}</button>`;
+    const editBtn = `<button class="itask-editbtn" style="${editBtnStyle}" onclick="event.stopPropagation();_toggleTaskEditMode(${t.id})">${editBtnLabel}</button>`;
     const showReseed = isEditing && isInstallAdmin && t.templateKey && hasAnyTemplate;
     const reseedBtn = showReseed
       ? `<button class="itask-reseedbtn" onclick="event.stopPropagation();if(confirm('Re-seed will delete all template-seeded tasks on this project (manual tasks preserved) and reseed from current templates. Continue?'))_seedTasksFromScope(${p.id},true)">Re-seed</button>`
@@ -10467,13 +9798,13 @@ function renderProjectTasksSection(p) {
         </div>
         ${bulkPanel}
         ${subTotal > 0 ? `<div class="itask-subs">${orderedSubs.map((s,i) => subtaskRow(t, s, i)).join('')}</div>` : ''}
-        ${!t.isMilestone && !isFieldCrewLocked() ? `<button class="itask-add-sub" onclick="openSubtaskDialog(${t.id},null)">+ Add day / step</button>` : ''}
+        ${!t.isMilestone ? `<button class="itask-add-sub" onclick="openSubtaskDialog(${t.id},null)">+ Add day / step</button>` : ''}
       </div>
     `;
   }
 
   // Seeding controls
-  const seedBtn = seedable.length > 0 && !isFieldCrewLocked()
+  const seedBtn = seedable.length > 0
     ? `<button class="btn btn-sm" style="font-size:11px;padding:6px 12px;background:#0D1F3D;border-color:#1565C0;color:#58A6FF" onclick="_seedTasksFromScope(${p.id},false)">Seed ${seedable.length} from scope</button>`
     : '';
   const reseedBtn = ''; // Re-seed moved inside per-task Edit mode (admin-only)
@@ -10484,7 +9815,7 @@ function renderProjectTasksSection(p) {
         <div style="font-size:11px;font-weight:600;color:#6E7681;text-transform:uppercase;letter-spacing:0.08em">Install Tasks</div>
         <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap">
           ${seedBtn}${reseedBtn}
-          ${isFieldCrewLocked() ? '' : `<button class="btn btn-sm" style="font-size:11px;padding:6px 12px" onclick="openTaskDialog(${p.id},null)">+ Add Task</button>`}
+          <button class="btn btn-sm" style="font-size:11px;padding:6px 12px" onclick="openTaskDialog(${p.id},null)">+ Add Task</button>
         </div>
       </div>
       ${tasks.length === 0
@@ -10628,7 +9959,7 @@ function renderProjectDesignTasksSection(p) {
     const editBtnStyle = isEditing
       ? 'background:#0D1F0D;border-color:#3FB950;color:#3FB950'
       : 'background:#161B22;border-color:#30363D;color:#C9D1D9';
-    const editBtn = isFieldCrewLocked() ? '' : `<button class="itask-editbtn" style="${editBtnStyle}" onclick="event.stopPropagation();_toggleTaskEditMode(${t.id})">${editBtnLabel}</button>`;
+    const editBtn = `<button class="itask-editbtn" style="${editBtnStyle}" onclick="event.stopPropagation();_toggleTaskEditMode(${t.id})">${editBtnLabel}</button>`;
     const showReseed = isEditing && isDesignAdmin && t.templateKey && hasAnyTemplate;
     const reseedBtn = showReseed
       ? `<button class="itask-reseedbtn" onclick="event.stopPropagation();if(confirm('Re-seed will delete all template-seeded design tasks on this project (manual tasks preserved) and reseed from current templates. Continue?'))_seedDesignTasksFromScope(${p.id},true)">Re-seed</button>`
@@ -10669,12 +10000,12 @@ function renderProjectDesignTasksSection(p) {
         </div>
         ${bulkPanel}
         ${subTotal > 0 ? `<div class="itask-subs">${orderedSubs.map((s,i) => subtaskRow(t, s, i)).join('')}</div>` : ''}
-        ${!t.isMilestone && !isFieldCrewLocked() ? `<button class="itask-add-sub" onclick="openSubtaskDialog(${t.id},null)">+ Add day / step</button>` : ''}
+        ${!t.isMilestone ? `<button class="itask-add-sub" onclick="openSubtaskDialog(${t.id},null)">+ Add day / step</button>` : ''}
       </div>
     `;
   }
 
-  const seedBtn = seedable.length > 0 && !isFieldCrewLocked()
+  const seedBtn = seedable.length > 0
     ? `<button class="btn btn-sm" style="font-size:11px;padding:6px 12px;background:#0D1F3D;border-color:#1565C0;color:#58A6FF" onclick="_seedDesignTasksFromScope(${p.id},false)">Seed ${seedable.length} from scope</button>`
     : '';
 
@@ -10684,7 +10015,7 @@ function renderProjectDesignTasksSection(p) {
         <div style="font-size:11px;font-weight:600;color:#6E7681;text-transform:uppercase;letter-spacing:0.08em">Design Tasks</div>
         <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap">
           ${seedBtn}
-          ${isFieldCrewLocked() ? '' : `<button class="btn btn-sm" style="font-size:11px;padding:6px 12px" onclick="openTaskDialog(${p.id},null,'design')">+ Add Task</button>`}
+          <button class="btn btn-sm" style="font-size:11px;padding:6px 12px" onclick="openTaskDialog(${p.id},null,'design')">+ Add Task</button>
         </div>
       </div>
       ${tasks.length === 0
@@ -10843,7 +10174,6 @@ function openSubtaskDialog(taskId, subtaskId) {
           title: existing.title || '',
           date: existing.date || '',
           time: existing.time || '',
-          deadline: existing.deadline || '',
           assigneeIds: Array.isArray(existing.assigneeIds) ? [...existing.assigneeIds] : [],
           notes: existing.notes || '',
           photoRequired: !!existing.photoRequired
@@ -10855,7 +10185,7 @@ function openSubtaskDialog(taskId, subtaskId) {
         mode: 'add',
         taskId,
         subtaskId: null,
-        rows: [{ title: '', date: '', time: '', deadline: '', assigneeIds: [], notes: '', photoRequired: false }],
+        rows: [{ title: '', date: '', time: '', assigneeIds: [], notes: '', photoRequired: false }],
         pool: sortedPool,
         crewIds: [...crewIds]
       };
@@ -10902,11 +10232,6 @@ function _renderSubDialogContent() {
             <label class="form-label form-label-sm">Time (optional)</label>
             <input type="time" class="form-input sub-row-time" value="${esc(row.time || '')}"
               onchange="window._subDialogState.rows[${i}].time=this.value||null">
-          </div>
-          <div>
-            <label class="form-label form-label-sm">Deadline (optional)</label>
-            <input type="time" class="form-input sub-row-deadline" value="${esc(row.deadline || '')}"
-              onchange="window._subDialogState.rows[${i}].deadline=this.value||null">
           </div>
           <div>
             <label class="form-label form-label-sm">Assignees</label>
@@ -10961,7 +10286,7 @@ function _renderSubDialogContent() {
 
 function _subAddRow() {
   if (!window._subDialogState) return;
-  window._subDialogState.rows.push({ title: '', date: '', time: '', deadline: '', assigneeIds: [], notes: '', photoRequired: false });
+  window._subDialogState.rows.push({ title: '', date: '', assigneeIds: [], notes: '', photoRequired: false });
   _rerenderSubDialog();
 }
 
@@ -11312,7 +10637,6 @@ function _saveSubtaskDialog() {
     const titleEl = rowEl.querySelector('.sub-row-title');
     const dateEl = rowEl.querySelector('.sub-row-date');
     const timeEl = rowEl.querySelector('.sub-row-time');
-    const deadlineEl = rowEl.querySelector('.sub-row-deadline');
     const notesEl = rowEl.querySelector('.sub-row-notes');
     const photoReqEl = rowEl.querySelector('.sub-row-photoreq');
     // Assignees: only the assignee chips (not the photo-required checkbox)
@@ -11323,7 +10647,6 @@ function _saveSubtaskDialog() {
       title: titleEl ? (titleEl.value || '').trim() : '',
       date: dateEl ? (dateEl.value || null) : null,
       time: timeEl ? (timeEl.value || null) : null,
-      deadline: deadlineEl ? (deadlineEl.value || null) : null,
       assigneeIds,
       notes: notesEl ? (notesEl.value || '').trim() : '',
       photoRequired: photoReqEl ? !!photoReqEl.checked : false
@@ -12036,7 +11359,7 @@ function renderProjectProgressHTML(p) {
               const action = getMilestoneAction(phase.key, milestone.key);
               return `
                 <div class="milestone-row ${mDone ? 'done' : ''} ${!mUnlocked ? 'locked' : ''}" data-project-anchor="milestone_${phase.key}_${milestone.key}">
-                  <div class="milestone-check ${mDone ? 'checked' : ''}" onclick="${mUnlocked && !isLinked && !isFieldCrewLocked() ? `toggleMilestone(${p.id}, '${phase.key}', '${milestone.key}')` : ''}">
+                  <div class="milestone-check ${mDone ? 'checked' : ''}" onclick="${mUnlocked && !isLinked ? `toggleMilestone(${p.id}, '${phase.key}', '${milestone.key}')` : ''}">
                     ${mDone ? '<svg width="11" height="11" viewBox="0 0 11 11" fill="none"><path d="M2 5.5l2.5 2.5L9 3" stroke="#fff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>' : ''}
                   </div>
                   <div class="milestone-body">
@@ -12054,7 +11377,7 @@ function renderProjectProgressHTML(p) {
                       ${renderProgressLinkedTasks(p, milestone.linkedChecklist, phase.color)}
                     ` : ''}
                   </div>
-                  ${action && mUnlocked && !isFieldCrewLocked() ? (() => {
+                  ${action && mUnlocked ? (() => {
                     // For meeting actions, swap the label when one is already booked
                     let actionLabel = action.label;
                     if ((action.type === 'meeting' || action.type === 'meeting_then_email') && action.meetingType) {
@@ -19696,7 +19019,6 @@ function updateContextNav() {
       { key: 'details',  label: 'Details'  },
       { key: 'design',   label: 'Design'   },
       { key: 'install',  label: 'Install'  },
-      ...(((typeof sbCanAccess === 'function' && sbCanAccess()) || currentUserHasPermission('admin.system')) ? [{ key: 'schedule', label: 'Schedule' }] : []),
       { key: 'location', label: 'Location' },
       { key: 'files',    label: 'Files'    },
       { key: 'notes',    label: 'Notes'    }
@@ -20257,7 +19579,6 @@ function renderTeam(c) {
                     <span style="font-size:14px;font-weight:500;color:#E6EDF3">${esc(m.name)}</span>
                     ${isActive ? '<span style="font-size:9px;padding:1px 5px;border-radius:3px;background:#1565C0;color:#fff;font-weight:600">YOU</span>' : ''}
                     ${m.status === 'pending' ? '<span style="font-size:9px;padding:1px 5px;border-radius:3px;background:#1A150D;color:#D29922;border:1px solid #9E6A03;font-weight:600">PENDING INVITE</span>' : ''}
-                    ${m.contractor ? '<span style="font-size:9px;padding:1px 5px;border-radius:3px;background:#1B1430;color:#D2A8FF;border:1px solid #3B2D55;font-weight:600">CONTRACTOR</span>' : ''}
                   </div>
                   <div style="display:flex;flex-wrap:wrap;gap:3px;margin-top:4px">
                     ${(m.access || []).map(a => {
@@ -20621,7 +19942,7 @@ function renderAssetAllocationTab(container, p) {
     <div class="dashboard-card" style="margin-bottom:14px">
       <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:8px">
         <div class="dashboard-card-title" style="margin-bottom:0">Asset Allocation</div>
-        ${isFieldCrewLocked() ? '' : `<button class="btn btn-sm" onclick="openAssetPicker(${p.id})">+ Allocate asset</button>`}
+        <button class="btn btn-sm" onclick="openAssetPicker(${p.id})">+ Allocate asset</button>
       </div>
       <div style="font-size:12px;color:#8B949E">Install window: <span style="color:#C9D1D9">${winLabel}</span>. Assets default to the whole job \u2014 narrow the on-site dates below only if one's needed just part of the time. Link a trailer to a truck so they share one drive task.</div>
     </div>
@@ -20640,9 +19961,7 @@ function _renderAllocationRow(a) {
     </div>` : '';
   const dateField = (label, field, val) => `
     <label style="display:flex;flex-direction:column;gap:2px;font-size:10px;color:#8B949E">${label}
-      ${isFieldCrewLocked()
-        ? `<div class="form-input" style="font-size:12px;padding:4px 6px;color:#C9D1D9">${val ? esc(fmtDateLocal(val)) : '—'}</div>`
-        : `<input type="date" value="${val || ''}" class="form-input" style="font-size:12px;padding:4px 6px" onchange="updateAllocation('${a.id}',{${field}:this.value||null})">`}
+      <input type="date" value="${val || ''}" class="form-input" style="font-size:12px;padding:4px 6px" onchange="updateAllocation('${a.id}',{${field}:this.value||null})">
     </label>`;
   // Trailers can be towed by an allocated truck (shared drive task) or left unlinked (own drive task).
   let towedHTML = '';
@@ -20654,7 +19973,7 @@ function _renderAllocationRow(a) {
       .concat([`<option value="personal" ${selVal === 'personal' ? 'selected' : ''}>Own / personal truck (separate drive task)</option>`]);
     towedHTML = `
       <label style="display:flex;flex-direction:column;gap:2px;font-size:10px;color:#8B949E;margin-top:8px">Towing
-        <select class="form-input" style="font-size:12px;padding:4px 6px" ${isFieldCrewLocked() ? 'disabled' : ''} onchange="updateAllocation('${a.id}',{towedBy:this.value})">${opts.join('')}</select>
+        <select class="form-input" style="font-size:12px;padding:4px 6px" onchange="updateAllocation('${a.id}',{towedBy:this.value})">${opts.join('')}</select>
       </label>`;
   }
   return `
@@ -20662,7 +19981,7 @@ function _renderAllocationRow(a) {
       <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px">
         <span style="font-size:10px;font-weight:600;color:#6E7681;text-transform:uppercase;letter-spacing:.05em">${esc(typeLabel)}</span>
         <span style="flex:1;font-size:14px;font-weight:600;color:#E6EDF3">${esc(name)}</span>
-        ${isFieldCrewLocked() ? '' : `<span style="cursor:pointer;color:#6E7681;font-size:16px;padding:0 4px" title="Remove" onclick="removeAllocation('${a.id}')">\u00D7</span>`}
+        <span style="cursor:pointer;color:#6E7681;font-size:16px;padding:0 4px" title="Remove" onclick="removeAllocation('${a.id}')">\u00D7</span>
       </div>
       <div style="display:grid;grid-template-columns:repeat(2,1fr);gap:8px">
         ${dateField('On-site start', 'start', a.start)}
@@ -20700,12 +20019,13 @@ function _renderAssetPickerContent(projectId) {
           const conflicts = (haveWindow && !isAllocated) ? assetConflicts(a.id, cand.start, cand.end) : [];
           const busy = conflicts.length > 0;
           let badge;
-          if (isAllocated) badge = `<span style="font-size:10px;color:#3FB950">\u2713 Allocated</span>`;
+          if (isAllocated) badge = `<span style="font-size:10px;color:#3FB950">\u2713 Allocated \u00b7 tap to remove</span>`;
           else if (!haveWindow) badge = `<span style="font-size:10px;color:#6E7681">No window set</span>`;
           else if (busy) { const c = conflicts[0]; const cp = state.projects.find(x => String(x.id) === String(c.projectId)); const cc = _allocCommitted(c); badge = `<span style="font-size:10px;color:#F0883E">\u26A0 ${cp ? esc(cp.name) : 'booked'} ${fmtDateLocal(cc.start)}\u2013${fmtDateLocal(cc.end)}</span>`; }
           else badge = `<span style="font-size:10px;color:#3FB950">Available</span>`;
+          const clickAttr = isAllocated ? `onclick="_unpickAsset('${projectId}','${a.id}')"` : `onclick="_pickAsset('${projectId}','${a.id}',${busy})"`;
           return `
-            <div style="display:flex;align-items:center;gap:8px;padding:8px;background:#0D1117;border:1px solid ${busy ? '#5A3A1A' : '#1C2333'};border-radius:5px;margin-bottom:4px;${isAllocated ? 'opacity:.55' : 'cursor:pointer'}" ${isAllocated ? '' : `onclick="_pickAsset('${projectId}','${a.id}',${busy})"`}>
+            <div style="display:flex;align-items:center;gap:8px;padding:8px;background:${isAllocated ? '#0E2A16' : '#0D1117'};border:1px solid ${isAllocated ? '#2EA043' : (busy ? '#5A3A1A' : '#1C2333')};border-radius:5px;margin-bottom:4px;cursor:pointer" ${clickAttr}>
               <span style="flex:1;font-size:13px;color:#E6EDF3">${esc(a.name)}</span>
               ${badge}
             </div>`;
@@ -20731,6 +20051,13 @@ function _pickAsset(projectId, assetId, busy) {
   if (busy && !confirm(`${asset ? asset.name : 'This asset'} is already allocated to another job on overlapping dates. Allocate anyway?`)) return;
   const win = _defaultAllocWindow(p);
   addAllocation({ projectId: p.id, assetId, start: win.start, end: win.end });
+  const overlay = document.getElementById('asset-picker');
+  if (overlay) overlay.querySelector('.modal-container').outerHTML = _renderAssetPickerContent(projectId);
+  renderCurrentPage();
+}
+function _unpickAsset(projectId, assetId) {
+  state.assetAllocations = (state.assetAllocations || []).filter(a => !(String(a.projectId) === String(projectId) && String(a.assetId) === String(assetId)));
+  _persistAllocations();
   const overlay = document.getElementById('asset-picker');
   if (overlay) overlay.querySelector('.modal-container').outerHTML = _renderAssetPickerContent(projectId);
   renderCurrentPage();
@@ -20840,13 +20167,11 @@ function getLogisticsCalItems(p) {
   const push = (key, title, date) => { if (date) { const it = getLogisticsItem(p.id, key); items.push({ key, title, date, time: it.time || null, assigneeIds: (it.assigneeIds || []).slice(), done: !!it.done }); } };
   push('prep', 'Prep', dates.prep);
   push('load', 'Load', dates.load);
+  getLogisticsRigs(p.id).forEach(r => push('drive_out_' + r.id, 'Drive to job — ' + r.label, dates.load));
   const win = getInstallWindow(p);
-  const driveOutDate = win && win.start ? win.start : dates.load;
-  const driveBackDate = win && win.end ? win.end : dates.deprep;
-  getLogisticsRigs(p.id).forEach(r => push('drive_out_' + r.id, 'Drive to job — ' + r.label, driveOutDate));
   push('load_in', 'Load in', win && win.start ? win.start : dates.load);
   push('load_out', 'Load out', win && win.end ? win.end : dates.deprep);
-  getLogisticsRigs(p.id).forEach(r => push('drive_back_' + r.id, 'Drive back — ' + r.label, driveBackDate));
+  getLogisticsRigs(p.id).forEach(r => push('drive_back_' + r.id, 'Drive back — ' + r.label, dates.deprep));
   push('unload', 'Unload', dates.unload);
   push('deprep', 'De-prep', dates.deprep);
   return items;
@@ -20950,9 +20275,7 @@ function renderLogisticsCard(p) {
 
   const dateInput = (label, field) => `
     <label style="display:flex;flex-direction:column;gap:2px;font-size:10px;color:#8B949E">${label}
-      ${isFieldCrewLocked()
-        ? `<div class="form-input" style="font-size:12px;padding:4px 6px;color:#C9D1D9">${dates[field] ? esc(fmtDateLocal(dates[field])) : '—'}</div>`
-        : `<input type="date" value="${dates[field] || ''}" class="form-input" style="font-size:12px;padding:4px 6px" onchange="setLogisticsDate(${p.id},'${field}',this.value||null)">`}
+      <input type="date" value="${dates[field] || ''}" class="form-input" style="font-size:12px;padding:4px 6px" onchange="setLogisticsDate(${p.id},'${field}',this.value||null)">
     </label>`;
 
   const taskRow = (key, title, dateStr, extra) => {
@@ -20961,7 +20284,7 @@ function renderLogisticsCard(p) {
     return `
       <div class="itask-sub${done ? ' is-done' : ''}">
         <span class="itask-check" onclick="event.stopPropagation();toggleLogisticsDone(${p.id},'${key}')">${done ? '✓' : ''}</span>
-        <div class="itask-sub-body"${isFieldCrewLocked() ? '' : ` onclick="openLogisticsAssignPicker(${p.id},'${key}')"`}>
+        <div class="itask-sub-body" onclick="openLogisticsAssignPicker(${p.id},'${key}')">
           <div class="itask-sub-title">${esc(title)}</div>
           <div class="itask-sub-meta">
             ${dateStr ? esc(fmtDateLocal(dateStr)) : '<span class="itask-nodate">No date</span>'}${it.time ? ' · ' + esc(_fmtTime12(it.time)) : ''}
@@ -20993,12 +20316,12 @@ function renderLogisticsCard(p) {
     </div>`
     : '<div style="margin-top:5px;font-size:11px;color:#6E7681">No Cases &amp; Gear allocated — add them on the Assets tab.</div>';
 
+  const driveOut = rigs.map(r => taskRow('drive_out_' + r.id, 'Drive to job — ' + r.label, dates.load)).join('');
+  const driveBack = rigs.map(r => taskRow('drive_back_' + r.id, 'Drive back — ' + r.label, dates.deprep)).join('');
+  const noRigsNote = '<div style="font-size:11px;color:#6E7681">No vehicles/trailers allocated — add them on the Assets tab to get drive tasks.</div>';
   const win = getInstallWindow(p);
   const onsiteStart = win && win.start ? win.start : dates.load;
   const onsiteEnd = win && win.end ? win.end : dates.deprep;
-  const driveOut = rigs.map(r => taskRow('drive_out_' + r.id, 'Drive to job — ' + r.label, onsiteStart)).join('');
-  const driveBack = rigs.map(r => taskRow('drive_back_' + r.id, 'Drive back — ' + r.label, onsiteEnd)).join('');
-  const noRigsNote = '<div style="font-size:11px;color:#6E7681">No vehicles/trailers allocated — add them on the Assets tab to get drive tasks.</div>';
 
   const doneOf = keys => { const t = keys.length; const d = keys.filter(k => getLogisticsItem(p.id, k).done).length; return t ? `${d}/${t} done` : ''; };
   const driveOutKeys = rigs.map(r => 'drive_out_' + r.id);
@@ -21018,8 +20341,8 @@ function renderLogisticsCard(p) {
   };
 
   return `
-    <div class="dashboard-card" style="margin-bottom:14px;background:#1A1509;border:1px solid #4A3A14;border-left:3px solid #C9962B">
-      <div class="dashboard-card-title" style="margin-bottom:8px;color:#E6C77A;display:flex;align-items:center;gap:7px">\u{1F69A} Logistics</div>
+    <div class="dashboard-card" style="margin-bottom:14px">
+      <div class="dashboard-card-title" style="margin-bottom:8px">Logistics</div>
       <div style="display:grid;grid-template-columns:repeat(2,1fr);gap:8px;margin-bottom:10px">
         ${dateInput('Prep day', 'prep')}
         ${dateInput('Load day', 'load')}
@@ -21090,12 +20413,15 @@ function renderSettings(c) {
             `).join('')}
           </div>`;
         }).join('')}
-        <div style="display:flex;gap:8px;align-items:center;margin-top:8px">
-          <select id="asset-new-type" class="form-input" style="flex:0 0 auto;font-size:12px;padding:5px 6px">
-            ${ASSET_TYPES.map(t => `<option value="${t.key}">${t.label.replace(/s$/, '')}</option>`).join('')}
-          </select>
-          <input id="asset-new-name" class="form-input" type="text" placeholder="New asset name" style="flex:1;font-size:12px;padding:5px 6px">
-          <button class="btn-primary" style="font-size:12px;padding:6px 12px" onclick="addAssetFromSettings()">Add</button>
+        <div style="margin-top:12px;padding-top:12px;border-top:1px solid #1C2333">
+          <div style="font-size:12px;font-weight:600;color:#C9D1D9;margin-bottom:8px">Add asset</div>
+          <div style="display:flex;flex-direction:column;gap:8px">
+            <select id="asset-new-type" class="form-input" style="font-size:14px;padding:10px 12px;width:100%">
+              ${ASSET_TYPES.map(t => `<option value="${t.key}">${t.label.replace(/s$/, '')}</option>`).join('')}
+            </select>
+            <input id="asset-new-name" class="form-input" type="text" placeholder="Asset name (e.g. F-350, Toolkit 1A)" style="font-size:14px;padding:10px 12px;width:100%" onkeydown="if(event.key==='Enter')addAssetFromSettings()">
+            <button class="btn-primary" style="font-size:14px;padding:10px 14px;width:100%" onclick="addAssetFromSettings()">Add asset</button>
+          </div>
         </div>
       </div>` : ''}
       ${renderCalendarSubscribeCard()}
@@ -21783,15 +21109,6 @@ function saveUserPermissions(memberId) {
           </select>
           <div style="font-size:11px;color:#6E7681;margin-top:4px">The default view when this person opens the app</div>
         </div>
-        <div class="form-group">
-          <label style="display:flex;align-items:flex-start;gap:10px;padding:12px;border:1px solid ${existing?.contractor ? '#3B2D55' : '#1C2333'};border-radius:8px;background:${existing?.contractor ? '#160F22' : '#0D1117'};cursor:pointer">
-            <input type="checkbox" id="tm-contractor" ${existing?.contractor ? 'checked' : ''} style="margin-top:2px;width:16px;height:16px;flex:0 0 auto;accent-color:#A371F7">
-            <span style="flex:1;min-width:0">
-              <span style="font-size:13px;font-weight:600;color:#D2A8FF">Contractor \u2014 restricted access</span>
-              <span style="display:block;font-size:11px;color:#8B949E;margin-top:2px">Locks this person to the contractor view: only their assigned work \u2014 job location, today / this-week tasks, and job drawings. No other projects, calendar, or data. Overrides the dashboards above; their role and project assignments stay exactly as they are.</span>
-            </span>
-          </label>
-        </div>
         <div style="display:flex;gap:8px;margin-top:16px">
           <button class="btn-primary" onclick="saveMemberDialog(${memberId || 'null'})" style="flex:1;padding:12px">Save</button>
           <button class="btn" onclick="document.getElementById('team-dialog')?.remove()">Cancel</button>
@@ -21822,7 +21139,6 @@ function saveMemberDialog(memberId) {
   const email = document.getElementById('tm-email')?.value?.trim() || '';
   const phone = document.getElementById('tm-phone')?.value?.trim() || '';
   const primaryRole = document.getElementById('tm-primary')?.value || 'installer';
-  const contractor = !!document.getElementById('tm-contractor')?.checked;
   const access = [];
   document.querySelectorAll('#team-dialog [data-access]').forEach(el => {
     if (el.classList.contains('checked')) access.push(el.dataset.access);
@@ -21842,7 +21158,6 @@ function saveMemberDialog(memberId) {
       member.email = email;
       member.phone = phone;
       member.initials = getInitials(name);
-      member.contractor = contractor;
       if (memberId === getActiveTeamMemberId()) {
         currentUserName = name;
         currentUserRole = primaryRole;
@@ -21852,8 +21167,6 @@ function saveMemberDialog(memberId) {
     }
   } else {
     addTeamMember(name, access, primaryRole, email, phone);
-    const nm = (state.team || []).find(m => (m.email || '').trim().toLowerCase() === email.toLowerCase());
-    if (nm) nm.contractor = contractor;
   }
   save('vi_team', state.team);
   _syncTeamNow({ toast: true });
@@ -22578,24 +21891,6 @@ function refreshAdminNav() {
         badge.style.display = showN > 0 ? '' : 'none';
       }
     } catch (e) {}
-  })();
-
-  // Contractor lockdown — runs every refresh (role-switch safe). A contractor
-  // sees only Dashboard + Settings; everything else is hidden in both the
-  // sidebar and the mobile bottom nav. For non-contractors we restore
-  // visibility (except the intake link, whose state is owned by the create-
-  // permission check above).
-  (function() {
-    try {
-      const con = (typeof isContractorUser === 'function') && isContractorUser();
-      document.querySelectorAll('.nav-item[data-page]').forEach(el => {
-        if (el.dataset.page === 'intake') return;
-        el.style.display = con ? (CONTRACTOR_ALLOWED_PAGES.includes(el.dataset.page) ? '' : 'none') : '';
-      });
-      document.querySelectorAll('#bottom-nav .bnav-item[data-page]').forEach(el => {
-        el.style.display = con ? (CONTRACTOR_ALLOWED_PAGES.includes(el.dataset.page) ? '' : 'none') : '';
-      });
-    } catch (e) { console.warn('contractor nav gate skipped:', e); }
   })();
 
   if (!toolsSection) return;
@@ -24726,9 +24021,6 @@ const MEETING_TYPES = [
   { key: 'handoff',          label: 'Ops Handoff' },
   { key: 'install_kickoff',  label: 'Install Kickoff' },
   { key: 'closeout',         label: 'Closeout' },
-  { key: 'commissioning',    label: 'Commissioning / Training' },
-  { key: 'signoff',          label: 'Project Sign-off' },
-  { key: 'onsite',           label: 'On-site' },
   { key: 'misc',             label: 'Other' }
 ];
 
