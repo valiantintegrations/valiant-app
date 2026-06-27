@@ -9110,8 +9110,8 @@ function stagePillHTML(p, extraStyle) {
 // ============================================================================
 function _psKey(pid) { return 'vi_project_schedule_' + pid; }
 function _psLoad(pid) {
-  try { const raw = localStorage.getItem(_psKey(pid)); if (raw) { const o = JSON.parse(raw); o.days = o.days || {}; o.presence = o.presence || {}; o.logistics = o.logistics || {}; return o; } } catch (e) {}
-  return { days: {}, presence: {}, logistics: { signoff: { date: '', time: '', notes: '' }, commissioning: { date: '', time: '', notes: '' } } };
+  try { const raw = localStorage.getItem(_psKey(pid)); if (raw) { const o = JSON.parse(raw); o.days = o.days || {}; o.presence = o.presence || {}; o.logistics = o.logistics || {}; o.overrideRefs = o.overrideRefs || {}; return o; } } catch (e) {}
+  return { days: {}, presence: {}, logistics: { signoff: { date: '', time: '', notes: '' }, commissioning: { date: '', time: '', notes: '' } }, overrideRefs: {} };
 }
 function _psSave(pid, sched) { save(_psKey(pid), sched); }
 function _psBookedDays(p) {
@@ -9134,26 +9134,45 @@ function _psCrew(p) {
   (a.install || []).forEach(x => ids.add(x.id));
   (state.installTasks || []).filter(t => t.projectId === p.id)
     .forEach(t => (t.subtasks || []).forEach(s => (s.assigneeIds || []).forEach(id => ids.add(id))));
+  try { (getLogisticsCalItems(p) || []).forEach(it => (it.assigneeIds || []).forEach(id => ids.add(id))); } catch (e) {}
+  const sched = _psLoad(p.id);
+  ['signoff', 'commissioning'].forEach(k => { const o = sched.logistics && sched.logistics[k]; if (o) (o.assigneeIds || []).forEach(id => ids.add(id)); });
   return [...ids].map(id => getTeamMember(id)).filter(Boolean);
 }
-function _psHasTask(pid, mid, ymd) {
-  return (state.installTasks || []).some(t => t.projectId === pid &&
-    (t.subtasks || []).some(s => s.date === ymd && (s.assigneeIds || []).map(String).includes(String(mid))));
+function _psHasTask(pid, mid, ymd, sched) { return _psAssignmentsOnDay(pid, mid, ymd, sched).present; }
+// Every REAL assignment that puts someone on a day: install subtasks,
+// install-page logistics (drive / load / etc.), and schedule logistics
+// (commissioning / sign-off). Manual grid overrides are handled separately.
+function _psAssignmentsOnDay(pid, mid, ymd, sched) {
+  const mids = String(mid);
+  const times = [];
+  let present = false;
+  (state.installTasks || []).filter(t => t.projectId === pid).forEach(t => (t.subtasks || []).forEach(s => {
+    if (s.date === ymd && (s.assigneeIds || []).map(String).includes(mids)) { present = true; if (s.time) times.push(s.time); }
+  }));
+  const proj = (state.projects || []).find(p => String(p.id) === String(pid));
+  if (proj) {
+    let litems = [];
+    try { litems = getLogisticsCalItems(proj) || []; } catch (e) {}
+    litems.forEach(it => { if (it.date === ymd && (it.assigneeIds || []).map(String).includes(mids)) { present = true; if (it.time) times.push(it.time); } });
+  }
+  const sc = sched || _psLoad(pid);
+  ['signoff', 'commissioning'].forEach(k => {
+    const o = sc.logistics && sc.logistics[k];
+    if (o && o.date === ymd && (o.assigneeIds || []).map(String).includes(mids)) { present = true; if (o.time) times.push(o.time); }
+  });
+  return { present, times };
 }
 function _psPresence(sched, pid, mid, ymd) {
   const ov = sched.presence[mid + '|' + ymd];
   if (ov !== undefined) return ov;
-  return _psHasTask(pid, mid, ymd);
+  return _psHasTask(pid, mid, ymd, sched);
 }
 function _psArrival(sched, pid, mid, ymd) {
   if (!_psPresence(sched, pid, mid, ymd)) return null;
-  const starts = [];
-  (state.installTasks || []).filter(t => t.projectId === pid).forEach(t => (t.subtasks || []).forEach(s => {
-    if (s.date === ymd && (s.assigneeIds || []).map(String).includes(String(mid)) && s.start) starts.push(s.start);
-  }));
-  starts.sort();
+  const times = _psAssignmentsOnDay(pid, mid, ymd, sched).times.slice().sort();
   const day = sched.days[ymd] || {};
-  return starts.length ? starts[0] : (day.loadIn || '');
+  return times.length ? times[0] : (day.loadIn || '09:00');
 }
 // Edit handlers (re-render the tab body in place).
 function _psSetDay(pid, ymd, field, value) {
@@ -9161,18 +9180,135 @@ function _psSetDay(pid, ymd, field, value) {
   if (field === 'longDay') s.days[ymd][field] = !s.days[ymd][field]; else s.days[ymd][field] = value;
   _psSave(pid, s); renderProjectTabContent();
 }
+// Override mode is an explicit, opt-in lock: the grid is read-only until the user
+// taps "Override schedule," so a stray tap can never silently change who's on a
+// day. Per-project window flag (UI state, not persisted).
+function _psToggleGridEdit(pid) {
+  if (!window._psGridEdit) window._psGridEdit = {};
+  window._psGridEdit[pid] = !window._psGridEdit[pid];
+  renderProjectTabContent();
+}
 function _psTogglePresence(pid, mid, ymd) {
   const s = _psLoad(pid); s.presence[mid + '|' + ymd] = !_psPresence(s, pid, mid, ymd);
-  _psSave(pid, s); renderProjectTabContent();
+  _psSave(pid, s);
+  _psSyncPresenceRecord(pid, mid, ymd);
+  renderProjectTabContent();
+}
+// Make a grid override GLOBAL: when someone is manually added to a day with no
+// task of their own, mirror it into a real on-site meeting so it lands on their
+// calendar + notifies them. Removed when taken off (or when they pick up a task
+// that surfaces them anyway). Linked via overrideRefs[mid|ymd].
+function _psSyncPresenceRecord(pid, mid, ymd) {
+  if (!Array.isArray(state.meetings)) state.meetings = [];
+  const s = _psLoad(pid);
+  const refKey = mid + '|' + ymd;
+  const shouldHave = (s.presence[refKey] === true) && !_psHasTask(pid, mid, ymd);
+  const existingId = s.overrideRefs ? s.overrideRefs[refKey] : null;
+  if (!shouldHave) {
+    if (existingId) {
+      state.meetings = state.meetings.filter(m => String(m.id) !== String(existingId));
+      if (typeof _syncMeetingsNow === 'function') _syncMeetingsNow();
+      if (s.overrideRefs) { delete s.overrideRefs[refKey]; _psSave(pid, s); }
+    }
+    return;
+  }
+  const proj = (state.projects || []).find(p => String(p.id) === String(pid));
+  const pname = proj ? proj.name : 'Project';
+  const startTime = (s.days[ymd] && s.days[ymd].loadIn) || '09:00';
+  const endTime = (typeof _hhmmAddMinutes === 'function') ? _hhmmAddMinutes(startTime, 480) : null;
+  let m = existingId ? state.meetings.find(x => String(x.id) === String(existingId)) : null;
+  const isNew = !m;
+  if (isNew) { m = { id: Date.now() + Math.floor(Math.random() * 1000), source: 'schedule_override', createdBy: getActiveTeamMemberId(), createdAt: Date.now() }; state.meetings.push(m); }
+  Object.assign(m, {
+    title: 'On site — ' + pname,
+    date: ymd, time: startTime, duration: 'allday',
+    startTime, endTime, status: 'confirmed', type: 'onsite', projectId: pid,
+    attendees: [mid], notes: 'Added on the schedule to help on site.'
+  });
+  s.overrideRefs[refKey] = m.id;
+  _psSave(pid, s);
+  if (typeof _syncMeetingsNow === 'function') _syncMeetingsNow();
+  if (isNew && typeof _pushNotifyMeeting === 'function') { try { _pushNotifyMeeting(m); } catch (e) {} }
 }
 function _psSetLogistics(pid, key, field, value) {
   const s = _psLoad(pid); s.logistics[key] = s.logistics[key] || { date: '', time: '', notes: '' };
   s.logistics[key][field] = value; _psSave(pid, s);
+  _psSyncLogisticsMeeting(pid, key);
   if (field !== 'notes') renderProjectTabContent();
 }
 function _psSetLogisticsNote(pid, key, value) {
   const s = _psLoad(pid); s.logistics[key] = s.logistics[key] || { date: '', time: '', notes: '' };
   s.logistics[key].notes = value; _psSave(pid, s);
+  _psSyncLogisticsMeeting(pid, key);
+}
+// People picker for a logistics milestone (sign-off / commissioning).
+function _psOpenLogiAssign(pid, key) {
+  const s = _psLoad(pid);
+  const o = (s.logistics && s.logistics[key]) || { assigneeIds: [] };
+  const current = new Set((o.assigneeIds || []).map(String));
+  const crew = getProjectAssignment(pid) || {};
+  const crewIds = new Set([...((crew.install || []).map(x => x.id)), ...((crew.pm || []).map(x => x.id))]);
+  const pool = [...(state.team || [])].sort((a, b) => { const ao = crewIds.has(a.id) ? 0 : 1, bo = crewIds.has(b.id) ? 0 : 1; return ao !== bo ? ao - bo : a.name.localeCompare(b.name); });
+  const label = key === 'signoff' ? 'Project sign-off' : 'Commissioning / training';
+  document.getElementById('ps-logi-assign')?.remove();
+  const overlay = document.createElement('div');
+  overlay.id = 'ps-logi-assign'; overlay.className = 'modal-overlay'; overlay.style.zIndex = '10001';
+  overlay.onclick = (e) => { if (e.target === overlay) overlay.remove(); };
+  overlay.innerHTML = `<div class="modal-container" style="max-width:420px;max-height:80vh;display:flex;flex-direction:column">
+    <div class="modal-header"><div class="modal-title">Who's at ${esc(label)}?</div><button class="modal-close" onclick="document.getElementById('ps-logi-assign')?.remove()">&times;</button></div>
+    <div class="modal-body" style="overflow-y:auto"><div class="itask-assignee-pick">
+      ${pool.map(m => `<label class="itask-assignee-chip"><input type="checkbox" class="ps-logi-cb" value="${m.id}" ${current.has(String(m.id)) ? 'checked' : ''}><span>${esc(m.name)}${crewIds.has(m.id) ? '' : ' <span style="font-size:9px;color:#D29922">(not on crew)</span>'}</span></label>`).join('')}
+    </div></div>
+    <div style="padding:12px;border-top:1px solid #1C2333;display:flex;justify-content:flex-end;gap:8px">
+      <button class="btn btn-sm" onclick="document.getElementById('ps-logi-assign')?.remove()">Cancel</button>
+      <button class="btn btn-sm btn-primary" onclick="_psSaveLogiAssign(${pid},'${key}')">Save</button>
+    </div></div>`;
+  document.body.appendChild(overlay);
+}
+function _psSaveLogiAssign(pid, key) {
+  const ids = Array.from(document.querySelectorAll('.ps-logi-cb:checked')).map(cb => parseInt(cb.value, 10)).filter(n => !isNaN(n));
+  const s = _psLoad(pid);
+  s.logistics[key] = s.logistics[key] || { date: '', time: '', notes: '' };
+  s.logistics[key].assigneeIds = ids;
+  _psSave(pid, s);
+  document.getElementById('ps-logi-assign')?.remove();
+  _psSyncLogisticsMeeting(pid, key);
+  renderProjectTabContent();
+}
+// Mirror a logistics milestone into a linked meeting so it surfaces on the
+// calendar + upcoming-meetings widget + notifies attendees. The schedule tab
+// stays the source of truth; the meeting is created/updated/removed in sync and
+// linked back via logistics[key].meetingId.
+function _psSyncLogisticsMeeting(pid, key) {
+  if (!Array.isArray(state.meetings)) state.meetings = [];
+  const s = _psLoad(pid);
+  const o = (s.logistics && s.logistics[key]) || null;
+  const existingId = o && o.meetingId;
+  if (!o || !o.date) {
+    if (existingId) {
+      state.meetings = state.meetings.filter(m => String(m.id) !== String(existingId));
+      if (typeof _syncMeetingsNow === 'function') _syncMeetingsNow();
+      if (o) { delete o.meetingId; _psSave(pid, s); }
+    }
+    return;
+  }
+  const proj = (state.projects || []).find(p => String(p.id) === String(pid));
+  const pname = proj ? proj.name : 'Project';
+  const baseTitle = key === 'signoff' ? 'Project sign-off' : 'Commissioning / training';
+  const startTime = o.time || null;
+  const endTime = (startTime && typeof _hhmmAddMinutes === 'function') ? _hhmmAddMinutes(startTime, 60) : null;
+  let m = existingId ? state.meetings.find(x => String(x.id) === String(existingId)) : null;
+  const isNew = !m;
+  if (isNew) { m = { id: Date.now(), source: 'project_schedule', createdBy: getActiveTeamMemberId(), createdAt: Date.now() }; state.meetings.push(m); }
+  Object.assign(m, {
+    title: baseTitle + ' — ' + pname,
+    date: o.date, time: o.time || '', duration: '1hr',
+    startTime, endTime, status: 'confirmed', type: key, projectId: pid,
+    attendees: (o.assigneeIds || []).slice(), notes: o.notes || ''
+  });
+  if (isNew) { o.meetingId = m.id; _psSave(pid, s); }
+  if (typeof _syncMeetingsNow === 'function') _syncMeetingsNow();
+  if (isNew && typeof _pushNotifyMeeting === 'function') { try { _pushNotifyMeeting(m); } catch (e) {} }
 }
 function _psT12(hm) { if (!hm) return ''; let [h, m] = hm.split(':').map(Number); const ap = h >= 12 ? 'PM' : 'AM'; h = h % 12 || 12; return `${h}:${String(m).padStart(2, '0')} ${ap}`; }
 function _psDayLabel(s) { if (!s) return ''; const [y, m, d] = s.split('-').map(Number); const dt = new Date(y, (m || 1) - 1, d || 1); return dt.toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric' }); }
@@ -9181,13 +9317,18 @@ function _psLogisticsHTML(p, sched) {
   const L = sched.logistics || {};
   const escA = s => String(s || '').replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;');
   const item = (key, label, desc) => {
-    const o = L[key] || { date: '', time: '', notes: '' };
+    const o = L[key] || { date: '', time: '', notes: '', assigneeIds: [] };
+    const names = (o.assigneeIds || []).map(id => esc(((getTeamMember(id) || {}).name || '').split(' ')[0])).filter(Boolean).join(', ');
     return `<div class="ps-log">
       <div class="ps-log-h">${label}</div>
       <div class="ps-log-d">${desc}</div>
       <div class="ps-log-row">
         <div class="ps-fld"><label>Date</label><input type="date" value="${o.date || ''}" onchange="_psSetLogistics(${p.id},'${key}','date',this.value)"></div>
         <div class="ps-fld"><label>Time</label><input type="time" value="${o.time || ''}" onchange="_psSetLogistics(${p.id},'${key}','time',this.value)"></div>
+      </div>
+      <div class="ps-log-people">
+        <span class="ps-log-ppl">${names || '<span class="ps-log-noppl">No one assigned</span>'}</span>
+        <button class="ps-log-assign" onclick="_psOpenLogiAssign(${p.id},'${key}')">Assign people</button>
       </div>
       <input class="ps-log-note" type="text" placeholder="Notes (optional)" value="${escA(o.notes)}" oninput="_psSetLogisticsNote(${p.id},'${key}',this.value)">
     </div>`;
@@ -9238,6 +9379,12 @@ function renderProjectScheduleTab(p) {
     .ps-cell.on{background:#143726;color:#3FB950}
     .ps-cell.task{background:#13243F;color:#9CC2FF}
     .ps-cell.off{color:#484F5C}
+    .ps-cell.locked{cursor:default}
+    .ps-cell.edit{cursor:pointer;box-shadow:inset 0 0 0 1px #3a4556}
+    .ps-grid-bar{display:flex;align-items:center;gap:8px;margin-bottom:10px}
+    .ps-ovr-btn{font-size:12px;font-weight:600;color:#8B949E;background:transparent;border:1px solid #30363D;border-radius:8px;padding:7px 12px;cursor:pointer}
+    .ps-ovr-btn.on{color:#3FB950;border-color:#1F5A40;background:#0E2A16}
+    .ps-ovr-done{font-size:12px;font-weight:600;color:#58A6FF;background:transparent;border:1px solid #30363D;border-radius:8px;padding:7px 12px;cursor:pointer}
     .ps-arr{font-size:10px;color:#8B949E;margin-top:2px}
     .ps-note{font-size:11px;color:#6E7681;margin:7px 2px 0;line-height:1.45}
     .ps-blocker{display:flex;gap:9px;align-items:center;background:#221A0C;border:1px solid #5A4612;border-radius:10px;padding:10px 12px;margin-bottom:10px;color:#E3C77A;font-size:12.5px}
@@ -9247,6 +9394,10 @@ function renderProjectScheduleTab(p) {
     .ps-log-d{font-size:11.5px;color:#8B949E;margin:2px 0 8px}
     .ps-log-row{display:grid;grid-template-columns:1fr 1fr;gap:8px}
     .ps-log-note{width:100%;margin-top:8px;background:#161B22;border:1px solid #30363D;border-radius:8px;padding:7px 9px;color:#E6EDF3;font-family:inherit;font-size:12.5px}
+    .ps-log-people{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-top:8px}
+    .ps-log-ppl{font-size:12.5px;color:#C9D1D9;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+    .ps-log-noppl{color:#6E7681}
+    .ps-log-assign{flex:0 0 auto;font-size:11.5px;font-weight:600;color:#58A6FF;background:transparent;border:1px solid #30363D;border-radius:7px;padding:5px 10px;cursor:pointer}
     .ps-cs-t{font-size:13px;font-weight:600;color:#E6EDF3;margin-bottom:6px}
     .ps-cs-ln{display:flex;justify-content:space-between;gap:10px;font-size:12.5px;color:#C9D1D9;border-bottom:1px dashed #21262D;padding:5px 0}
     .ps-cs-ln span:last-child{color:#8B949E;text-align:right}
@@ -9266,10 +9417,10 @@ function renderProjectScheduleTab(p) {
     const d = sched.days[ymd] || {};
     return `<div class="ps-day">
       <div class="ps-day-h"><span class="ps-day-lab">${_psDayLabel(ymd)}</span>
-        <span class="ps-day-arr">default arrival ${d.loadIn ? _psT12(d.loadIn) : '— set load-in'}</span></div>
+        <span class="ps-day-arr">default arrival ${_psT12(d.loadIn || '09:00')}</span></div>
       <div class="ps-times">
-        <div class="ps-fld"><label>Load-in</label><input type="time" value="${d.loadIn || ''}" onchange="_psSetDay(${p.id},'${ymd}','loadIn',this.value)"></div>
-        <div class="ps-fld"><label>Go-home</label><input type="time" value="${d.goHome || ''}" onchange="_psSetDay(${p.id},'${ymd}','goHome',this.value)"></div>
+        <div class="ps-fld"><label>Load-in</label><input type="time" value="${d.loadIn || '09:00'}" onchange="_psSetDay(${p.id},'${ymd}','loadIn',this.value)"></div>
+        <div class="ps-fld"><label>Go-home</label><input type="time" value="${d.goHome || '17:00'}" onchange="_psSetDay(${p.id},'${ymd}','goHome',this.value)"></div>
         <div class="ps-fld"><label>Hard-out (client)</label><input type="time" value="${d.hardOut || ''}" onchange="_psSetDay(${p.id},'${ymd}','hardOut',this.value)"></div>
         <div class="ps-fld" style="display:flex;align-items:center"><span class="ps-tg ${d.longDay ? 'on' : ''}" onclick="_psSetDay(${p.id},'${ymd}','longDay','')"><span class="sw"></span>Long day</span></div>
       </div></div>`;
@@ -9277,21 +9428,28 @@ function renderProjectScheduleTab(p) {
 
   let gridHTML;
   if (crew.length) {
+    const editMode = !!(window._psGridEdit && window._psGridEdit[p.id]);
     let rows = '';
     crew.forEach(m => {
       let cells = '';
       days.forEach(ymd => {
-        const on = _psPresence(sched, p.id, m.id, ymd);
-        const viaTask = _psHasTask(p.id, m.id, ymd);
-        const overridden = sched.presence[m.id + '|' + ymd] !== undefined;
-        const cls = on ? (viaTask && !overridden ? 'task' : 'on') : 'off';
-        const a = _psArrival(sched, p.id, m.id, ymd);
-        cells += `<td><span class="ps-cell ${cls}" onclick="_psTogglePresence(${p.id},${m.id},'${ymd}')">${on ? '✓' : '·'}</span><div class="ps-arr">${a ? _psT12(a) : ''}</div></td>`;
+        const assign = _psAssignmentsOnDay(p.id, m.id, ymd, sched);
+        const ov = sched.presence[m.id + '|' + ymd];
+        const overridden = ov !== undefined;
+        const on = overridden ? ov : assign.present;
+        const cls = on ? (assign.present && !overridden ? 'task' : 'on') : 'off';
+        let a = '';
+        if (on) { const ts = assign.times.slice().sort(); a = ts.length ? ts[0] : ((sched.days[ymd] || {}).loadIn || '09:00'); }
+        cells += `<td><span class="ps-cell ${cls}${editMode ? ' edit' : ' locked'}"${editMode ? ` onclick="_psTogglePresence(${p.id},${m.id},'${ymd}')"` : ''}>${on ? '✓' : '·'}</span><div class="ps-arr">${a ? _psT12(a) : ''}</div></td>`;
       });
       rows += `<tr><td class="nm">${esc((m.name || '').split(' ')[0])}</td>${cells}</tr>`;
     });
-    gridHTML = `<div class="ps-grid"><table><tr><th class="nm">Crew</th>${days.map(d => `<th>${_psDayLabel(d).replace(/^[A-Za-z]+, /, '')}</th>`).join('')}</tr>${rows}</table></div>
-      <div class="ps-note">Installers appear on a day when they have a task that day (blue). Tap a cell to override presence. The grid never sets time — arrival is computed.</div>`;
+    const bar = `<div class="ps-grid-bar">
+      <button class="ps-ovr-btn${editMode ? ' on' : ''}" onclick="_psToggleGridEdit(${p.id})">${editMode ? '✓ Override on' : '✎ Override schedule'}</button>
+      ${editMode ? `<button class="ps-ovr-done" onclick="_psToggleGridEdit(${p.id})">Done</button>` : ''}
+    </div>`;
+    gridHTML = `${bar}<div class="ps-grid"><table><tr><th class="nm">Crew</th>${days.map(d => `<th>${_psDayLabel(d).replace(/^[A-Za-z]+, /, '')}</th>`).join('')}</tr>${rows}</table></div>
+      <div class="ps-note">${editMode ? 'Override is on — tap a cell to add someone with no task (green) or remove them. Added people get it on their calendar with an arrival time and a heads-up. Tap Done to lock.' : 'Locked. Installers show on a day when they have a task (blue). Tap “Override schedule” to add or remove people by hand.'}</div>`;
   } else {
     gridHTML = `<div class="ps-empty-b" style="padding:4px 2px">No crew yet. Assign install crew on the project or assign install tasks — anyone with a task on a day shows here automatically.</div>`;
   }
@@ -9303,8 +9461,8 @@ function renderProjectScheduleTab(p) {
   const L = sched.logistics || {};
   const csDays = days.map(ymd => {
     const d = sched.days[ymd] || {};
-    const li = d.loadIn ? ('in ' + _psT12(d.loadIn)) : 'in —';
-    const go = d.goHome ? (' · out ' + _psT12(d.goHome)) : '';
+    const li = 'in ' + _psT12(d.loadIn || '09:00');
+    const go = ' · out ' + _psT12(d.goHome || '17:00');
     const ho = d.hardOut ? (' · stop by ' + _psT12(d.hardOut)) : '';
     const ld = d.longDay ? ' (long day)' : '';
     return `<div class="ps-cs-ln"><span>${_psDayLabel(ymd)}${ld}</span><span>${li}${go}${ho}</span></div>`;
@@ -24633,6 +24791,9 @@ const MEETING_TYPES = [
   { key: 'handoff',          label: 'Ops Handoff' },
   { key: 'install_kickoff',  label: 'Install Kickoff' },
   { key: 'closeout',         label: 'Closeout' },
+  { key: 'commissioning',    label: 'Commissioning / Training' },
+  { key: 'signoff',          label: 'Project Sign-off' },
+  { key: 'onsite',           label: 'On-site' },
   { key: 'misc',             label: 'Other' }
 ];
 
