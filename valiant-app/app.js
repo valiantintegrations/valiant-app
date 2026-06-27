@@ -7705,7 +7705,7 @@ function _logiTodayAlertHTML(memberId) {
       const grab = towing ? `Hook up ${esc(trailers)} \u00B7 ` : '';
       const lead = leaveBy ? `leave by ~${t12(leaveBy)} (hook up + traffic)` : 'leave early \u2014 hook up + traffic';
       return `<div onclick="openProject(${x.project.id},'install')" style="display:flex;align-items:flex-start;gap:11px;padding:11px 12px;background:#0D1117;border:1px solid #5A3A1A;border-radius:9px;cursor:pointer;margin-top:8px">
-        <span style="font-size:22px;flex:0 0 auto">\u{1F69A}</span>
+        <span style="font-size:22px;flex:0 0 auto">\u{1F69B}</span>
         <div style="flex:1;min-width:0">
           <div style="font-size:14px;font-weight:700;color:#E6EDF3">You're driving: ${esc(truck)}${driveTime}</div>
           <div style="font-size:12px;color:#8B949E;margin-top:1px">${esc(x.project.name)}${addr ? ' \u00B7 ' + esc(addr) : ''}</div>
@@ -7723,7 +7723,7 @@ function _logiTodayAlertHTML(memberId) {
     </div>`;
   }).join('');
   const headColor = anyDrive ? '#F0883E' : '#D29922';
-  const headIcon = anyDrive ? '\u{1F69A}' : '\u{1F4CB}';
+  const headIcon = anyDrive ? '\u{1F69B}' : '\u{1F4CB}';
   const headText = anyDrive ? "You're driving" : 'On-site logistics';
   return `<div class="dashboard-card" style="margin-bottom:16px;border-left:3px solid ${headColor};background:${anyDrive ? '#1F1408' : '#161B22'}">
     <div class="dashboard-card-title"><span style="color:${headColor};display:flex;align-items:center;gap:6px">${headIcon} ${headText} \u2014 today &amp; tomorrow</span></div>
@@ -11094,7 +11094,7 @@ function _buildDayHover(dateStr) {
   });
   taskScan(state.installTasks, 'install');
   taskScan(state.designTasks, 'design');
-  (state.projects || []).forEach(p => getLogisticsCalItems(p).forEach(it => { if (it.date === dateStr) add(p.id, { title: it.title + (it.time ? ' · ' + _fmtTime12(it.time) : ''), ids: it.assigneeIds || [], icon: '🚚 ' }); }));
+  (state.projects || []).forEach(p => getLogisticsCalItems(p).forEach(it => { if (it.date === dateStr) add(p.id, { title: it.title + (it.time ? ' · ' + _fmtTime12(it.time) : ''), ids: it.assigneeIds || [], icon: '🚛 ' }); }));
   const pids = Object.keys(byProj);
   let html = `<div class="cal-hover-title">${esc(fmtDateLocal(dateStr))}</div>`;
   if (!pids.length) return html + '<div class="cal-hover-empty">Nothing scheduled</div>';
@@ -13656,7 +13656,7 @@ function renderCalendar(c) {
         attendeeIds: [...barAttendees],
         hasNotes: false,
         isMilestone: false,
-        titleOverride: `🚚 ${proj.client_name || proj.name} · Logistics (${dayItems.length})`
+        titleOverride: `🚛 ${proj.client_name || proj.name} · Logistics (${dayItems.length})`
       });
     });
   });
@@ -15513,7 +15513,7 @@ function _weekAgendaItems(dayStr, memberId) {
   (state.designTasks || []).forEach(t => {
     (t.subtasks || []).forEach(s => { if (s.date === dayStr) { const ids = (s.assigneeIds && s.assigneeIds.length) ? s.assigneeIds : (t.assigneeIds || []); if (mine(ids)) out.push({ icon: '📐', tab: 'design', title: `${t.title}: ${s.title}`, pid: t.projectId, ids, time: s.time || null, done: !!s.done, priority: 999 }); } });
   });
-  (state.projects || []).forEach(p => getLogisticsCalItems(p).forEach(it => { if (it.date === dayStr && mine(it.assigneeIds)) out.push({ icon: '🚚', tab: 'install', title: it.title, pid: p.id, ids: it.assigneeIds || [], time: it.time || null, done: !!it.done, priority: 900 }); }));
+  (state.projects || []).forEach(p => getLogisticsCalItems(p).forEach(it => { if (it.date === dayStr && mine(it.assigneeIds)) out.push({ icon: '🚛', tab: 'install', title: it.title, pid: p.id, ids: it.assigneeIds || [], time: it.time || null, done: !!it.done, priority: 900 }); }));
   out.sort((a, b) => (a.done ? 1 : 0) - (b.done ? 1 : 0) || a.priority - b.priority || (a.time || '99:99').localeCompare(b.time || '99:99') || a.title.localeCompare(b.title));
   return out;
 }
@@ -20495,7 +20495,7 @@ function renderLogisticsCard(p) {
 
   return `
     <div class="dashboard-card" style="margin-bottom:14px;background:#1A1509;border:1px solid #4A3A14;border-left:3px solid #C9962B">
-      <div class="dashboard-card-title" style="margin-bottom:8px;color:#E6C77A;display:flex;align-items:center;gap:7px">🚚 Logistics</div>
+      <div class="dashboard-card-title" style="margin-bottom:8px;color:#E6C77A;display:flex;align-items:center;gap:7px">🚛 Logistics</div>
       <div style="display:grid;grid-template-columns:repeat(2,1fr);gap:8px;margin-bottom:10px">
         ${dateInput('Prep day', 'prep')}
         ${dateInput('Load day', 'load')}
