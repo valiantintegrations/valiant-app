@@ -3644,7 +3644,7 @@ function openProject(id, tabOrAnchor, anchor) {
   }
   state.currentProject = p;
   // If second arg looks like a known tab, use it as the tab. Otherwise treat as anchor on default tab.
-  const KNOWN_TABS = ['overview','progress','details','design','install','assets','location','files','notes'];
+  const KNOWN_TABS = ['overview','progress','details','design','install','schedule','assets','location','files','notes'];
   let tab = getDefaultProjectTab();
   let anchorKey = null;
   if (tabOrAnchor && KNOWN_TABS.includes(tabOrAnchor)) {
@@ -9096,6 +9096,233 @@ function stagePillHTML(p, extraStyle) {
   return `<span class="status-pill status-${d.stg.color}"${xs ? ` style="${xs}"` : ''}>${esc(d.stg.label)}</span>`;
 }
 
+// ============================================================================
+// PROJECT SCHEDULE TAB (Drop B-Sched)
+// Per-project logistics tab, filled in after install dates are booked. Holds:
+//   • the day schedule (load-in / go-home / hard-out / long-day per booked day),
+//   • a who's-on grid (presence derived from install-task assignment, with a
+//     presence-only manual override — never holds time),
+//   • a Logistics group with individually-timed Sign-off and Commissioning /
+//     Training entries,
+//   • a client "what to expect" sheet preview.
+// Computed value for the crew = arrival (earliest task start that day, else the
+// day's load-in). Stored per-project at vi_project_schedule_<pid> (per-record key).
+// ============================================================================
+function _psKey(pid) { return 'vi_project_schedule_' + pid; }
+function _psLoad(pid) {
+  try { const raw = localStorage.getItem(_psKey(pid)); if (raw) { const o = JSON.parse(raw); o.days = o.days || {}; o.presence = o.presence || {}; o.logistics = o.logistics || {}; return o; } } catch (e) {}
+  return { days: {}, presence: {}, logistics: { signoff: { date: '', time: '', notes: '' }, commissioning: { date: '', time: '', notes: '' } } };
+}
+function _psSave(pid, sched) { save(_psKey(pid), sched); }
+function _psBookedDays(p) {
+  const b = getBookedTimeline(p.id);
+  if (!b || !b.start) return [];
+  const start = _parseLocalYmd(b.start), end = _parseLocalYmd(b.end || b.start);
+  const exW = b.excludeWeekends !== false;
+  const inc = new Set(b.weekendIncludes || []);
+  const out = [];
+  for (let d = new Date(start); d <= end; d.setDate(d.getDate() + 1)) {
+    const ymd = _ymd(d), dow = d.getDay();
+    if ((dow === 0 || dow === 6) && exW && !inc.has(ymd)) continue;
+    out.push(ymd);
+  }
+  return out;
+}
+function _psCrew(p) {
+  const ids = new Set();
+  const a = getProjectAssignment(p.id);
+  (a.install || []).forEach(x => ids.add(x.id));
+  (state.installTasks || []).filter(t => t.projectId === p.id)
+    .forEach(t => (t.subtasks || []).forEach(s => (s.assigneeIds || []).forEach(id => ids.add(id))));
+  return [...ids].map(id => getTeamMember(id)).filter(Boolean);
+}
+function _psHasTask(pid, mid, ymd) {
+  return (state.installTasks || []).some(t => t.projectId === pid &&
+    (t.subtasks || []).some(s => s.date === ymd && (s.assigneeIds || []).map(String).includes(String(mid))));
+}
+function _psPresence(sched, pid, mid, ymd) {
+  const ov = sched.presence[mid + '|' + ymd];
+  if (ov !== undefined) return ov;
+  return _psHasTask(pid, mid, ymd);
+}
+function _psArrival(sched, pid, mid, ymd) {
+  if (!_psPresence(sched, pid, mid, ymd)) return null;
+  const starts = [];
+  (state.installTasks || []).filter(t => t.projectId === pid).forEach(t => (t.subtasks || []).forEach(s => {
+    if (s.date === ymd && (s.assigneeIds || []).map(String).includes(String(mid)) && s.start) starts.push(s.start);
+  }));
+  starts.sort();
+  const day = sched.days[ymd] || {};
+  return starts.length ? starts[0] : (day.loadIn || '');
+}
+// Edit handlers (re-render the tab body in place).
+function _psSetDay(pid, ymd, field, value) {
+  const s = _psLoad(pid); s.days[ymd] = s.days[ymd] || {};
+  if (field === 'longDay') s.days[ymd][field] = !s.days[ymd][field]; else s.days[ymd][field] = value;
+  _psSave(pid, s); renderProjectTabContent();
+}
+function _psTogglePresence(pid, mid, ymd) {
+  const s = _psLoad(pid); s.presence[mid + '|' + ymd] = !_psPresence(s, pid, mid, ymd);
+  _psSave(pid, s); renderProjectTabContent();
+}
+function _psSetLogistics(pid, key, field, value) {
+  const s = _psLoad(pid); s.logistics[key] = s.logistics[key] || { date: '', time: '', notes: '' };
+  s.logistics[key][field] = value; _psSave(pid, s);
+  if (field !== 'notes') renderProjectTabContent();
+}
+function _psSetLogisticsNote(pid, key, value) {
+  const s = _psLoad(pid); s.logistics[key] = s.logistics[key] || { date: '', time: '', notes: '' };
+  s.logistics[key].notes = value; _psSave(pid, s);
+}
+function _psT12(hm) { if (!hm) return ''; let [h, m] = hm.split(':').map(Number); const ap = h >= 12 ? 'PM' : 'AM'; h = h % 12 || 12; return `${h}:${String(m).padStart(2, '0')} ${ap}`; }
+function _psDayLabel(s) { if (!s) return ''; const [y, m, d] = s.split('-').map(Number); const dt = new Date(y, (m || 1) - 1, d || 1); return dt.toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric' }); }
+
+function _psLogisticsHTML(p, sched) {
+  const L = sched.logistics || {};
+  const escA = s => String(s || '').replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;');
+  const item = (key, label, desc) => {
+    const o = L[key] || { date: '', time: '', notes: '' };
+    return `<div class="ps-log">
+      <div class="ps-log-h">${label}</div>
+      <div class="ps-log-d">${desc}</div>
+      <div class="ps-log-row">
+        <div class="ps-fld"><label>Date</label><input type="date" value="${o.date || ''}" onchange="_psSetLogistics(${p.id},'${key}','date',this.value)"></div>
+        <div class="ps-fld"><label>Time</label><input type="time" value="${o.time || ''}" onchange="_psSetLogistics(${p.id},'${key}','time',this.value)"></div>
+      </div>
+      <input class="ps-log-note" type="text" placeholder="Notes (optional)" value="${escA(o.notes)}" oninput="_psSetLogisticsNote(${p.id},'${key}',this.value)">
+    </div>`;
+  };
+  return `<div class="ps-sec">Logistics <span class="ps-sec-note">each individually timed</span></div>
+    <div class="ps-card ps-log-group">
+      ${item('signoff', 'Project sign-off', 'Client acceptance / final sign-off.')}
+      ${item('commissioning', 'Commissioning / training', 'System commissioning and client training.')}
+    </div>`;
+}
+
+function renderProjectScheduleTab(p) {
+  const allowed = (typeof sbCanAccess === 'function' && sbCanAccess()) || currentUserHasPermission('admin.system');
+  if (!allowed) return `<div class="dashboard-card"><div style="color:#8B949E;font-size:13px;padding:16px">The project schedule is managed by coordinators and the install manager.</div></div>`;
+
+  const sched = _psLoad(p.id);
+  const days = _psBookedDays(p);
+  const crew = _psCrew(p);
+
+  const style = `<style>
+    .ps-wrap{max-width:760px}
+    .ps-sec{font-size:11px;letter-spacing:.12em;text-transform:uppercase;color:#8B949E;font-weight:600;margin:20px 2px 9px;display:flex;align-items:center;gap:8px}
+    .ps-sec:first-child{margin-top:2px}
+    .ps-sec-note{text-transform:none;letter-spacing:0;color:#6E7681;font-weight:500;font-size:11px}
+    .ps-card{background:#161B22;border:1px solid #30363D;border-radius:12px;padding:12px;margin-bottom:10px}
+    .ps-empty{background:#161B22;border:1px dashed #30363D;border-radius:12px;padding:18px;text-align:center}
+    .ps-empty-h{font-size:14px;font-weight:600;color:#E6EDF3}
+    .ps-empty-b{font-size:12.5px;color:#8B949E;margin-top:6px;line-height:1.5}
+    .ps-day{background:#161B22;border:1px solid #30363D;border-radius:12px;padding:12px;margin-bottom:9px}
+    .ps-day-h{display:flex;align-items:center;justify-content:space-between;margin-bottom:9px}
+    .ps-day-lab{font-size:14px;font-weight:600;color:#E6EDF3}
+    .ps-day-arr{font-size:11px;color:#8B949E}
+    .ps-times{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+    .ps-fld{background:#0D1117;border:1px solid #30363D;border-radius:8px;padding:7px 9px}
+    .ps-fld label{display:block;font-size:9.5px;letter-spacing:.07em;text-transform:uppercase;color:#6E7681;margin-bottom:3px}
+    .ps-fld input{width:100%;background:transparent;border:0;color:#E6EDF3;font-family:inherit;font-size:13.5px;font-weight:600;padding:0}
+    .ps-fld input::-webkit-calendar-picker-indicator{filter:invert(.7)}
+    .ps-tg{display:inline-flex;align-items:center;gap:7px;font-size:12px;color:#8B949E;cursor:pointer}
+    .ps-tg .sw{width:34px;height:19px;border-radius:999px;background:#30363D;position:relative;transition:.15s}
+    .ps-tg .sw::after{content:"";position:absolute;top:2px;left:2px;width:15px;height:15px;border-radius:50%;background:#8B949E;transition:.15s}
+    .ps-tg.on{color:#E6EDF3}.ps-tg.on .sw{background:#1F5A40}.ps-tg.on .sw::after{left:17px;background:#3FB950}
+    .ps-grid{overflow-x:auto}
+    .ps-grid table{border-collapse:collapse;width:100%;font-size:12px}
+    .ps-grid th,.ps-grid td{border:1px solid #21262D;padding:6px 5px;text-align:center}
+    .ps-grid th{color:#8B949E;font-weight:600;font-size:11px;background:#0D1117}
+    .ps-grid td.nm{text-align:left;font-weight:600;white-space:nowrap;color:#E6EDF3}
+    .ps-cell{cursor:pointer;user-select:none;border-radius:6px;min-width:30px;height:24px;display:inline-grid;place-items:center;font-size:13px}
+    .ps-cell.on{background:#143726;color:#3FB950}
+    .ps-cell.task{background:#13243F;color:#9CC2FF}
+    .ps-cell.off{color:#484F5C}
+    .ps-arr{font-size:10px;color:#8B949E;margin-top:2px}
+    .ps-note{font-size:11px;color:#6E7681;margin:7px 2px 0;line-height:1.45}
+    .ps-blocker{display:flex;gap:9px;align-items:center;background:#221A0C;border:1px solid #5A4612;border-radius:10px;padding:10px 12px;margin-bottom:10px;color:#E3C77A;font-size:12.5px}
+    .ps-log{background:#0D1117;border:1px solid #30363D;border-radius:10px;padding:11px;margin-bottom:8px}
+    .ps-log:last-child{margin-bottom:0}
+    .ps-log-h{font-size:14px;font-weight:600;color:#E6EDF3}
+    .ps-log-d{font-size:11.5px;color:#8B949E;margin:2px 0 8px}
+    .ps-log-row{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+    .ps-log-note{width:100%;margin-top:8px;background:#161B22;border:1px solid #30363D;border-radius:8px;padding:7px 9px;color:#E6EDF3;font-family:inherit;font-size:12.5px}
+    .ps-cs-t{font-size:13px;font-weight:600;color:#E6EDF3;margin-bottom:6px}
+    .ps-cs-ln{display:flex;justify-content:space-between;gap:10px;font-size:12.5px;color:#C9D1D9;border-bottom:1px dashed #21262D;padding:5px 0}
+    .ps-cs-ln span:last-child{color:#8B949E;text-align:right}
+  </style>`;
+
+  if (!days.length) {
+    return `${style}<div class="ps-wrap">
+      <div class="ps-empty">
+        <div class="ps-empty-h">No booked install dates yet</div>
+        <div class="ps-empty-b">Book the install window on the <b>Install</b> tab (or in Schedule Builder). Once dates are booked, set the daily load-in / load-out times here. Logistics below can be timed any time.</div>
+      </div>
+      ${_psLogisticsHTML(p, sched)}
+    </div>`;
+  }
+
+  const dayCards = days.map(ymd => {
+    const d = sched.days[ymd] || {};
+    return `<div class="ps-day">
+      <div class="ps-day-h"><span class="ps-day-lab">${_psDayLabel(ymd)}</span>
+        <span class="ps-day-arr">default arrival ${d.loadIn ? _psT12(d.loadIn) : '— set load-in'}</span></div>
+      <div class="ps-times">
+        <div class="ps-fld"><label>Load-in</label><input type="time" value="${d.loadIn || ''}" onchange="_psSetDay(${p.id},'${ymd}','loadIn',this.value)"></div>
+        <div class="ps-fld"><label>Go-home</label><input type="time" value="${d.goHome || ''}" onchange="_psSetDay(${p.id},'${ymd}','goHome',this.value)"></div>
+        <div class="ps-fld"><label>Hard-out (client)</label><input type="time" value="${d.hardOut || ''}" onchange="_psSetDay(${p.id},'${ymd}','hardOut',this.value)"></div>
+        <div class="ps-fld" style="display:flex;align-items:center"><span class="ps-tg ${d.longDay ? 'on' : ''}" onclick="_psSetDay(${p.id},'${ymd}','longDay','')"><span class="sw"></span>Long day</span></div>
+      </div></div>`;
+  }).join('');
+
+  let gridHTML;
+  if (crew.length) {
+    let rows = '';
+    crew.forEach(m => {
+      let cells = '';
+      days.forEach(ymd => {
+        const on = _psPresence(sched, p.id, m.id, ymd);
+        const viaTask = _psHasTask(p.id, m.id, ymd);
+        const overridden = sched.presence[m.id + '|' + ymd] !== undefined;
+        const cls = on ? (viaTask && !overridden ? 'task' : 'on') : 'off';
+        const a = _psArrival(sched, p.id, m.id, ymd);
+        cells += `<td><span class="ps-cell ${cls}" onclick="_psTogglePresence(${p.id},${m.id},'${ymd}')">${on ? '✓' : '·'}</span><div class="ps-arr">${a ? _psT12(a) : ''}</div></td>`;
+      });
+      rows += `<tr><td class="nm">${esc((m.name || '').split(' ')[0])}</td>${cells}</tr>`;
+    });
+    gridHTML = `<div class="ps-grid"><table><tr><th class="nm">Crew</th>${days.map(d => `<th>${_psDayLabel(d).replace(/^[A-Za-z]+, /, '')}</th>`).join('')}</tr>${rows}</table></div>
+      <div class="ps-note">Installers appear on a day when they have a task that day (blue). Tap a cell to override presence. The grid never sets time — arrival is computed.</div>`;
+  } else {
+    gridHTML = `<div class="ps-empty-b" style="padding:4px 2px">No crew yet. Assign install crew on the project or assign install tasks — anyone with a task on a day shows here automatically.</div>`;
+  }
+
+  const holes = crew.length ? days.filter(ymd => !crew.some(m => _psPresence(sched, p.id, m.id, ymd))) : [];
+  const blockerHTML = holes.length ? `<div class="ps-blocker">⚠ <span>${holes.map(_psDayLabel).join(', ')} — day scheduled, nobody on it.</span></div>` : '';
+
+  // Client sheet
+  const L = sched.logistics || {};
+  const csDays = days.map(ymd => {
+    const d = sched.days[ymd] || {};
+    const li = d.loadIn ? ('in ' + _psT12(d.loadIn)) : 'in —';
+    const go = d.goHome ? (' · out ' + _psT12(d.goHome)) : '';
+    const ho = d.hardOut ? (' · stop by ' + _psT12(d.hardOut)) : '';
+    const ld = d.longDay ? ' (long day)' : '';
+    return `<div class="ps-cs-ln"><span>${_psDayLabel(ymd)}${ld}</span><span>${li}${go}${ho}</span></div>`;
+  }).join('');
+  const csLog = (label, o) => (o && o.date) ? `<div class="ps-cs-ln"><span>${label}</span><span>${_psDayLabel(o.date)}${o.time ? ' · ' + _psT12(o.time) : ''}</span></div>` : '';
+  const clientSheet = `<div class="ps-sec">Client sheet preview</div><div class="ps-card"><div class="ps-cs-t">What to expect — ${esc(p.name)}</div>${csDays}${csLog('Sign-off', L.signoff)}${csLog('Commissioning / training', L.commissioning)}</div>`;
+
+  return `${style}<div class="ps-wrap">
+    ${blockerHTML}
+    <div class="ps-sec">Day schedule</div>
+    ${dayCards}
+    <div class="ps-sec">Who's on — coverage</div>
+    <div class="ps-card">${gridHTML}</div>
+    ${_psLogisticsHTML(p, sched)}
+    ${clientSheet}
+  </div>`;
+}
+
 function renderProjectPage(c) {
   const p = state.currentProject;
   if (!p) { navigate('dashboard'); return; }
@@ -9119,6 +9346,7 @@ function renderProjectPage(c) {
     { key: 'details',  label: 'Details'  },
     { key: 'design',   label: 'Design'   },
     { key: 'install',  label: 'Install'  },
+    ...(((typeof sbCanAccess === 'function' && sbCanAccess()) || currentUserHasPermission('admin.system')) ? [{ key: 'schedule', label: 'Schedule' }] : []),
     { key: 'assets',   label: 'Assets'   },
     { key: 'location', label: 'Location' },
     { key: 'files',    label: 'Files'    },
@@ -9218,6 +9446,8 @@ function renderProjectTabContent() {
   } else if (tab === 'install') {
     body.innerHTML = '';
     renderChecklistTab(body, p, 'install');
+  } else if (tab === 'schedule') {
+    body.innerHTML = renderProjectScheduleTab(p);
   } else if (tab === 'assets') {
     body.innerHTML = '';
     renderAssetAllocationTab(body, p);
@@ -19347,6 +19577,7 @@ function updateContextNav() {
       { key: 'details',  label: 'Details'  },
       { key: 'design',   label: 'Design'   },
       { key: 'install',  label: 'Install'  },
+      ...(((typeof sbCanAccess === 'function' && sbCanAccess()) || currentUserHasPermission('admin.system')) ? [{ key: 'schedule', label: 'Schedule' }] : []),
       { key: 'location', label: 'Location' },
       { key: 'files',    label: 'Files'    },
       { key: 'notes',    label: 'Notes'    }
