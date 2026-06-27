@@ -245,6 +245,14 @@ const DEFAULT_BUNDLES = {
       'design.view'
     ]
   },
+  'contractor': {
+    label: 'Contractor',
+    desc: 'Outside contractor — sees only their assigned work, job location, and drawings.',
+    color: '#A371F7',
+    permissions: [
+      'install.view'
+    ]
+  },
   'warehouse': {
     label: 'Warehouse',
     desc: 'Receive equipment, manage inventory, no financials',
@@ -315,6 +323,18 @@ function getActiveUserBundle() {
   if (!key) return null;
   return state.bundles[key] || null;
 }
+// Contractor = the maximally restricted login. True for a real contractor bundle
+// OR a member flagged as a contractor — never for Master Admin or the sandbox.
+function isContractorUser() {
+  if (typeof isAdminSandbox === 'function' && isAdminSandbox()) return false;
+  if (typeof currentUserHasPermission === 'function' && currentUserHasPermission('admin.system')) return false;
+  if (getActiveUserBundleKey() === 'contractor') return true;
+  const m = getTeamMember(getActiveTeamMemberId());
+  if (m && m.contractor) return true;
+  return false;
+}
+// The only pages a contractor may reach. Everything else bounces to dashboard.
+const CONTRACTOR_ALLOWED_PAGES = ['dashboard', 'settings'];
 
 function setUserBundle(memberId, bundleKey) {
   if (!state.userPermissions[memberId]) state.userPermissions[memberId] = {};
@@ -1452,7 +1472,7 @@ function _migrateRoles() {
   if (!state.bundles) state.bundles = {};
 
   // Ensure new bundles exist by copying from DEFAULT_BUNDLES when missing
-  ['system_architect','project_coordinator','install_assistant','install_admin','design_admin'].forEach(k => {
+  ['system_architect','project_coordinator','install_assistant','install_admin','design_admin','contractor'].forEach(k => {
     if (!state.bundles[k]) {
       state.bundles[k] = JSON.parse(JSON.stringify(DEFAULT_BUNDLES[k]));
       changed = true;
@@ -3426,6 +3446,9 @@ function toggleMoreMenu() {
 
 // ── Navigation ──
 function navigate(page) {
+  if (typeof isContractorUser === 'function' && isContractorUser() && !CONTRACTOR_ALLOWED_PAGES.includes(page)) {
+    page = 'dashboard';
+  }
   state.currentPage = page;
   state.currentProject = null;
   // Home/Dashboard nav exits the Notepad sub-view (the in-page "Dashboard" pill
@@ -3604,6 +3627,10 @@ function renderCurrentPage() {
 // ── Project Page Navigation ──
 // v1.16: project detail is a full page, not a modal
 function openProject(id, tabOrAnchor, anchor) {
+  if (typeof isContractorUser === 'function' && isContractorUser()) {
+    if (typeof showToast === 'function') showToast('Contractors can only see their assigned work', 'info');
+    return;
+  }
   const p = state.projects.find(x => x.id === id);
   if (!p) return;
   // Cleanup any lingering calendar hover tooltip — fixed-position element
@@ -6017,11 +6044,164 @@ function quickAddTask() {
   if (typeof showToast === 'function') showToast('Task added to ' + (proj ? proj.name : 'project') + (phase === 'design' ? ' · Design' : ' · Install'), 'success');
   updateRightPanel();
 }
+// ── Contractor check-off: a contractor can mark their own assigned subtask done.
+function _conToggleTask(taskId, subId) {
+  const t = (state.installTasks || []).find(x => String(x.id) === String(taskId));
+  if (!t) return;
+  const s = (t.subtasks || []).find(x => String(x.id) === String(subId));
+  if (!s) return;
+  if (typeof _applyDone === 'function') _applyDone(s); else s.done = !s.done;
+  if (typeof _syncTasksNow === 'function') _syncTasksNow('install');
+  renderCurrentPage();
+}
+
+// ── Contractor Dashboard ──
+// Maximally restricted view for outside contractors. Shows ONLY the work this
+// person is assigned to (via install-subtask assignment): today's tasks, this
+// week's tasks, the job location(s), and the drawings for those jobs. Tasks are
+// checkable. Nav is locked in navigate()/openProject()/refreshAdminNav().
+function renderContractorDashboard(memberId, activeMember) {
+  const firstName = activeMember ? ((activeMember.name || '').split(' ')[0]) : '';
+  const ymd = (d) => (typeof _ymd === 'function') ? _ymd(d) : `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
+  const dayLabel = (s) => { if (!s) return 'No date'; const [y,m,dd] = s.split('-').map(Number); const dt = new Date(y, (m||1)-1, dd||1); return dt.toLocaleDateString(undefined, { weekday:'short', month:'short', day:'numeric' }); };
+  const todayStr = ymd(new Date());
+  const we = new Date(); we.setDate(we.getDate() + 6);
+  const weekEndStr = ymd(we);
+
+  // Every install subtask assigned to this contractor.
+  const mine = [];
+  (state.installTasks || []).forEach(t => {
+    (t.subtasks || []).forEach(s => {
+      if ((s.assigneeIds || []).map(String).includes(String(memberId))) {
+        const project = state.projects.find(p => p.id === t.projectId) || null;
+        mine.push({ project, task: t, subtask: s, date: s.date || '' });
+      }
+    });
+  });
+
+  const todayItems = mine.filter(x => x.date === todayStr);
+  const weekItems = mine.filter(x => x.date && x.date > todayStr && x.date <= weekEndStr)
+                        .sort((a,b) => a.date.localeCompare(b.date));
+
+  // Distinct projects this contractor is on.
+  const projIds = [...new Set(mine.map(x => x.project && x.project.id).filter(v => v != null))];
+  const projects = projIds.map(id => state.projects.find(p => p.id === id)).filter(Boolean);
+
+  const taskLine = (x) => {
+    const pname = x.project ? esc(x.project.name) : 'Job';
+    const done = !!x.subtask.done;
+    return `<div class="con-task${done ? ' con-done' : ''}">
+      <span class="con-check${done ? ' on' : ''}" onclick="event.stopPropagation();_conToggleTask(${x.task.id},${x.subtask.id})">${done ? '✓' : ''}</span>
+      <div class="con-task-body">
+        <div class="con-task-title">${esc(x.subtask.title || x.task.title || 'Task')}</div>
+        <div class="con-task-sub">${pname}${x.subtask.notes ? ' · ' + esc(x.subtask.notes) : ''}</div>
+      </div>
+    </div>`;
+  };
+
+  const todayHtml = todayItems.length ? todayItems.map(taskLine).join('')
+    : `<div class="con-empty">Nothing scheduled today.</div>`;
+
+  let weekHtml;
+  if (weekItems.length) {
+    const byDay = {};
+    weekItems.forEach(x => { (byDay[x.date] = byDay[x.date] || []).push(x); });
+    weekHtml = Object.keys(byDay).sort().map(d =>
+      `<div class="con-day"><div class="con-day-h">${dayLabel(d)}</div>${byDay[d].map(taskLine).join('')}</div>`
+    ).join('');
+  } else {
+    weekHtml = `<div class="con-empty">Nothing else scheduled this week.</div>`;
+  }
+
+  let locHtml;
+  if (projects.length) {
+    locHtml = projects.map(p => {
+      const addr = p.address || [p.city, p.state].filter(Boolean).join(', ') || '';
+      const color = getProjectColor(p.id);
+      const dir = addr ? `https://www.google.com/maps/dir/?api=1&destination=${encodeURIComponent(addr)}` : '';
+      return `<div class="con-loc">
+        <div class="con-loc-h"><span class="con-dot" style="background:${color}"></span>${esc(p.name)}</div>
+        <div class="con-loc-addr">${addr ? esc(addr) : 'Address not set'}</div>
+        ${dir ? `<a class="con-link" href="${dir}" target="_blank" rel="noopener">Get directions →</a>` : ''}
+      </div>`;
+    }).join('');
+  } else {
+    locHtml = `<div class="con-empty">No assigned jobs yet.</div>`;
+  }
+
+  let fileHtml = '', anyFiles = false;
+  projects.forEach(p => {
+    const fb = (state.projectFiles && state.projectFiles[p.id]) || {};
+    const drawings = fb.drawings || [];
+    if (!drawings.length) return;
+    anyFiles = true;
+    fileHtml += `<div class="con-file-group"><div class="con-file-proj">${esc(p.name)}</div>` +
+      drawings.map(f => {
+        const name = esc(f.name || f.title || 'Drawing');
+        const url = f.url || f.link || f.href || f.driveUrl || '';
+        return `<div class="con-file"><span class="con-file-ic">▤</span><span class="con-file-name">${name}</span>${url ? `<a class="con-link" href="${esc(url)}" target="_blank" rel="noopener">Open</a>` : '<span class="con-file-na">—</span>'}</div>`;
+      }).join('') + `</div>`;
+  });
+  if (!anyFiles) fileHtml = `<div class="con-empty">No drawings posted yet.</div>`;
+
+  const style = `<style>
+    .con-wrap{max-width:560px;margin:0 auto}
+    .con-head{display:flex;align-items:center;justify-content:space-between;margin:2px 2px 12px}
+    .con-head .nm{font-size:18px;font-weight:600;color:#E6EDF3}
+    .con-pill{font-size:11px;font-weight:600;padding:3px 10px;border-radius:999px;color:#D2A8FF;border:1px solid #3B2D55;background:#1B1430}
+    .con-sec{font-size:11px;letter-spacing:.12em;text-transform:uppercase;color:#8B949E;font-weight:600;margin:18px 2px 8px}
+    .con-card{background:#161B22;border:1px solid #30363D;border-radius:12px;padding:12px;margin-bottom:10px}
+    .con-task{display:flex;gap:10px;align-items:flex-start;padding:8px 2px;border-bottom:1px solid #21262D}
+    .con-task:last-child{border-bottom:0}
+    .con-check{width:22px;height:22px;border-radius:6px;border:1.5px solid #30363D;background:#0D1117;color:#3FB950;display:inline-grid;place-items:center;font-size:13px;font-weight:700;cursor:pointer;flex:0 0 auto;margin-top:1px}
+    .con-check.on{background:#143726;border-color:#1F5A40}
+    .con-task.con-done .con-task-title{text-decoration:line-through;color:#6E7681}
+    .con-dot{width:9px;height:9px;border-radius:50%;flex:0 0 auto;margin-top:5px}
+    .con-task-title{font-size:14px;color:#E6EDF3;font-weight:500}
+    .con-task-sub{font-size:12px;color:#8B949E;margin-top:1px}
+    .con-day{margin-bottom:6px}
+    .con-day-h{font-size:12px;font-weight:600;color:#58A6FF;margin:6px 2px 2px}
+    .con-loc{padding:9px 2px;border-bottom:1px solid #21262D}
+    .con-loc:last-child{border-bottom:0}
+    .con-loc-h{display:flex;align-items:center;gap:8px;font-size:14px;font-weight:600;color:#E6EDF3}
+    .con-loc-addr{font-size:12px;color:#8B949E;margin:3px 0 5px 17px}
+    .con-link{font-size:12px;color:#58A6FF;text-decoration:none;font-weight:600;margin-left:17px}
+    .con-file-group{margin-bottom:8px}
+    .con-file-proj{font-size:12px;font-weight:600;color:#8B949E;margin:4px 2px}
+    .con-file{display:flex;align-items:center;gap:9px;padding:7px 2px;border-bottom:1px solid #21262D}
+    .con-file:last-child{border-bottom:0}
+    .con-file-ic{width:24px;height:24px;border-radius:6px;background:#21314A;color:#9CC2FF;display:inline-grid;place-items:center;font-size:13px;flex:0 0 auto}
+    .con-file-name{flex:1;font-size:13px;color:#E6EDF3}
+    .con-file .con-link{margin-left:0}
+    .con-file-na{color:#6E7681;font-size:12px}
+    .con-empty{color:#8B949E;font-size:13px;padding:10px 4px}
+  </style>`;
+
+  return `${style}<div class="con-wrap">
+    <div class="con-head"><span class="nm">My Work${firstName ? ' — ' + esc(firstName) : ''}</span><span class="con-pill">Contractor</span></div>
+    ${_logiTodayAlertHTML(memberId)}
+    <div class="con-sec">Today</div>
+    <div class="con-card">${todayHtml}</div>
+    <div class="con-sec">This week</div>
+    <div class="con-card">${weekHtml}</div>
+    <div class="con-sec">Location</div>
+    <div class="con-card">${locHtml}</div>
+    <div class="con-sec">Job drawings</div>
+    <div class="con-card">${fileHtml}</div>
+  </div>`;
+}
+
 // ── Dashboard ──
 function renderDashboard(c) {
   const activeMember = getTeamMember(getActiveTeamMemberId());
   const memberId = activeMember?.id;
   document.getElementById('page-title').textContent = 'Dashboard';
+
+  // Contractor login: a single locked dashboard — no tab strip, no other modes.
+  if (typeof isContractorUser === 'function' && isContractorUser()) {
+    c.innerHTML = renderContractorDashboard(memberId, activeMember);
+    return;
+  }
 
   const canSeeAllProjects = currentUserHasPermission('projects.view_all');
   const isMasterAdmin = currentUserHasPermission('admin.system');
@@ -19727,6 +19907,7 @@ function renderTeam(c) {
                     <span style="font-size:14px;font-weight:500;color:#E6EDF3">${esc(m.name)}</span>
                     ${isActive ? '<span style="font-size:9px;padding:1px 5px;border-radius:3px;background:#1565C0;color:#fff;font-weight:600">YOU</span>' : ''}
                     ${m.status === 'pending' ? '<span style="font-size:9px;padding:1px 5px;border-radius:3px;background:#1A150D;color:#D29922;border:1px solid #9E6A03;font-weight:600">PENDING INVITE</span>' : ''}
+                    ${m.contractor ? '<span style="font-size:9px;padding:1px 5px;border-radius:3px;background:#1B1430;color:#D2A8FF;border:1px solid #3B2D55;font-weight:600">CONTRACTOR</span>' : ''}
                   </div>
                   <div style="display:flex;flex-wrap:wrap;gap:3px;margin-top:4px">
                     ${(m.access || []).map(a => {
@@ -21262,6 +21443,12 @@ function saveUserPermissions(memberId) {
           </select>
           <div style="font-size:11px;color:#6E7681;margin-top:4px">The default view when this person opens the app</div>
         </div>
+        <div class="form-group">
+          <label style="display:flex;align-items:flex-start;gap:9px;cursor:pointer">
+            <input type="checkbox" id="tm-contractor" ${existing?.contractor ? 'checked' : ''} style="width:17px;height:17px;margin-top:1px;accent-color:#A371F7">
+            <span><span style="font-weight:600;color:#E6EDF3">Outside contractor</span><span style="display:block;font-size:11px;color:#6E7681;margin-top:2px">Locks this login to a restricted dashboard — only their assigned work, job location, and drawings.</span></span>
+          </label>
+        </div>
         <div style="display:flex;gap:8px;margin-top:16px">
           <button class="btn-primary" onclick="saveMemberDialog(${memberId || 'null'})" style="flex:1;padding:12px">Save</button>
           <button class="btn" onclick="document.getElementById('team-dialog')?.remove()">Cancel</button>
@@ -21292,6 +21479,7 @@ function saveMemberDialog(memberId) {
   const email = document.getElementById('tm-email')?.value?.trim() || '';
   const phone = document.getElementById('tm-phone')?.value?.trim() || '';
   const primaryRole = document.getElementById('tm-primary')?.value || 'installer';
+  const contractor = !!document.getElementById('tm-contractor')?.checked;
   const access = [];
   document.querySelectorAll('#team-dialog [data-access]').forEach(el => {
     if (el.classList.contains('checked')) access.push(el.dataset.access);
@@ -21311,6 +21499,7 @@ function saveMemberDialog(memberId) {
       member.email = email;
       member.phone = phone;
       member.initials = getInitials(name);
+      member.contractor = contractor;
       if (memberId === getActiveTeamMemberId()) {
         currentUserName = name;
         currentUserRole = primaryRole;
@@ -21320,6 +21509,8 @@ function saveMemberDialog(memberId) {
     }
   } else {
     addTeamMember(name, access, primaryRole, email, phone);
+    const _new = (state.team || []).find(m => (m.email || '').trim().toLowerCase() === email.toLowerCase());
+    if (_new) _new.contractor = contractor;
   }
   save('vi_team', state.team);
   _syncTeamNow({ toast: true });
@@ -22066,6 +22257,21 @@ function refreshAdminNav() {
         badge.style.display = showN > 0 ? '' : 'none';
       }
     } catch (e) {}
+  })();
+
+  // Contractor lockdown — runs every refresh (role-switch safe). Hides everything
+  // but Dashboard + Settings in both the sidebar and the mobile bottom nav.
+  (function() {
+    try {
+      const con = (typeof isContractorUser === 'function') && isContractorUser();
+      document.querySelectorAll('.nav-item[data-page]').forEach(el => {
+        if (el.dataset.page === 'intake') return;
+        el.style.display = con ? (CONTRACTOR_ALLOWED_PAGES.includes(el.dataset.page) ? '' : 'none') : '';
+      });
+      document.querySelectorAll('#bottom-nav .bnav-item[data-page]').forEach(el => {
+        el.style.display = con ? (CONTRACTOR_ALLOWED_PAGES.includes(el.dataset.page) ? '' : 'none') : '';
+      });
+    } catch (e) { console.warn('contractor nav gate skipped:', e); }
   })();
 
   if (!toolsSection) return;
