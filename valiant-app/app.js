@@ -2095,9 +2095,21 @@ function _reorderSubtask(taskId, fromIdx, toIdx) {
   if (fromIdx >= t.subtasks.length || toIdx >= t.subtasks.length) return;
   const [moved] = t.subtasks.splice(fromIdx, 1);
   t.subtasks.splice(toIdx, 0, moved);
+  // Persist the new order as priority so the dashboards (which sort date → priority)
+  // reflect it within each day.
+  t.subtasks.forEach((s, i) => { s.priority = i; });
   const phase = _getTaskPhase(taskId);
   _syncTasksNow(phase);
   renderCurrentPage();
+}
+
+// ▲▼ reorder (reliable on mobile, where HTML5 drag doesn't fire). dir = -1 up / +1 down.
+function _moveSubtask(taskId, subId, dir) {
+  const t = _getTaskByIdAnyPhase(taskId);
+  if (!t || !t.subtasks) return;
+  const from = t.subtasks.findIndex(s => String(s.id) === String(subId));
+  if (from < 0) return;
+  _reorderSubtask(taskId, from, from + dir);
 }
 
 // Drag tracking for subtask reorder
@@ -3524,6 +3536,9 @@ function _ensurePhaseFocusStyles() {
     .ready-sublabels-focus .rsl-future { flex: 1 1 0; }
     .ready-sublabels-focus .rsl-active { flex: 5 1 0; }
     body:not(.can-del-tasks) .itask-del { display: none !important; }
+    .itask-reorder { display:inline-flex; flex-direction:column; gap:1px; flex:0 0 auto; margin-right:2px; }
+    .itask-ord-btn { width:22px; height:18px; line-height:1; padding:0; font-size:9px; border:1px solid #30363D; background:#161B22; color:#8B949E; border-radius:4px; cursor:pointer; display:grid; place-items:center; }
+    .itask-ord-btn:active { background:#1F2630; color:#E6EDF3; }
   `;
   document.head.appendChild(st);
 }
@@ -4409,6 +4424,7 @@ function createGroupChat() {
   if (!state.channels) state.channels = [];
   state.channels.push({ id, name, memberIds, projectIds, createdBy: myId, createdAt: Date.now() });
   save('vi_channels', state.channels);
+  _syncChannelsNow();
   state.composingGroup = false;
   state._grpPrelink = null;
   openConversation(id);
@@ -4931,6 +4947,7 @@ function applyLiveMessages() {
 // Called by the realtime bootstrap when a live key (chat) changes in the cloud.
 window.viOnLiveKey = function (key) {
   if (key === 'vi_messages') applyLiveMessages();
+  if (key === 'vi_channels') { try { _pollChannels(); } catch (e) {} }
 };
 
 // ── Message polling (realtime-independent delivery) ──────────────────────────
@@ -4974,6 +4991,65 @@ async function _pollMessages() {
   }
 }
 setInterval(_pollMessages, 2000);
+
+// ── Channel (group-chat) sync ────────────────────────────────────────────────
+// vi_channels used to be written as one blob, so a stale write from any device
+// could clobber the whole list and a freshly-created group chat would vanish even
+// though its messages survived (messages union-merge). Channels now get the same
+// add-only union-merge + a self-healing poll: any device that still has a channel
+// re-publishes it on its next tick, so a clobber can't make it disappear.
+async function _syncChannelsNow() {
+  const sb = window._sb;
+  if (!sb) return false;
+  try {
+    let cloud = [];
+    try {
+      const { data } = await sb.from('app_data').select('value').eq('key', 'vi_channels').maybeSingle();
+      cloud = (data && Array.isArray(data.value)) ? data.value : [];
+    } catch (e) {}
+    const byId = new Map();
+    cloud.forEach(c => { if (c && c.id != null) byId.set(c.id, c); });
+    (Array.isArray(state.channels) ? state.channels : []).forEach(c => { if (c && c.id != null) byId.set(c.id, c); }); // local wins, keeps cloud-only
+    const union = Array.from(byId.values());
+    const { error } = await sb.from('app_data').upsert({ key: 'vi_channels', value: union }, { onConflict: 'key' });
+    if (error) { console.warn('channel sync write FAILED', error); return false; }
+    state.channels = union;
+    try { localStorage.setItem('vi_channels', JSON.stringify(union)); } catch (e) {}
+    return true;
+  } catch (e) { console.warn('channel sync error', e); return false; }
+}
+
+async function _pollChannels() {
+  const sb = window._sb;
+  if (!sb || !state.team || !state.team.length) return;
+  let cloud;
+  try {
+    const { data } = await sb.from('app_data').select('value').eq('key', 'vi_channels').maybeSingle();
+    cloud = (data && Array.isArray(data.value)) ? data.value : [];
+  } catch (e) { return; }
+  const local = Array.isArray(state.channels) ? state.channels : [];
+  const byId = new Map();
+  cloud.forEach(c => { if (c && c.id != null) byId.set(c.id, c); });
+  local.forEach(c => { if (c && c.id != null) byId.set(c.id, c); });
+  const union = Array.from(byId.values());
+  const localIds = new Set(local.map(c => c && c.id).filter(v => v != null));
+  const cloudIds = new Set(cloud.map(c => c && c.id).filter(v => v != null));
+  let gotNew = false; cloudIds.forEach(id => { if (!localIds.has(id)) gotNew = true; });
+  let cloudMissing = false; localIds.forEach(id => { if (!cloudIds.has(id)) cloudMissing = true; });
+  if (!gotNew && !cloudMissing) return;
+  state.channels = union;
+  try { localStorage.setItem('vi_channels', JSON.stringify(union)); } catch (e) {}
+  // Heal: if the cloud was missing channels we hold, republish the union.
+  if (cloudMissing) { try { await sb.from('app_data').upsert({ key: 'vi_channels', value: union }, { onConflict: 'key' }); } catch (e) {} }
+  // Refresh the conversation list if the messages panel is open and the user isn't typing.
+  if (gotNew) {
+    const ae = document.activeElement;
+    const typingInPanel = ae && (ae.tagName === 'TEXTAREA' || ae.tagName === 'INPUT') && typeof ae.closest === 'function' && ae.closest('#right-panel');
+    if (!typingInPanel) { try { if (!document.getElementById('msg-list')) updateRightPanel(); } catch (e) {} }
+    try { updateBottomNavMsgBadge(); } catch (e) {}
+  }
+}
+setInterval(_pollChannels, 2000);
 
 // Direct, awaited push of the message log to the cloud that SURFACES write errors
 // (the localStorage mirror swallows them, which is why a failed upload just sits on
@@ -7586,6 +7662,76 @@ function renderMyWorkNotepad(memberId) {
   `;
 }
 
+// Morning alert: logistics tasks (esp. truck drives) assigned to this person for
+// today or tomorrow, pulled from getLogisticsCalItems. Drives show the specific
+// truck, the trailer to hook up, the job location, and a leave-by buffer.
+function _logiTodayAlertHTML(memberId) {
+  if (memberId == null) return '';
+  const today = _ymd(new Date());
+  const td = new Date(); td.setDate(td.getDate() + 1);
+  const tmrw = _ymd(td);
+  const isDrive = it => /drive/i.test(it.key || '') || /drive/i.test(it.title || '');
+  const t12 = hm => { if (!hm) return ''; let [h, m] = hm.split(':').map(Number); const ap = h >= 12 ? 'PM' : 'AM'; h = h % 12 || 12; return `${h}:${String(m).padStart(2, '0')} ${ap}`; };
+  const subMin = (hm, mins) => { if (!hm) return ''; let [h, m] = hm.split(':').map(Number); let t = h * 60 + m - mins; if (t < 0) t = 0; return `${String(Math.floor(t / 60)).padStart(2, '0')}:${String(t % 60).padStart(2, '0')}`; };
+  const mine = [];
+  (state.projects || []).filter(p => !p.archived).forEach(p => {
+    let items = [];
+    try { items = getLogisticsCalItems(p) || []; } catch (e) { items = []; }
+    items.forEach(it => {
+      if (!it.date || (it.date !== today && it.date !== tmrw)) return;
+      if (!(it.assigneeIds || []).map(String).includes(String(memberId))) return;
+      mine.push({ project: p, item: it, when: it.date === today ? 'today' : 'tomorrow' });
+    });
+  });
+  if (!mine.length) return '';
+  mine.sort((a, b) => (a.when !== b.when) ? (a.when === 'today' ? -1 : 1) : (isDrive(b.item) - isDrive(a.item)));
+  const anyDrive = mine.some(x => isDrive(x.item));
+  const whenTagOf = w => w === 'today'
+    ? '<span style="font-size:10px;font-weight:700;color:#F0883E">TODAY</span>'
+    : '<span style="font-size:10px;font-weight:700;color:#D29922">TOMORROW</span>';
+  const rows = mine.map(x => {
+    const whenTag = whenTagOf(x.when);
+    const addr = (x.project.address || [x.project.city, x.project.state].filter(Boolean).join(', ') || '').trim();
+    if (isDrive(x.item)) {
+      const rig = (x.item.title || '').replace(/^Drive\s+(to job|back)\s*[\u2014-]\s*/i, '').trim() || 'the vehicle';
+      const parts = rig.split(/\s*\+\s*/).filter(Boolean);
+      const truck = parts[0] || 'the vehicle';
+      const trailers = parts.slice(1).join(' + ');
+      const towing = !!trailers;
+      const baseT = x.item.time || '';
+      const buffer = (towing ? 30 : 0) + 30;
+      const leaveBy = baseT ? subMin(baseT, buffer) : '';
+      const driveTime = baseT ? ' \u00B7 ' + t12(baseT) : '';
+      const grab = towing ? `Hook up ${esc(trailers)} \u00B7 ` : '';
+      const lead = leaveBy ? `leave by ~${t12(leaveBy)} (hook up + traffic)` : 'leave early \u2014 hook up + traffic';
+      return `<div onclick="openProject(${x.project.id},'install')" style="display:flex;align-items:flex-start;gap:11px;padding:11px 12px;background:#0D1117;border:1px solid #5A3A1A;border-radius:9px;cursor:pointer;margin-top:8px">
+        <span style="font-size:22px;flex:0 0 auto">\u{1F69A}</span>
+        <div style="flex:1;min-width:0">
+          <div style="font-size:14px;font-weight:700;color:#E6EDF3">You're driving: ${esc(truck)}${driveTime}</div>
+          <div style="font-size:12px;color:#8B949E;margin-top:1px">${esc(x.project.name)}${addr ? ' \u00B7 ' + esc(addr) : ''}</div>
+          <div style="font-size:11.5px;color:#F0B24A;margin-top:5px">\u23F1 ${grab}${lead}</div>
+        </div>${whenTag}
+      </div>`;
+    }
+    const time = x.item.time ? ' \u00B7 ' + t12(x.item.time) : '';
+    return `<div onclick="openProject(${x.project.id},'install')" style="display:flex;align-items:center;gap:11px;padding:11px 12px;background:#0D1117;border:1px solid #1C2333;border-radius:9px;cursor:pointer;margin-top:8px">
+      <span style="font-size:22px;flex:0 0 auto">\u{1F4E6}</span>
+      <div style="flex:1;min-width:0">
+        <div style="font-size:14px;font-weight:700;color:#E6EDF3">${esc(x.item.title)}${time}</div>
+        <div style="font-size:12px;color:#8B949E;margin-top:1px">${esc(x.project.name)}${addr ? ' \u00B7 ' + esc(addr) : ''}</div>
+      </div>${whenTag}
+    </div>`;
+  }).join('');
+  const headColor = anyDrive ? '#F0883E' : '#D29922';
+  const headIcon = anyDrive ? '\u{1F69A}' : '\u{1F4CB}';
+  const headText = anyDrive ? "You're driving" : 'On-site logistics';
+  return `<div class="dashboard-card" style="margin-bottom:16px;border-left:3px solid ${headColor};background:${anyDrive ? '#1F1408' : '#161B22'}">
+    <div class="dashboard-card-title"><span style="color:${headColor};display:flex;align-items:center;gap:6px">${headIcon} ${headText} \u2014 today &amp; tomorrow</span></div>
+    <div style="font-size:12px;color:#8B949E">${anyDrive ? "You're driving \u2014 leave time to hook up and beat traffic. Tap for the job." : 'Transport / logistics assigned to you.'}</div>
+    ${rows}
+  </div>`;
+}
+
 function renderMyWorkDashboard(memberId, activeProjects, myAssignments, activeMember) {
   const totalAssigned = Object.values(myAssignments).reduce((n, arr) => n + arr.length, 0);
   const myCloseoutProjects = getMyCloseoutProjects(memberId);
@@ -7674,6 +7820,7 @@ function renderMyWorkDashboard(memberId, activeProjects, myAssignments, activeMe
 
   return `
     ${closeoutBanner}
+    ${_logiTodayAlertHTML(memberId)}
     <div class="mywork-toolbar" style="display:flex;align-items:center;justify-content:space-between;gap:8px">
       <div>${renderMyWorkLayoutToggle()}</div>
       <div style="display:flex;align-items:center;gap:8px">${renderMyWorkCustomizeButton()}</div>
@@ -9590,7 +9737,7 @@ function linkChatToProject(channelId, pid) {
   const c = getChannel(channelId); if (!c) return;
   pid = Number(pid);
   c.projectIds = c.projectIds || [];
-  if (!c.projectIds.includes(pid)) { c.projectIds.push(pid); save('vi_channels', state.channels); }
+  if (!c.projectIds.includes(pid)) { c.projectIds.push(pid); save('vi_channels', state.channels); _syncChannelsNow(); }
   renderCurrentPage();
 }
 function unlinkChatFromProject(channelId, pid) {
@@ -9598,6 +9745,7 @@ function unlinkChatFromProject(channelId, pid) {
   pid = Number(pid);
   c.projectIds = (c.projectIds || []).filter(x => Number(x) !== pid);
   save('vi_channels', state.channels);
+  _syncChannelsNow();
   renderCurrentPage();
 }
 function renderProjectChatsSection(p) {
@@ -9714,7 +9862,7 @@ function renderProjectTasksSection(p) {
            ondragstart="_subtaskDragStart(event,${t.id},${s.id})"
            ondragover="_subtaskDragOver(event)"
            ondrop="_subtaskDrop(event,${t.id},${s.id})">
-        <span class="itask-drag-handle" title="Drag to reorder">⋮⋮</span>
+        <span class="itask-reorder"><button class="itask-ord-btn" title="Move up" onclick="event.stopPropagation();_moveSubtask(${t.id},${s.id},-1)">▲</button><button class="itask-ord-btn" title="Move down" onclick="event.stopPropagation();_moveSubtask(${t.id},${s.id},1)">▼</button></span><span class="itask-drag-handle" title="Drag to reorder">⋮⋮</span>
         <span class="itask-select-box${isSelected ? ' is-selected' : ''}" onclick="event.stopPropagation();_toggleSubtaskSelected(${t.id},${s.id})">${isSelected ? '✓' : ''}</span>
         <div class="itask-sub-body">
           <div class="itask-sub-title">${esc(s.title)}</div>
@@ -9748,7 +9896,7 @@ function renderProjectTasksSection(p) {
     // drag-reorder reflects what the user sees.
     const orderedSubs = isEditing
       ? (t.subtasks || [])
-      : (t.subtasks || []).slice().sort((a,b) => (a.date || '9999').localeCompare(b.date || '9999'));
+      : (t.subtasks || []).slice().sort((a,b) => (a.date || '9999').localeCompare(b.date || '9999') || ((a.priority != null ? a.priority : 999) - (b.priority != null ? b.priority : 999)));
 
     // Edit button (always visible) + Re-seed button (only inside edit mode, admin only, and only if template-seeded)
     const editBtnLabel = isEditing ? 'Done' : 'Edit';
@@ -9919,7 +10067,7 @@ function renderProjectDesignTasksSection(p) {
            ondragstart="_subtaskDragStart(event,${t.id},${s.id})"
            ondragover="_subtaskDragOver(event)"
            ondrop="_subtaskDrop(event,${t.id},${s.id})">
-        <span class="itask-drag-handle" title="Drag to reorder">⋮⋮</span>
+        <span class="itask-reorder"><button class="itask-ord-btn" title="Move up" onclick="event.stopPropagation();_moveSubtask(${t.id},${s.id},-1)">▲</button><button class="itask-ord-btn" title="Move down" onclick="event.stopPropagation();_moveSubtask(${t.id},${s.id},1)">▼</button></span><span class="itask-drag-handle" title="Drag to reorder">⋮⋮</span>
         <span class="itask-select-box${isSelected ? ' is-selected' : ''}" onclick="event.stopPropagation();_toggleSubtaskSelected(${t.id},${s.id})">${isSelected ? '✓' : ''}</span>
         <div class="itask-sub-body">
           <div class="itask-sub-title">${esc(s.title)}</div>
@@ -9953,7 +10101,7 @@ function renderProjectDesignTasksSection(p) {
 
     const orderedSubs = isEditing
       ? (t.subtasks || [])
-      : (t.subtasks || []).slice().sort((a,b) => (a.date || '9999').localeCompare(b.date || '9999'));
+      : (t.subtasks || []).slice().sort((a,b) => (a.date || '9999').localeCompare(b.date || '9999') || ((a.priority != null ? a.priority : 999) - (b.priority != null ? b.priority : 999)));
 
     const editBtnLabel = isEditing ? 'Done' : 'Edit';
     const editBtnStyle = isEditing
@@ -20167,11 +20315,13 @@ function getLogisticsCalItems(p) {
   const push = (key, title, date) => { if (date) { const it = getLogisticsItem(p.id, key); items.push({ key, title, date, time: it.time || null, assigneeIds: (it.assigneeIds || []).slice(), done: !!it.done }); } };
   push('prep', 'Prep', dates.prep);
   push('load', 'Load', dates.load);
-  getLogisticsRigs(p.id).forEach(r => push('drive_out_' + r.id, 'Drive to job — ' + r.label, dates.load));
   const win = getInstallWindow(p);
+  const driveOutDate = win && win.start ? win.start : dates.load;
+  const driveBackDate = win && win.end ? win.end : dates.deprep;
+  getLogisticsRigs(p.id).forEach(r => push('drive_out_' + r.id, 'Drive to job — ' + r.label, driveOutDate));
   push('load_in', 'Load in', win && win.start ? win.start : dates.load);
   push('load_out', 'Load out', win && win.end ? win.end : dates.deprep);
-  getLogisticsRigs(p.id).forEach(r => push('drive_back_' + r.id, 'Drive back — ' + r.label, dates.deprep));
+  getLogisticsRigs(p.id).forEach(r => push('drive_back_' + r.id, 'Drive back — ' + r.label, driveBackDate));
   push('unload', 'Unload', dates.unload);
   push('deprep', 'De-prep', dates.deprep);
   return items;
@@ -20316,8 +20466,11 @@ function renderLogisticsCard(p) {
     </div>`
     : '<div style="margin-top:5px;font-size:11px;color:#6E7681">No Cases &amp; Gear allocated — add them on the Assets tab.</div>';
 
-  const driveOut = rigs.map(r => taskRow('drive_out_' + r.id, 'Drive to job — ' + r.label, dates.load)).join('');
-  const driveBack = rigs.map(r => taskRow('drive_back_' + r.id, 'Drive back — ' + r.label, dates.deprep)).join('');
+  const _win = getInstallWindow(p);
+  const _onsiteStart = _win && _win.start ? _win.start : dates.load;
+  const _onsiteEnd = _win && _win.end ? _win.end : dates.deprep;
+  const driveOut = rigs.map(r => taskRow('drive_out_' + r.id, 'Drive to job — ' + r.label, _onsiteStart)).join('');
+  const driveBack = rigs.map(r => taskRow('drive_back_' + r.id, 'Drive back — ' + r.label, _onsiteEnd)).join('');
   const noRigsNote = '<div style="font-size:11px;color:#6E7681">No vehicles/trailers allocated — add them on the Assets tab to get drive tasks.</div>';
   const win = getInstallWindow(p);
   const onsiteStart = win && win.start ? win.start : dates.load;
@@ -20341,8 +20494,8 @@ function renderLogisticsCard(p) {
   };
 
   return `
-    <div class="dashboard-card" style="margin-bottom:14px">
-      <div class="dashboard-card-title" style="margin-bottom:8px">Logistics</div>
+    <div class="dashboard-card" style="margin-bottom:14px;background:#1A1509;border:1px solid #4A3A14;border-left:3px solid #C9962B">
+      <div class="dashboard-card-title" style="margin-bottom:8px;color:#E6C77A;display:flex;align-items:center;gap:7px">🚚 Logistics</div>
       <div style="display:grid;grid-template-columns:repeat(2,1fr);gap:8px;margin-bottom:10px">
         ${dateInput('Prep day', 'prep')}
         ${dateInput('Load day', 'load')}
@@ -21742,18 +21895,39 @@ function submitFeatureRequest() {
     status: 'new'
   };
   save('vi_freq_' + id, req);
+  _syncKeyNow('vi_freq_' + id, req);
   showToast('Feature request sent — thanks!', 'success');
   _pushNotifyFeatureRequest(req);
   renderCurrentPage();
 }
 function setFeatureRequestStatus(id, status) {
   const k = 'vi_freq_' + id;
-  try { const v = JSON.parse(localStorage.getItem(k)); if (v) { v.status = status; save(k, v); renderCurrentPage(); } } catch (e) {}
+  try { const v = JSON.parse(localStorage.getItem(k)); if (v) { v.status = status; save(k, v); _syncKeyNow(k, v); renderCurrentPage(); } } catch (e) {}
 }
 function deleteFeatureRequest(id) {
   if (!confirm('Delete this feature request?')) return;
-  localStorage.removeItem('vi_freq_' + id);
+  const k = 'vi_freq_' + id;
+  localStorage.removeItem(k);
+  const sb = window._sb;
+  if (sb) { try { sb.from('app_data').delete().eq('key', k); } catch (e) {} }
   renderCurrentPage();
+}
+// Pull every feature request straight from the cloud (they're per-record rows),
+// so they show even if the device's local mirror missed or dropped them.
+async function _loadFeatureRequestsFromCloud() {
+  const sb = window._sb;
+  if (!sb) return;
+  try {
+    const { data } = await sb.from('app_data').select('key,value').like('key', 'vi_freq_%');
+    if (!Array.isArray(data)) return;
+    let changed = false;
+    data.forEach(row => {
+      if (!row || !row.key) return;
+      const str = JSON.stringify(row.value);
+      if (localStorage.getItem(row.key) !== str) { try { localStorage.setItem(row.key, str); changed = true; } catch (e) {} }
+    });
+    if (changed && state.currentPage === 'feature-requests') { try { renderCurrentPage(); } catch (e) {} }
+  } catch (e) {}
 }
 const FREQ_STATUS = {
   new: { label: 'New', color: '#D29922' },
@@ -21763,6 +21937,7 @@ const FREQ_STATUS = {
   declined: { label: 'Declined', color: '#8B949E' }
 };
 function renderFeatureRequests(c) {
+  _loadFeatureRequestsFromCloud();
   const isAdmin = currentUserHasPermission('admin.system');
   const me = getActiveTeamMemberId();
   const all = getFeatureRequests();
