@@ -2628,6 +2628,7 @@ const ARCHIVE_BINS = [
   { key: 'completed', label: 'Completed', icon: '✓', color: '#3FB950' },
   { key: 'icebox', label: 'Icebox', icon: '❄️', color: '#58A6FF' },
   { key: 'lost', label: 'Lost', icon: '✕', color: '#F85149' },
+  { key: 'unused_revisions', label: 'Unused Revisions', icon: '🗂', color: '#A371F7' },
   { key: 'trash', label: 'Trash', icon: '🗑', color: '#6E7681' }
 ];
 
@@ -2687,6 +2688,7 @@ function archiveProject(projectId, bin) {
   save('vi_archived', state.archived);
   _persistArchiveRecord(projectId, bin);
   if (bin === 'completed') showToast('Marked completed', 'success');
+  else if (bin === 'unused_revisions') showToast('Filed under Unused Revisions', 'success');
   renderCurrentPage();
 }
 
