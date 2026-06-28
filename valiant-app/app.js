@@ -9606,6 +9606,7 @@ function renderProjectPage(c) {
               return `<span class="status-pill status-${stg.color}"${_cc ? ` style="cursor:pointer"` : ''}${_clk}>${esc(stg.label)}${_car}</span>`;
             })()}
             ${gbbTier ? `<span style="font-size:10px;font-weight:600;padding:3px 8px;border-radius:3px;${gbbBadgeStyle}">${gbbTier.toUpperCase()}</span>` : ''}
+            ${(currentUserHasPermission('projects.change_stage') || currentUserHasPermission('admin.system')) ? `<button class="move-btn" onclick="event.stopPropagation();showMoveMenu(${p.id}, event)" title="Move / relink / archive" style="margin-left:2px">\u22EE</button>` : ''}
           </div>
         </div>
         ${p.systems.length ? `<div class="project-page-tags">${p.systems.map(systemTagHTML).join('')}</div>` : ''}
