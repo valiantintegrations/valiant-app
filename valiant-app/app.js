@@ -3112,6 +3112,59 @@ function moveProjectToStage(projectId, newStage) {
   renderCurrentPage();
 }
 
+// ── Relink to Jetbuilt project ──
+// Repaint a project's identity (name / number / value / description) to match a
+// DIFFERENT Jetbuilt project, WITHOUT changing the internal id. Because every
+// task, assignment, booked date, schedule record, and meeting references the
+// internal id, none of that moves — only the displayed identity changes. An
+// optional Jetbuilt-internal-# alias makes a future sync fold the target in here
+// instead of spawning a new shell (see the reconciliation in syncJetbuilt).
+function openRelinkDialog(projectId) {
+  const p = state.projects.find(x => x.id === projectId);
+  if (!p) return;
+  const escA = s => String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;');
+  document.getElementById('relink-dialog')?.remove();
+  const overlay = document.createElement('div');
+  overlay.id = 'relink-dialog'; overlay.className = 'modal-overlay'; overlay.style.zIndex = '10001';
+  overlay.onclick = (e) => { if (e.target === overlay) overlay.remove(); };
+  overlay.innerHTML = `<div class="modal-container" style="max-width:460px;max-height:86vh;display:flex;flex-direction:column">
+    <div class="modal-header"><div class="modal-title">Relink to Jetbuilt project</div><button class="modal-close" onclick="document.getElementById('relink-dialog')?.remove()">&times;</button></div>
+    <div class="modal-body" style="overflow-y:auto">
+      <div style="font-size:12.5px;color:#8B949E;line-height:1.5;margin-bottom:14px">Repaints this project's <b>name, number, value, and description</b> to match a different Jetbuilt project. All tasks, crew, dates, schedule, and meetings stay attached \u2014 nothing on the schedule moves.</div>
+      <div class="form-group"><label class="form-label">Project name</label><input class="form-input" id="rl-name" type="text" value="${escA(p.name)}"></div>
+      <div class="form-group"><label class="form-label">Project number (shown in the app)</label><input class="form-input" id="rl-num" type="text" placeholder="e.g. P-584" value="${escA(p.jb_custom_id)}"></div>
+      <div class="form-group"><label class="form-label">Value ($)</label><input class="form-input" id="rl-total" type="number" value="${p.total || 0}"></div>
+      <div class="form-group"><label class="form-label">Description</label><textarea class="form-input" id="rl-desc" rows="3">${escA(p.description)}</textarea></div>
+      <div class="form-group"><label class="form-label">Jetbuilt internal # for re-sync (optional)</label><input class="form-input" id="rl-alias" type="text" placeholder="the #-number in that project's Jetbuilt URL" value="${escA(p.jetbuilt_alias)}"><div style="font-size:11px;color:#6E7681;margin-top:4px">Set this so a future Jetbuilt sync updates THIS project in place instead of creating a new one. Leave blank if unsure.</div></div>
+    </div>
+    <div style="padding:12px;border-top:1px solid #1C2333;display:flex;justify-content:flex-end;gap:8px">
+      <button class="btn btn-sm" onclick="document.getElementById('relink-dialog')?.remove()">Cancel</button>
+      <button class="btn btn-sm btn-primary" onclick="saveRelink(${projectId})">Relink</button>
+    </div></div>`;
+  document.body.appendChild(overlay);
+}
+function saveRelink(projectId) {
+  const p = state.projects.find(x => x.id === projectId);
+  if (!p) return;
+  const name = (document.getElementById('rl-name')?.value || '').trim();
+  const num = (document.getElementById('rl-num')?.value || '').trim();
+  const total = parseFloat(document.getElementById('rl-total')?.value) || 0;
+  const desc = (document.getElementById('rl-desc')?.value || '').trim();
+  const alias = (document.getElementById('rl-alias')?.value || '').trim().replace(/^#/, '');
+  if (name) p.name = name;
+  p.jb_custom_id = num;
+  p.total = total;
+  p.equipment = total - (p.labor || 0);
+  p.description = desc;
+  if (alias) p.jetbuilt_alias = alias; else delete p.jetbuilt_alias;
+  p._relinked = true;
+  try { localStorage.setItem('vi_projects_cache', JSON.stringify(state.projects)); } catch (e) {}
+  if (typeof _syncKeyNow === 'function') _syncKeyNow('vi_projects', state.projects); else save('vi_projects', state.projects);
+  document.getElementById('relink-dialog')?.remove();
+  showToast('Relinked' + (num ? ' to ' + num : '') + ' \u2014 schedule untouched', 'success');
+  renderCurrentPage();
+}
+
 function showMoveMenu(projectId, event) {
   event.stopPropagation();
   const existing = document.getElementById('move-menu');
@@ -3150,6 +3203,10 @@ function showMoveMenu(projectId, event) {
       <div style="border-top:1px solid #30363D;margin:4px 0"></div>
       <div style="padding:8px 20px 4px;font-size:11px;color:#6E7681;text-transform:uppercase;letter-spacing:0.06em">Archive</div>
       ${archiveItems}
+    ` : ''}
+    ${canChangeStage ? `
+      <div style="border-top:1px solid #30363D;margin:4px 0"></div>
+      <div onclick="document.getElementById('move-menu')?.remove();openRelinkDialog(${projectId})" style="padding:14px 20px;color:#58A6FF;font-size:14px;cursor:pointer;display:flex;align-items:center;gap:10px;-webkit-tap-highlight-color:transparent">🔗 Relink to Jetbuilt project…</div>
     ` : ''}
     <div style="border-top:1px solid #30363D;margin:4px 0"></div>
     <div onclick="document.getElementById('move-menu')?.remove()" style="padding:12px 20px;color:#6E7681;font-size:13px;cursor:pointer;text-align:center">Cancel</div>
@@ -9040,7 +9097,7 @@ function projectRow(p) {
   const stg = STAGES.find(s => s.key === p.stage) || STAGES[0];
   return `
     <tr onclick="openProject(${p.id})" data-stage="${p.stage}" data-name="${esc(p.name).toLowerCase()}">
-      <td><div class="proj-name">${esc(p.name)}</div><div class="proj-id">#${p.id}</div></td>
+      <td><div class="proj-name">${esc(p.name)}</div><div class="proj-id">${p.jb_custom_id ? esc(p.jb_custom_id) : '#' + p.id}</div></td>
       <td>${esc(p.client_name || '—')}</td>
       <td>${stagePillHTML(p)}</td>
       ${canSee('financials') ? `<td>${fmt(p.total)}</td>` : ''}
@@ -9535,7 +9592,7 @@ function renderProjectPage(c) {
           </button>
           <div class="project-page-title-block">
             <div class="project-page-name">${esc(p.name)}</div>
-            <div class="project-page-sub">#${p.id} · ${esc(p.client_name || 'No client')}${p.city ? ' · ' + esc(p.city) + (p.state_abbr ? ', ' + esc(p.state_abbr) : '') : ''}</div>
+            <div class="project-page-sub">${p.jb_custom_id ? esc(p.jb_custom_id) : '#' + p.id} · ${esc(p.client_name || 'No client')}${p.city ? ' · ' + esc(p.city) + (p.state_abbr ? ', ' + esc(p.state_abbr) : '') : ''}</div>
           </div>
           <div class="project-page-actions">
             ${projectTypeBadgeHTML(p)}
@@ -22334,6 +22391,37 @@ async function syncJetbuilt() {
         const fetchedIds = new Set(state.projects.map(p => p.id));
         Object.values(existingMap).forEach(old => { if (!fetchedIds.has(old.id)) state.projects.push(old); });
         console.warn('Jetbuilt sync was partial (' + errorMsg + ') — preserved existing projects.');
+      }
+      // Manual relink reconciliation: a relinked project keeps its internal id but
+      // represents a DIFFERENT Jetbuilt project (jetbuilt_alias). Fold the alias
+      // target's fresh who/what into the relinked record, drop the duplicate shell,
+      // and never let the original Jetbuilt source overwrite the relinked identity.
+      const _relinked = Object.values(existingMap).filter(x => x && x.jetbuilt_alias);
+      if (_relinked.length) {
+        const byId = new Map(state.projects.map(pp => [String(pp.id), pp]));
+        const COPY = ['name','client','client_name','total','labor','equipment','systems','description','raw_stage',
+          'jb_project_type','jb_close_date','jb_commission_date','jb_estimated_install','jb_price_valid_until',
+          'jb_probability','jb_version','jb_contract_number','jb_budget','jb_paid_to_date','jb_total_margin',
+          'jb_equipment_margin','jb_shipping_total','jb_tax_total','jb_owner_name','jb_pm_name','jb_engineer_name',
+          'jb_market_segment','jb_company_location'];
+        _relinked.forEach(R => {
+          const rid = String(R.id);
+          let entry = byId.get(rid);
+          if (!entry) { entry = R; byId.set(rid, entry); }
+          const aliasEntry = byId.get(String(R.jetbuilt_alias));
+          if (aliasEntry) {
+            COPY.forEach(k => { if (aliasEntry[k] !== undefined) entry[k] = aliasEntry[k]; });
+            entry.jetbuilt_id = aliasEntry.jetbuilt_id;
+            byId.delete(String(R.jetbuilt_alias)); // remove the duplicate shell
+          } else {
+            ['name','total','description'].forEach(k => { if (R[k] !== undefined) entry[k] = R[k]; });
+          }
+          entry.id = R.id;                       // internal id never drifts
+          entry.jb_custom_id = R.jb_custom_id;    // displayed number stays the relinked one
+          entry.jetbuilt_alias = R.jetbuilt_alias;
+          entry._relinked = true;
+        });
+        state.projects = [...byId.values()];
       }
       try {
         localStorage.setItem('vi_projects_cache', JSON.stringify(state.projects));
